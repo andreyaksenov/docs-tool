@@ -180,3 +180,53 @@ Only ever writes the RU counterpart; never touches EN.
 
 This is a heuristic aligner, not a semantic merge: when an EN paragraph is reworded (not just extended), the new wording is appended after the existing translation rather than replacing it.
 Review and reconcile those cases by hand.
+
+## Pre-commit hook
+
+Runs a subset of the checks above automatically before every `git commit`.
+This is a plain git hook, not a repo-tracked file — `.git/` is never part of the tracked content, so each clone needs its own copy, and it stays local to your machine unless you commit it elsewhere yourself.
+
+Create `.git/hooks/pre-commit` in your local checkout with:
+
+```bash
+#!/usr/bin/env bash
+# docs_tool.py pre-commit checks.
+cd "$(git rev-parse --show-toplevel)"
+
+blocking_failed=0
+
+echo "=== blocking checks ==="
+python3 docs_tool.py \
+  --check-pages-no-cyrillic \
+  --check-pages-no-invisible-chars || blocking_failed=1
+
+echo
+echo "=== warn-only checks (do not block commit) ==="
+python3 docs_tool.py \
+  --check-examples-no-cyrillic \
+  --check-examples-orphaned \
+  --check-examples-parity \
+  --check-images-orphaned \
+  --check-nav-structure-parity \
+  --check-pages-broken-refs \
+  --check-pages-line-parity \
+  --check-pages-no-unicode-dashes \
+  --check-pages-orphaned || true
+
+if [ "$blocking_failed" -ne 0 ]; then
+  echo
+  echo "pre-commit: blocking docs_tool.py check(s) failed -- commit aborted." >&2
+  exit 1
+fi
+
+exit 0
+```
+
+Then make it executable:
+
+```bash
+chmod +x .git/hooks/pre-commit
+```
+
+Only `--check-pages-no-cyrillic` and `--check-pages-no-invisible-chars` actually block the commit; the rest just print their findings.
+Move a check from the warn-only block into the blocking one once you're ready to enforce it.
