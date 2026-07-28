@@ -1423,9 +1423,14 @@ def check_pages_translation(verbose=False) -> bool:
 # (release-notes.adoc: "manage granular parameters (`hdfs-site.xml`,
 # `core-site.xml`, `hive-site.xml`)") -- same low collision risk as
 # json/yaml already in the list.
+# h/keytab added later: postgres.h/fmgr.h/elog.h/palloc.h (C headers, a
+# PostgreSQL extension-dev guide in docs-adpg) and krb5.keytab (Kerberos,
+# confirmed consistently italicized in both docs-adpg and docs-adb) are
+# both always "word.ext" shaped, so the same word-boundary requirement
+# that keeps the rest of this list safe applies here too.
 _ITALIC_FILE_EXT_RE = re.compile(
     r'\b[\w][\w-]*\.(?:conf|ya?ml|cfg|ini|toml|json|xml|service|socket|log|env|pem|crt|key|properties'
-    r'|jar|war|rpm|deb|tar|gz|tgz|whl|zip)\b'
+    r'|jar|war|rpm|deb|tar|gz|tgz|whl|zip|h|keytab)\b'
 )
 # Absolute paths under directories that are essentially always literal
 # filesystem paths in this kind of doc, never prose or URLs.
@@ -1566,6 +1571,16 @@ _COMPOUND_NAME_MENTION_RE = re.compile(
 _MARKED_WORD_BEFORE_FILE_RE = re.compile(
     r'\b(?:a|an|the)\s+`([\w./-]+)`\s+' + _FILE_NOUN_GROUP + r'\b'
 )
+# A captured word that is itself one of the trailing nouns (e.g. "the
+# `directory` archive format") is a format/type descriptor, not a literal
+# name -- pg_dump's own format options are named "custom"/"directory"/
+# "tar"/"plain", and "the `directory` archive format" means "the archive
+# format called directory", not a real directory (confirmed via
+# docs-adpg's sql-dump.adoc: "Parallel dumps are only supported for the
+# `directory` archive format", right after "the `custom` dump format" in
+# the same paragraph -- same category as the package-name/parameter-name
+# exclusions elsewhere in this check).
+_GENERIC_NOUN_WORDS = {"file", "files", "folder", "folders", "directory", "directories", "script", "scripts", "archive", "archives"}
 
 # Common shell/tool dotfiles: unlike the extension whitelist above (which
 # matches "name.ext"), these are "." + name with nothing before the dot, so
@@ -1711,6 +1726,8 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                         matches.append(f"{word} ({kind}, should be italic)")
                     for m in _MARKED_WORD_BEFORE_FILE_RE.finditer(lightly_masked):
                         word = m.group(1)
+                        if word.lower() in _GENERIC_NOUN_WORDS:
+                            continue  # format/type descriptor, not a literal name
                         if not any(c.isupper() for c in word[1:]):  # skip camelCase parameter names
                             matches.append(f"{word} (code span, should be italic)")
 
