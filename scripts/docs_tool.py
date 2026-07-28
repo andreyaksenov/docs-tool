@@ -1546,8 +1546,19 @@ _MARKED_WORD_BEFORE_FILE_RE = re.compile(
 # italicized. Unlike extension matches such as `.service`/`.timer`, which
 # turned up legitimate backtick use elsewhere as systemd unit names/config
 # identifiers (not literal files to open), a dotfile mention is unambiguous.
+#
+# Deliberately a hardcoded list, not a generalized "a/the .<name>
+# file/directory" pattern: tested that generalization empirically (zero
+# hits, zero false positives, across all four repos), but a fully generic
+# version would also match generic file-*type* mentions like "save it as
+# a `.csv` file", which don't need italics (describing a format, same as
+# "a JSON file" wouldn't) -- the same generic-vs-literal confusion that
+# already produced false positives in the bare-basename and parameter-name
+# checks above. A whitelist just needs an occasional one-line addition
+# (as new real cases turn up) instead of carrying that silent risk.
 _ITALIC_DOTFILES = ("bashrc", "bash_profile", "bash_login", "profile", "zshrc",
-                    "vimrc", "gitconfig", "psqlrc", "pgpass", "npmrc", "editorconfig", "gitignore", "env")
+                    "vimrc", "gitconfig", "psqlrc", "pgpass", "npmrc", "editorconfig", "gitignore", "env",
+                    "dockerignore", "eslintrc", "pylintrc", "htaccess", "htpasswd", "claude", "idea")
 _DOTFILE_CORE = r'\.(?:' + '|'.join(_ITALIC_DOTFILES) + r')'
 _DOTFILE_MENTION_RE = re.compile(
     r'\*(' + _DOTFILE_CORE + r')\*'
