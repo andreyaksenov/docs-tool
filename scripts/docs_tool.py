@@ -192,12 +192,12 @@ def check_examples_no_cyrillic(verbose=False) -> bool:
             lines = _read_lines(f)
             if lines is None:
                 continue
-            hits = [(i, l) for i, l in enumerate(lines, 1) if CYRILLIC_RE.search(l)]
+            hits = list(_first_match_hits(lines, CYRILLIC_RE))
             if hits:
                 ok = False
                 print(f"FILE     {f}")
-                for i, l in hits:
-                    print(f"  line {i}: {l}")
+                for i, col, l in hits:
+                    print(f"  {f}:{i}:{col}: {l}")
     if ok:
         print("OK: no Cyrillic characters found in en/ examples.")
     return ok
@@ -1367,13 +1367,13 @@ def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_h
 
         if en_line == ru_line:
             ensure_header()
-            print(f"  UNTRANSLATED  line {lineno}: {en_line}")
+            print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_line}")
         elif strict and not _HEADING_RE.match(en_line):
             candidate = _strip_noise(ru_line).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
             if _STOPWORDS_RE.search(candidate):
                 ensure_header()
-                print(f"  SUSPECT       line {lineno}: {ru_line}")
+                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_line}")
 
 
 def check_pages_translation(verbose=False) -> bool:
@@ -1408,8 +1408,18 @@ def check_pages_translation(verbose=False) -> bool:
 # never anything other than a literal filename in admin-facing prose --
 # unlike short generic ones (.io, .sh, .py), which collide too easily with
 # abbreviations, URLs, and version numbers to be a reliable signal.
+# jar/war/rpm/deb/tar/gz/tgz/whl/zip added later: this doc set is heavily
+# about package-based installation, and these package/archive formats
+# turned up real (some already-italicized, some not) matches across all
+# four repos tested (e.g. "plcontainer-*.tar.gz", "postgresql-42.7.10.jar",
+# "wiki.deb") with the same low collision risk as the original list --
+# "tar.gz" doesn't need special-casing: "tar" alone is in the list, so
+# "archive.tar.gz" already matches on "...gz6.tar" (stopping at the "tar"
+# segment, not continuing through ".gz") -- a good enough anchor for -v
+# to show the full line, without needing a two-extension pattern.
 _ITALIC_FILE_EXT_RE = re.compile(
-    r'\b[\w][\w-]*\.(?:conf|ya?ml|cfg|ini|toml|json|service|socket|log|env|pem|crt|key|properties)\b'
+    r'\b[\w][\w-]*\.(?:conf|ya?ml|cfg|ini|toml|json|service|socket|log|env|pem|crt|key|properties'
+    r'|jar|war|rpm|deb|tar|gz|tgz|whl|zip)\b'
 )
 # Absolute paths under directories that are essentially always literal
 # filesystem paths in this kind of doc, never prose or URLs.
@@ -1446,6 +1456,20 @@ _MASK_MACRO_RE = re.compile(r'\b[a-zA-Z][a-zA-Z0-9]*:{1,2}\S*\[[^\]]*\]')
 _MASK_DOUBLE_ANGLE_RE = re.compile(r'<<[^>]*>>')
 _MASK_URL_RE = re.compile(r'https?://[^\s\[]*(?:\[[^\]]*\])?')
 
+# Trailing noun for the "a/the X <noun>" family of checks below. Extended
+# beyond file/folder/directory to script/archive: real usage across all
+# four repos backs both ("_bin/yarn_ script", "_.har_ archive", "_tar.gz_
+# archives" are the norm, with the `spark3-submit` script in docs-adh
+# looking like a genuine, real miss rather than a different convention).
+# "package" was tried too and dropped: unlike files/scripts/archives, an
+# OS package *name* (`oidentd`, `tzdata`, `libpam-ldapd`) is consistently
+# kept in backticks throughout this doc set, never italicized -- the same
+# "different category, stays in code spans" pattern as systemd unit names
+# and config parameter names excluded elsewhere in this check. A package
+# *file*, when one is actually meant (e.g. "the _.deb_ package"), is still
+# caught by the dotfile/extension checks, which are unaffected by this.
+_FILE_NOUN_GROUP = r'(?:files?|folders?|directories|directory|scripts?|archives?)'
+
 # Bare (no extension, no leading "/") directory/file basenames that are
 # essentially never generic English words in this grammatical slot --
 # unlike e.g. "log"/"data"/"config"/"cache"/"share"/"run", which are
@@ -1473,7 +1497,7 @@ _BARE_NAME_MENTION_RE = re.compile(
                                                           r'|`(' + _BARE_DIR_BASENAME_ALT + r')`'
                                                                                             r'|_(' + _BARE_DIR_BASENAME_ALT + r')_'
                                                                                                                               r'|(' + _BARE_DIR_BASENAME_ALT + r'))\s+'
-                                                                                                                                                               r'(?:files?|folders?|directories|directory)\b'
+    + _FILE_NOUN_GROUP + r'\b'
 )
 # Subset of the above that's safe to flag on bold/code-span alone, with no
 # surrounding grammar required at all: these are essentially never generic
@@ -1510,7 +1534,7 @@ _COMPOUND_NAME_MENTION_RE = re.compile(
                                                   r'|`(' + _COMPOUND_WORD + r')`'
                                                                             r'|_(' + _COMPOUND_WORD + r')_'
                                                                                                       r'|(' + _COMPOUND_WORD + r'))\s+'
-                                                                                                                               r'(?:files?|folders?|directories|directory)\b'
+    + _FILE_NOUN_GROUP + r'\b'
 )
 
 # Word-content-agnostic: ANY word in a code span in the "a/the X
@@ -1534,7 +1558,7 @@ _COMPOUND_NAME_MENTION_RE = re.compile(
 # parameter", not a literal directory name -- same category as the
 # `krb5.conf`-as-parameter case already excluded from the extension check).
 _MARKED_WORD_BEFORE_FILE_RE = re.compile(
-    r'\b(?:a|an|the)\s+`([\w./-]+)`\s+(?:files?|folders?|directories|directory)\b'
+    r'\b(?:a|an|the)\s+`([\w./-]+)`\s+' + _FILE_NOUN_GROUP + r'\b'
 )
 
 # Common shell/tool dotfiles: unlike the extension whitelist above (which
@@ -1700,7 +1724,7 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                     ok = False
                     print(f"FILE     {f}")
                     for i, line, matches in hits:
-                        print(f"  line {i}: {', '.join(matches)}")
+                        print(f"  {f}:{i}: {', '.join(matches)}")
                         if verbose:
                             print(f"    {line}")
     if ok:
@@ -1847,7 +1871,7 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
                     ok = False
                     print(f"FILE     {f}")
                     for lineno, line in hits:
-                        print(f"  line {lineno}: {line.strip() if isinstance(line, str) else line}")
+                        print(f"  {f}:{lineno}: {line.strip() if isinstance(line, str) else line}")
 
     if ok:
         print("OK: no table cell ends its last sentence with a period.")
