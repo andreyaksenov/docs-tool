@@ -184,7 +184,6 @@ Review and reconcile those cases by hand.
 ## Pre-commit hook
 
 Runs a subset of the checks above automatically before every `git commit`.
-This is a plain git hook, not a repo-tracked file — `.git/` is never part of the tracked content, so each clone needs its own copy, and it stays local to your machine unless you commit it elsewhere yourself.
 
 Create `.git/hooks/pre-commit` in your local checkout with:
 
