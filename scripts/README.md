@@ -59,6 +59,7 @@ pages-no-invisible-chars
 pages-no-unicode-dashes
 pages-orphaned
 pages-structure-parity (beta)
+pages-table-cell-periods (beta)
 pages-translation (beta)
 ```
 
@@ -157,6 +158,18 @@ Run `./docs_tool.py --list-checks` to see the full list.
 - `--check-pages-structure-parity` (beta; reports the first differing line by default; `-v` shows the full diff with file:line references)
 
   Deeper check for `pages/`/`partials/` `.adoc` files: compares the structural "skeleton" of each EN/RU pair (heading levels, block titles, delimited blocks, block attributes, `include::` directives) so structural drift is caught even when line counts match.
+
+- `--check-pages-table-cell-periods` (beta)
+
+  Checks (per language) that the last sentence in a table cell doesn't end with a period, per house style.
+  Exceptions, found by inspecting real tables in this doc set:
+
+  - a cell containing a list — its last line is normal list-item prose and keeps its period (e.g. `table_compression.adoc`'s `compresslevel` cells);
+  - a cell containing a NOTE/TIP/WARNING/IMPORTANT/CAUTION admonition (either the `LABEL: text` one-liner or a `[LABEL]`/`====` block);
+  - a single space-free abbreviation like `Мин.`/`Макс.`, or a sentence ending in a known trailing abbreviation (`etc.`, `e.g.`, `i.e.`, `и т.д.`, `т.п.`, `и др.`) — the period there belongs to the abbreviation, not the sentence.
+
+  Cells are tracked by lookahead rather than a real table parser: a blank line is never by itself a cell boundary (both `a|` cells and even plain `|` cells can hold several blank-line-separated paragraphs), so a line only counts as a cell's last line if the next non-blank line is `|===` or itself starts a new cell.
+  A single physical line can also pack multiple `|`-separated plain cells (a compact header row like `|Algorithm |Default |Min |Max`); only a bare `|` cell (not `a|`/`m|`/etc.) is split this way.
 
 - `--check-pages-translation` (beta; `-v` also flags RU lines containing common English stopwords)
 

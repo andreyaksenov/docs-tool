@@ -837,6 +837,20 @@ def check_pages_line_parity(verbose=False) -> bool:
 # PAGES: no Cyrillic / no unicode dashes
 # --------------------------------------------------------------------------
 
+def _first_match_hits(lines, pattern):
+    """Yield (lineno, col, line) for the first match of `pattern` on each
+    line that has one; col is a 1-based character offset, so a hit can be
+    reported as a conventional, editor/terminal-clickable `file:line:col`
+    reference instead of leaving a human to scan the whole line by eye for
+    which character actually matched (the original complaint this fixes:
+    a long line with one Cyrillic letter buried in it gave no way to jump
+    straight to it)."""
+    for i, l in enumerate(lines, 1):
+        m = pattern.search(l)
+        if m:
+            yield i, m.start() + 1, l
+
+
 def check_pages_no_cyrillic(verbose=False) -> bool:
     """Port of check_pages_no_cyrillic.sh (en/ only, all modules)."""
     ok = True
@@ -845,12 +859,12 @@ def check_pages_no_cyrillic(verbose=False) -> bool:
             lines = _read_lines(f)
             if lines is None:
                 continue
-            hits = [(i, l) for i, l in enumerate(lines, 1) if CYRILLIC_RE.search(l)]
+            hits = list(_first_match_hits(lines, CYRILLIC_RE))
             if hits:
                 ok = False
                 print(f"FILE     {f}")
-                for i, l in hits:
-                    print(f"  line {i}: {l}")
+                for i, col, l in hits:
+                    print(f"  {f}:{i}:{col}: {l}")
     if ok:
         print("OK: no Cyrillic characters found in en/ pages.")
     return ok
@@ -891,14 +905,14 @@ def check_pages_no_invisible_chars(verbose=False) -> bool:
                 lines = _read_lines(f)
                 if lines is None:
                     continue
-                hits = [(i, l) for i, l in enumerate(lines, 1) if _INVISIBLE_RE.search(l)]
+                hits = list(_first_match_hits(lines, _INVISIBLE_RE))
                 if hits:
                     ok = False
                     total_hits += len(hits)
                     print(f"FILE     {f}")
-                    for i, l in hits:
+                    for i, col, l in hits:
                         labels = ", ".join(sorted({_invisible_char_label(ch) for ch in _INVISIBLE_RE.findall(l)}))
-                        print(f"  line {i}: {labels}")
+                        print(f"  {f}:{i}:{col}: {labels}")
                         if verbose:
                             print(f"    {_mark_invisible_chars(l)}")
     if ok:
@@ -917,12 +931,12 @@ def check_pages_no_unicode_dashes(verbose=False) -> bool:
                 lines = _read_lines(f)
                 if lines is None:
                     continue
-                hits = [(i, l) for i, l in enumerate(lines, 1) if EN_EM_DASH_RE.search(l)]
+                hits = list(_first_match_hits(lines, EN_EM_DASH_RE))
                 if hits:
                     ok = False
                     print(f"FILE     {f}")
-                    for i, l in hits:
-                        print(f"  line {i}: {l}")
+                    for i, col, l in hits:
+                        print(f"  {f}:{i}:{col}: {l}")
     if ok:
         print("OK: no en dash (–) or em dash (—) characters found in pages.")
     return ok
@@ -1524,6 +1538,152 @@ def check_pages_file_path_italics(verbose=False) -> bool:
 
 
 # --------------------------------------------------------------------------
+# PAGES: no trailing period on a table cell's last sentence
+# --------------------------------------------------------------------------
+
+_ADMONITION_LABEL_RE = re.compile(r'^(?:NOTE|TIP|WARNING|IMPORTANT|CAUTION):\s')
+_A_CELL_START_RE = re.compile(r'^(\.\d+\+)?a\|')
+# Broader than the shared _SKIP_TABLE_CELL_RE: also recognizes cell-format/
+# alignment prefixes (^, <, >, ~, rowspan/colspan like "2.3+", combined
+# forms like "^.^") seen on header cells (e.g. "^|Pros" in adb-to-adb/
+# overview.adoc) that the shared regex doesn't match, so cell boundaries
+# here don't go undetected just because a cell has an alignment prefix.
+_TABLE_CELL_START_RE = re.compile(r'^(?:[.\d+<>^~a-z]{0,6})\|')
+
+
+def _is_abbreviation_like(content: str) -> bool:
+    """A single space-free token ending in a period (`Мин.`, `e.g.`, `etc.`)
+    reads as an abbreviation, not a full sentence -- the period there is
+    part of the abbreviation, not the sentence-final punctuation the style
+    rule is actually about (found via the `Мин.`/`Макс.` column headers in
+    data_encryption.adoc)."""
+    return content.endswith('.') and ' ' not in content.rstrip('.')
+
+
+# A full, otherwise-compliant sentence ending in one of these keeps its
+# period even at the end of a cell, since the period belongs to the
+# trailing abbreviation, not the sentence (e.g. "...the Global Deadlock
+# Detector process, etc." in db-schemas/db.adoc -- other rows in the same
+# table correctly drop the period, only this one doesn't, because it ends
+# in "etc."). Russian abbreviates the same way sometimes ("и т.д.") but not
+# always (the RU counterpart of that same row spells it out as "и так
+# далее" instead, with no trailing period at all).
+_TRAILING_ABBREVS = ("etc.", "e.g.", "i.e.", "и т.д.", "т.д.", "и т.п.", "т.п.", "и др.")
+
+
+def _ends_with_known_abbreviation(content: str) -> bool:
+    lowered = content.rstrip().lower()
+    return any(lowered.endswith(ab) for ab in _TRAILING_ABBREVS)
+
+
+def _is_period_violation(content: str) -> bool:
+    return (content.endswith('.')
+            and not _is_abbreviation_like(content)
+            and not _ends_with_known_abbreviation(content))
+
+
+def check_pages_table_cell_periods(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): house style says
+    the last sentence in a table cell should not end with a period.
+    Exceptions found by inspecting real tables in this doc set:
+
+    - a cell containing a list (its last line is normal list-item prose and
+      keeps its period, e.g. table_compression.adoc's `compresslevel` cells);
+    - a cell containing a NOTE/TIP/WARNING/IMPORTANT/CAUTION admonition
+      (either the `LABEL: text` one-liner or a `[LABEL]`/`====` block),
+      since that marks the content as not just a plain descriptive sentence;
+    - a single space-free abbreviation like `Мин.`/`Макс.` (see
+      _is_abbreviation_like).
+
+    Deliberately heuristic: cells are tracked by lookahead, but a blank line
+    is *never* by itself a cell boundary -- both `a|` cells (rebalance_status.
+    adoc) and even plain `|` cells (fs-commands/setfacl.adoc) can hold several
+    blank-line-separated paragraphs, so a line only counts as the last line
+    of its cell if the next *non-blank* line is `|===` or itself starts a
+    new cell. A single physical line can also pack multiple `|`-separated
+    plain cells (a compact header row like `|Algorithm |Default |Min |Max`);
+    only a bare `|` cell (not `a|`/`m|`/etc., which always occupy the rest
+    of their line) is split this way."""
+    ok = True
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                in_table = False
+                in_admonition_block = False
+                cell_exempt = False
+                n = len(lines)
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if stripped == "|===":
+                        in_table = not in_table
+                        in_admonition_block = False
+                        cell_exempt = False
+                        continue
+                    if not in_table:
+                        continue
+
+                    is_cell_start = _TABLE_CELL_START_RE.match(line) is not None
+                    if is_cell_start:
+                        in_admonition_block = False
+                        cell_exempt = False
+
+                    if stripped == "" or stripped.startswith("//"):
+                        continue
+
+                    if stripped == "====":
+                        in_admonition_block = not in_admonition_block
+                        if in_admonition_block:
+                            cell_exempt = True
+                        continue
+                    if in_admonition_block:
+                        continue
+
+                    if _ADMONITION_LABEL_RE.match(stripped) or _STRUCT_LIST_MARKER_RE.match(stripped):
+                        cell_exempt = True
+
+                    j = i + 1
+                    while j < n and (lines[j].strip() == "" or lines[j].strip().startswith("//")):
+                        j += 1
+                    next_line = lines[j] if j < n else "|==="
+                    is_last_of_cell = (
+                            next_line.strip() == "|==="
+                            or _TABLE_CELL_START_RE.match(next_line) is not None
+                    )
+                    if not is_last_of_cell or cell_exempt:
+                        continue
+
+                    if is_cell_start and "|" in line[1:] and not _A_CELL_START_RE.match(line):
+                        segments = line.split("|")[1:]  # leading "|" -> segments[0] is the first cell
+                        for seg in segments[:-1]:
+                            content = seg.strip()
+                            if _is_period_violation(content):
+                                hits.append((i + 1, content))
+                        content = segments[-1].strip()
+                    else:
+                        content = stripped
+                        if is_cell_start:
+                            m = _TABLE_CELL_START_RE.match(line)
+                            content = line[m.end():].strip()
+
+                    if _is_period_violation(content):
+                        hits.append((i + 1, line if not is_cell_start else content))
+
+                if hits:
+                    ok = False
+                    print(f"FILE     {f}")
+                    for lineno, line in hits:
+                        print(f"  line {lineno}: {line.strip() if isinstance(line, str) else line}")
+
+    if ok:
+        print("OK: no table cell ends its last sentence with a period.")
+    return ok
+
+
+# --------------------------------------------------------------------------
 # CHECK REGISTRY
 # --------------------------------------------------------------------------
 
@@ -1541,6 +1701,7 @@ CHECKS = {
     "pages-no-unicode-dashes": check_pages_no_unicode_dashes,
     "pages-orphaned": check_pages_orphaned,
     "pages-structure-parity": check_pages_structure_parity,
+    "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-translation": check_pages_translation,
 }
 
@@ -1550,6 +1711,7 @@ CHECKS = {
 BETA_CHECKS = {
     "pages-file-path-italics",
     "pages-structure-parity",
+    "pages-table-cell-periods",
     "pages-translation",
 }
 
