@@ -52,6 +52,7 @@ examples-parity
 images-orphaned
 nav-structure-parity
 pages-broken-refs
+pages-file-path-italics (beta)
 pages-line-parity
 pages-no-cyrillic
 pages-no-invisible-chars
@@ -123,6 +124,14 @@ Run `./docs_tool.py --list-checks` to see the full list.
   - By default, a reference into a component that isn't part of this repo (e.g. `xref:ADCM:ROOT:page.adoc[]`, pulled in from a separate Antora site like an ADCM docs repo) is left unchecked rather than reported broken, since this tool can't see that component's source.
     If you have that component's repo checked out locally, pass `--external-root NAME=PATH` (repeatable) to resolve against it too, e.g. `--external-root ADCM=../docs-adcm`.
 
+- `--check-pages-file-path-italics` (beta; `-v` also prints the full line for each hit)
+
+  Checks (per language) for file/directory names mentioned in plain prose without the italics (`_..._`) house style requires for them: a curated whitelist of config/unit-file-style extensions (`.conf`, `.yaml`/`.yml`, `.cfg`, `.ini`, `.toml`, `.json`, `.service`, `.socket`, `.log`, `.env`, `.pem`, `.crt`, `.key`, `.properties`) and well-known absolute-path prefixes (`/etc`, `/var`, `/opt`, `/usr/local`, `/usr/share`, `/home`).
+  Deliberately narrow rather than exhaustive, to keep the false-positive rate low.
+
+  Already-formatted or non-prose spans are excluded before matching: code spans, bold, italics, bold-italics, any AsciiDoc macro (`xref:`, `link:`, `image:`/`image::`, etc.) and the `<<anchor,text>>` shorthand, and bare URLs.
+  Whole code/literal blocks, `////` comment blocks, tables, headings, and block titles/captions are skipped outright, since none of these are italicized by convention regardless of what they mention.
+
 - `--check-pages-line-parity`
 
   Checks that every EN `pages/`/`partials/` `.adoc` file has a RU counterpart with the same line count, and vice versa.
@@ -190,7 +199,7 @@ Create `.git/hooks/pre-commit` in your local checkout with:
 ```bash
 #!/usr/bin/env bash
 # docs_tool.py pre-commit checks.
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)"``
 
 blocking_failed=0
 

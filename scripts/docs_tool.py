@@ -1387,6 +1387,143 @@ def check_pages_translation(verbose=False) -> bool:
 
 
 # --------------------------------------------------------------------------
+# PAGES: un-italicized file/directory names
+# --------------------------------------------------------------------------
+
+# Deliberately narrow: config/unit-file-style extensions that are almost
+# never anything other than a literal filename in admin-facing prose --
+# unlike short generic ones (.io, .sh, .py), which collide too easily with
+# abbreviations, URLs, and version numbers to be a reliable signal.
+_ITALIC_FILE_EXT_RE = re.compile(
+    r'\b[\w][\w-]*\.(?:conf|ya?ml|cfg|ini|toml|json|service|socket|log|env|pem|crt|key|properties)\b'
+)
+# Absolute paths under directories that are essentially always literal
+# filesystem paths in this kind of doc, never prose or URLs.
+_ITALIC_DIR_PATH_RE = re.compile(
+    r'(?:/etc|/var|/opt|/usr/local|/usr/share|/home)/[\w./-]*[\w/-]'
+)
+
+_MASK_BOLDITALIC_RE = re.compile(r'\*_[^*_]*_\*')
+# Same word-adjacency reasoning as italics below: a filename mentioned
+# inside bold text doesn't also need italics per this doc set's style
+# guide (bold already marks it as "not plain prose"), so bold spans are
+# exempt the same way code spans and italics are.
+_MASK_BOLD_RE = re.compile(r'(?<!\w)\*(?!\s)(?:.+?)(?<!\s)\*(?!\w)')
+_MASK_CODE_SPAN_RE = re.compile(r'`[^`]*`')
+# Asciidoctor only recognizes _..._ as (constrained) italic when neither
+# underscore is adjacent to a word character -- otherwise it's just a
+# literal underscore inside an identifier (pg_hba, connection_type,
+# COORDINATOR_DATA_DIRECTORY, all over this doc set). The content itself
+# can still contain a literal underscore (e.g. "_pg_hba.conf_" is a single
+# genuine italic span), so only the delimiters' word-adjacency is
+# restricted, not the content charset -- a naive `_[^_]*_` would instead
+# pair up literal underscores across completely unrelated words and
+# corrupt the rest of the line's masking.
+_MASK_ITALIC_RE = re.compile(r'(?<!\w)_(?!\s)(?:.+?)(?<!\s)_(?!\w)')
+# Any AsciiDoc macro of the general "name:target[attrs]" (inline) or
+# "name::target[attrs]" (block) shape -- xref:, link:, image:/image::,
+# kbd:, btn:, pass:, footnote:, and anything else sharing this syntax --
+# rather than enumerating macro names one at a time: a file/path mention
+# inside a macro's target or attribute list (e.g. an image's alt text) is
+# not plain prose. The bracket suffix is mandatory in AsciiDoc macro syntax,
+# so greedy \S* backtracks correctly to find it (unlike a bare URL, where
+# the trailing brackets are optional -- see _MASK_URL_RE).
+_MASK_MACRO_RE = re.compile(r'\b[a-zA-Z][a-zA-Z0-9]*:{1,2}\S*\[[^\]]*\]')
+_MASK_DOUBLE_ANGLE_RE = re.compile(r'<<[^>]*>>')
+_MASK_URL_RE = re.compile(r'https?://[^\s\[]*(?:\[[^\]]*\])?')
+
+
+def _mask_formatted_spans(line: str) -> str:
+    """Blank out already-formatted or non-prose spans (code spans, bold,
+    italics, bold-italics, AsciiDoc macros -- xref/link/image/etc., plus the
+    `<<anchor,text>>` xref shorthand -- and bare URLs) with same-length
+    whitespace, so a path/filename search afterwards only sees text still
+    in plain, unformatted prose."""
+    s = _MASK_BOLDITALIC_RE.sub(lambda m: ' ' * len(m.group(0)), line)
+    s = _MASK_BOLD_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_CODE_SPAN_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_ITALIC_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_MACRO_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_DOUBLE_ANGLE_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_URL_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    return s
+
+
+def _iter_prose_lines(lines):
+    """Yield (lineno, line) for plain body-prose lines only -- skips
+    delimited code/literal blocks, ////-comment blocks, whole tables (a
+    plain "|"-cell's content can span several blank-line-separated
+    paragraphs with no per-line "|" marker, so cell-by-cell tracking is
+    unreliable -- the whole table is excluded instead), attribute lines,
+    headings, and block titles/captions (none of these are italicized by
+    convention, whatever they mention). Mirrors the skip logic in
+    _check_translation_pair, kept separate to avoid touching that check's
+    behavior."""
+    in_code = None
+    in_comment_block = False
+    in_table = False
+    for i, line in enumerate(lines, 1):
+        if re.match(r'^////\s*$', line):
+            in_comment_block = not in_comment_block
+            continue
+        if in_comment_block:
+            continue
+        if line.strip() == "|===":
+            in_table = not in_table
+            continue
+        if in_table:
+            continue
+        delim = _code_delim_type(line)
+        if delim:
+            if in_code == delim:
+                in_code = None
+            elif in_code is None:
+                in_code = delim
+            continue
+        if in_code:
+            continue
+        if _HEADING_RE.match(line):
+            continue
+        if _STRUCT_BLOCKTITLE_RE.match(line):
+            continue
+        if _is_skip_line(line):
+            continue
+        yield i, line
+
+
+def check_pages_file_path_italics(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): flags file names
+    (by a curated config/unit-file extension whitelist) and directory paths
+    (by well-known absolute-path prefixes) mentioned in plain prose without
+    the italics (`_..._`) this doc set's style guide requires for them.
+    Deliberately narrow and heuristic -- see the regexes above for scope and
+    reasoning."""
+    ok = True
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                for i, line in _iter_prose_lines(lines):
+                    masked = _mask_formatted_spans(line)
+                    matches = sorted(set(_ITALIC_FILE_EXT_RE.findall(masked) + _ITALIC_DIR_PATH_RE.findall(masked)))
+                    if matches:
+                        hits.append((i, line, matches))
+                if hits:
+                    ok = False
+                    print(f"FILE     {f}")
+                    for i, line, matches in hits:
+                        print(f"  line {i}: {', '.join(matches)}")
+                        if verbose:
+                            print(f"    {line}")
+    if ok:
+        print("OK: no un-italicized file/directory names found in pages.")
+    return ok
+
+
+# --------------------------------------------------------------------------
 # CHECK REGISTRY
 # --------------------------------------------------------------------------
 
@@ -1397,6 +1534,7 @@ CHECKS = {
     "images-orphaned": check_images_orphaned,
     "nav-structure-parity": check_nav_structure_parity,
     "pages-broken-refs": check_pages_broken_refs,
+    "pages-file-path-italics": check_pages_file_path_italics,
     "pages-line-parity": check_pages_line_parity,
     "pages-no-cyrillic": check_pages_no_cyrillic,
     "pages-no-invisible-chars": check_pages_no_invisible_chars,
@@ -1410,6 +1548,7 @@ CHECKS = {
 # therefore misfire on legitimate content -- flagged so --list-checks and the
 # README can warn people to treat their output as a review list, not a gate.
 BETA_CHECKS = {
+    "pages-file-path-italics",
     "pages-structure-parity",
     "pages-translation",
 }
