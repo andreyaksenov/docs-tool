@@ -1446,6 +1446,99 @@ _MASK_MACRO_RE = re.compile(r'\b[a-zA-Z][a-zA-Z0-9]*:{1,2}\S*\[[^\]]*\]')
 _MASK_DOUBLE_ANGLE_RE = re.compile(r'<<[^>]*>>')
 _MASK_URL_RE = re.compile(r'https?://[^\s\[]*(?:\[[^\]]*\])?')
 
+# Bare (no extension, no leading "/") directory/file basenames that are
+# essentially never generic English words in this grammatical slot --
+# unlike e.g. "log"/"data"/"config"/"cache"/"share"/"run", which are
+# extremely common as generic descriptors ("a log file", "a data file")
+# that don't refer to a literal directory of that name, these are deliberately
+# excluded to keep the false-positive rate low. Found via a real "a *bin*
+# folder" case in install_from_package.adoc-adjacent content, wrapped in
+# bold instead of italics.
+_BARE_DIR_BASENAMES = {"bin", "sbin", "etc", "lib", "tmp", "var", "opt", "src"}
+_BARE_DIR_BASENAME_ALT = '|'.join(_BARE_DIR_BASENAMES)
+# Unlike the extension/path checks, this one needs to see the CURRENT
+# formatting around the word directly -- bold or a code span here is
+# itself the wrong-formatting finding, not something to treat as already
+# exempt the way it is for the rest of this check (a filename that's
+# merely *also* bold elsewhere is fine; a directory basename that's
+# *only* ever bold/code-spanned, never italicized, is not).
+#
+# Requires the "a/the X file/folder" construction: the grammar is what
+# disambiguates a couple of these words from unrelated generic terms (a
+# JS "var" declaration, an HTML `src` attribute, a `cp src dst` argument
+# placeholder -- all real, confirmed via synthetic test cases like
+# "Declare a `var` in JavaScript" and "Set the `src` attribute").
+_BARE_NAME_MENTION_RE = re.compile(
+    r'\b(?:a|an|the)\s+(?:\*(' + _BARE_DIR_BASENAME_ALT + r')\*'
+                                                          r'|`(' + _BARE_DIR_BASENAME_ALT + r')`'
+                                                                                            r'|_(' + _BARE_DIR_BASENAME_ALT + r')_'
+                                                                                                                              r'|(' + _BARE_DIR_BASENAME_ALT + r'))\s+'
+                                                                                                                                                               r'(?:files?|folders?|directories|directory)\b'
+)
+# Subset of the above that's safe to flag on bold/code-span alone, with no
+# surrounding grammar required at all: these are essentially never generic
+# English/programming terms in ANY context in this doc domain (unlike the
+# excluded var/src/lib, see _BARE_NAME_MENTION_RE), so a deliberately
+# emphasized mention anywhere is already a strong enough signal -- e.g.
+# "(for example, `bin`)" referring back to an earlier "shell startup file"
+# mention has no "a/the X folder" phrase in sight, but is the same intent
+# as the italicized `.bashrc` case this whole check started from.
+_BARE_DIR_BASENAMES_UNAMBIGUOUS = {"bin", "sbin", "etc", "tmp", "opt"}
+_UNAMBIGUOUS_BASENAME_ALT = '|'.join(_BARE_DIR_BASENAMES_UNAMBIGUOUS)
+_UNAMBIGUOUS_BASENAME_MARKED_RE = re.compile(
+    r'\*(' + _UNAMBIGUOUS_BASENAME_ALT + r')\*'
+                                         r'|`(' + _UNAMBIGUOUS_BASENAME_ALT + r')`'
+                                                                              r'|_(' + _UNAMBIGUOUS_BASENAME_ALT + r')_'
+)
+
+# Generalization of the whitelist above to any word, not just curated
+# ones: a word with an internal underscore (not leading/trailing) in the
+# "a/the X file/folder" slot is very likely a real filename -- English
+# essentially never uses a mid-word underscore outside a technical
+# identifier, unlike bare dictionary words. Hyphen was tried too and
+# dropped: real hits on docs-adh turned out to be ordinary English
+# compound adjectives ("a global-level file", "a zero-length file", "the
+# first-level directory"), not filenames -- underscore alone had zero
+# false positives across all four repos tested.
+_COMPOUND_WORD = r'[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+'
+_COMPOUND_NAME_MENTION_RE = re.compile(
+    r'\b(?:a|an|the)\s+(?:\*(' + _COMPOUND_WORD + r')\*'
+                                                  r'|`(' + _COMPOUND_WORD + r')`'
+                                                                            r'|_(' + _COMPOUND_WORD + r')_'
+                                                                                                      r'|(' + _COMPOUND_WORD + r'))\s+'
+                                                                                                                               r'(?:files?|folders?|directories|directory)\b'
+)
+
+# Common shell/tool dotfiles: unlike the extension whitelist above (which
+# matches "name.ext"), these are "." + name with nothing before the dot, so
+# they need their own pattern. Also checked directly like the bare-basename
+# check above rather than pre-exempting bold/code -- confirmed via a real
+# "(for example, `.bashrc`)" case in install_from_package.adoc, inconsistent
+# with every other .bashrc mention in this doc set, which is correctly
+# italicized. Unlike extension matches such as `.service`/`.timer`, which
+# turned up legitimate backtick use elsewhere as systemd unit names/config
+# identifiers (not literal files to open), a dotfile mention is unambiguous.
+_ITALIC_DOTFILES = ("bashrc", "bash_profile", "bash_login", "profile", "zshrc",
+                    "vimrc", "gitconfig", "psqlrc", "pgpass", "npmrc", "editorconfig", "gitignore")
+_DOTFILE_CORE = r'\.(?:' + '|'.join(_ITALIC_DOTFILES) + r')'
+_DOTFILE_MENTION_RE = re.compile(
+    r'\*(' + _DOTFILE_CORE + r')\*'
+                             r'|`(' + _DOTFILE_CORE + r')`'
+                                                      r'|_(' + _DOTFILE_CORE + r')_'
+                                                                               r'|(?<!\w)(' + _DOTFILE_CORE + r')\b'
+)
+
+
+def _mask_non_prose_spans(line: str) -> str:
+    """Like _mask_formatted_spans, but leaves bold/code/italic markers
+    alone -- used ahead of _BARE_NAME_MENTION_RE, which needs to inspect
+    those directly rather than have them pre-blanked out as "already
+    fine"."""
+    s = _MASK_MACRO_RE.sub(lambda m: ' ' * len(m.group(0)), line)
+    s = _MASK_DOUBLE_ANGLE_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_URL_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    return s
+
 
 def _mask_formatted_spans(line: str) -> str:
     """Blank out already-formatted or non-prose spans (code spans, bold,
@@ -1507,11 +1600,12 @@ def _iter_prose_lines(lines):
 
 def check_pages_file_path_italics(verbose=False) -> bool:
     """New check (not a port of an existing shell script): flags file names
-    (by a curated config/unit-file extension whitelist) and directory paths
-    (by well-known absolute-path prefixes) mentioned in plain prose without
-    the italics (`_..._`) this doc set's style guide requires for them.
-    Deliberately narrow and heuristic -- see the regexes above for scope and
-    reasoning."""
+    (by a curated config/unit-file extension whitelist), directory paths
+    (by well-known absolute-path prefixes), bare directory/file basenames
+    (see _BARE_DIR_BASENAMES), and common dotfiles (see _ITALIC_DOTFILES)
+    mentioned in plain prose without the italics (`_..._`) this doc set's
+    style guide requires for them. Deliberately narrow and heuristic -- see
+    the regexes above for scope and reasoning."""
     ok = True
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
@@ -1523,6 +1617,40 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                 for i, line in _iter_prose_lines(lines):
                     masked = _mask_formatted_spans(line)
                     matches = sorted(set(_ITALIC_FILE_EXT_RE.findall(masked) + _ITALIC_DIR_PATH_RE.findall(masked)))
+
+                    lightly_masked = _mask_non_prose_spans(line)
+                    for m in _BARE_NAME_MENTION_RE.finditer(lightly_masked):
+                        bold_w, code_w, italic_w, bare_w = m.groups()
+                        if italic_w:
+                            continue  # already correctly italicized
+                        word = bold_w or code_w or bare_w
+                        kind = "bold" if bold_w else ("code span" if code_w else "unformatted")
+                        matches.append(f"{word} ({kind}, should be italic)")
+                    for m in _UNAMBIGUOUS_BASENAME_MARKED_RE.finditer(lightly_masked):
+                        bold_w, code_w, italic_w = m.groups()
+                        if italic_w:
+                            continue  # already correctly italicized
+                        word = bold_w or code_w
+                        kind = "bold" if bold_w else "code span"
+                        matches.append(f"{word} ({kind}, should be italic)")
+                    for m in _COMPOUND_NAME_MENTION_RE.finditer(lightly_masked):
+                        bold_w, code_w, italic_w, bare_w = m.groups()
+                        if italic_w:
+                            continue  # already correctly italicized
+                        word = bold_w or code_w or bare_w
+                        kind = "bold" if bold_w else ("code span" if code_w else "unformatted")
+                        matches.append(f"{word} ({kind}, should be italic)")
+
+                    for m in _DOTFILE_MENTION_RE.finditer(lightly_masked):
+                        bold_d, code_d, italic_d, bare_d = m.groups()
+                        if italic_d:
+                            continue  # already correctly italicized
+                        dotfile = bold_d or code_d or bare_d
+                        if dotfile:
+                            kind = "bold" if bold_d else ("code span" if code_d else "unformatted")
+                            matches.append(f"{dotfile} ({kind}, should be italic)")
+
+                    matches = sorted(set(matches))
                     if matches:
                         hits.append((i, line, matches))
                 if hits:
