@@ -1492,21 +1492,49 @@ _UNAMBIGUOUS_BASENAME_MARKED_RE = re.compile(
 )
 
 # Generalization of the whitelist above to any word, not just curated
-# ones: a word with an internal underscore (not leading/trailing) in the
-# "a/the X file/folder" slot is very likely a real filename -- English
-# essentially never uses a mid-word underscore outside a technical
-# identifier, unlike bare dictionary words. Hyphen was tried too and
-# dropped: real hits on docs-adh turned out to be ordinary English
-# compound adjectives ("a global-level file", "a zero-length file", "the
-# first-level directory"), not filenames -- underscore alone had zero
-# false positives across all four repos tested.
-_COMPOUND_WORD = r'[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+'
+# ones: a word with an internal underscore or slash (not leading/
+# trailing) in the "a/the X file/folder" slot is very likely a real
+# filename/relative path -- English essentially never uses a mid-word
+# underscore or slash outside a technical identifier or path (unlike
+# bare dictionary words), and a relative path with no leading "/" (e.g.
+# "backup/adb") isn't covered by the absolute _ITALIC_DIR_PATH_RE check
+# above. Hyphen was tried too and dropped: real hits on docs-adh turned
+# out to be ordinary English compound adjectives ("a global-level file",
+# "a zero-length file", "the first-level directory"), not filenames --
+# underscore/slash alone had zero false positives across all four repos
+# tested (the one common English "/" idiom, "and/or", doesn't realistically
+# combine with "file/folder" as its object).
+_COMPOUND_WORD = r'[A-Za-z0-9]+(?:[_/][A-Za-z0-9]+)+'
 _COMPOUND_NAME_MENTION_RE = re.compile(
     r'\b(?:a|an|the)\s+(?:\*(' + _COMPOUND_WORD + r')\*'
                                                   r'|`(' + _COMPOUND_WORD + r')`'
                                                                             r'|_(' + _COMPOUND_WORD + r')_'
                                                                                                       r'|(' + _COMPOUND_WORD + r'))\s+'
                                                                                                                                r'(?:files?|folders?|directories|directory)\b'
+)
+
+# Word-content-agnostic: ANY word in a code span in the "a/the X
+# file/folder" slot, whitelisted or not (e.g. "the `backup` folder") --
+# the code-span formatting itself is the signal here, not the word.
+# Deliberately restricted to code spans, not bold: a code span is
+# essentially never used for plain prose emphasis in AsciiDoc (it's
+# reserved for literal technical tokens), so one here is a strong signal
+# the author meant a literal name, whereas bold commonly *is* used for
+# ordinary emphasis on a descriptive adjective ("the *most important*
+# file") -- bold stays limited to the curated/underscore checks above,
+# which have their own evidence backing them, rather than every bold word
+# in this slot.
+#
+# A camelCase match (an uppercase letter after the first character, e.g.
+# `dataLogDir`/`dataDir`) is excluded in code: real Unix file/directory
+# names in this doc set are essentially always lowercase, so camelCase is
+# a strong signal of a config *parameter* name instead (confirmed via
+# zookeeper/configure.adoc: "set up a dedicated disk for the `dataLogDir`
+# directory" -- the same sentence separately calls it "the `dataLogDir`
+# parameter", not a literal directory name -- same category as the
+# `krb5.conf`-as-parameter case already excluded from the extension check).
+_MARKED_WORD_BEFORE_FILE_RE = re.compile(
+    r'\b(?:a|an|the)\s+`([\w./-]+)`\s+(?:files?|folders?|directories|directory)\b'
 )
 
 # Common shell/tool dotfiles: unlike the extension whitelist above (which
@@ -1519,7 +1547,7 @@ _COMPOUND_NAME_MENTION_RE = re.compile(
 # turned up legitimate backtick use elsewhere as systemd unit names/config
 # identifiers (not literal files to open), a dotfile mention is unambiguous.
 _ITALIC_DOTFILES = ("bashrc", "bash_profile", "bash_login", "profile", "zshrc",
-                    "vimrc", "gitconfig", "psqlrc", "pgpass", "npmrc", "editorconfig", "gitignore")
+                    "vimrc", "gitconfig", "psqlrc", "pgpass", "npmrc", "editorconfig", "gitignore", "env")
 _DOTFILE_CORE = r'\.(?:' + '|'.join(_ITALIC_DOTFILES) + r')'
 _DOTFILE_MENTION_RE = re.compile(
     r'\*(' + _DOTFILE_CORE + r')\*'
@@ -1640,6 +1668,10 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                         word = bold_w or code_w or bare_w
                         kind = "bold" if bold_w else ("code span" if code_w else "unformatted")
                         matches.append(f"{word} ({kind}, should be italic)")
+                    for m in _MARKED_WORD_BEFORE_FILE_RE.finditer(lightly_masked):
+                        word = m.group(1)
+                        if not any(c.isupper() for c in word[1:]):  # skip camelCase parameter names
+                            matches.append(f"{word} (code span, should be italic)")
 
                     for m in _DOTFILE_MENTION_RE.finditer(lightly_masked):
                         bold_d, code_d, italic_d, bare_d = m.groups()
