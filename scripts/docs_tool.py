@@ -25,6 +25,10 @@ flag needed. Examples:
     ./docs_tool.py --all-checks -v
     ./docs_tool.py --sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc -n
     ./docs_tool.py --sync en/modules/how-to/pages/manage-cluster/pam.adoc -n
+
+--sync and the checks --list-checks marks (beta) rely on heuristics rather
+than a real AsciiDoc parser and can misfire on legitimate content -- treat
+their output as a review list, not a hard gate.
 """
 import argparse
 import difflib
@@ -1067,6 +1071,12 @@ _STRUCT_SOURCE_ATTR_RE = re.compile(r'^\[source(,.*)?\]$')
 # an otherwise-real code line.
 _STRUCT_FULL_COMMENT_RE = re.compile(r'^\s*(?:#|--|//|;{1,2})(?:\s|$)')
 _STRUCT_TRAILING_COMMENT_RE = re.compile(r'\s{2,}(?:#|--|//|;{1,2}).*$')
+# A bare """ or ''' on its own line opens/closes a Python docstring -- a
+# common idiom for describing an example snippet from *inside* the code
+# (see e.g. client-usage-examples.adoc) rather than with a #-comment above
+# it. Its content is translated same as a comment would be; only the
+# delimiter itself (and the fact that a docstring is there at all) matters.
+_STRUCT_DOCSTRING_DELIM_RE = re.compile(r'^\s*("""|\'\'\')\s*$')
 # Delimiter lines, tolerant of stray trailing whitespace (seen in the wild --
 # e.g. a "==== " admonition closer -- which the exact-match "====$" etc. in
 # _STRUCT_LINE_RE below would otherwise silently fail to recognize at all,
@@ -1083,6 +1093,7 @@ def _structure_skeleton(path: Path):
     in_code = False
     code_delim = None
     source_pending = False
+    in_docstring = False
     for lineno, line in enumerate(lines, 1):
         if in_code:
             delim = _code_delim_type(line)
@@ -1090,6 +1101,16 @@ def _structure_skeleton(path: Path):
                 out.append((lineno, line.rstrip()))
                 in_code = False
                 code_delim = None
+                in_docstring = False
+            elif in_docstring:
+                if _STRUCT_DOCSTRING_DELIM_RE.match(line):
+                    out.append((lineno, line.strip()))
+                    in_docstring = False
+                else:
+                    out.append((lineno, "code> <docstring>"))
+            elif _STRUCT_DOCSTRING_DELIM_RE.match(line):
+                out.append((lineno, line.strip()))
+                in_docstring = True
             elif _STRUCT_FULL_COMMENT_RE.match(line):
                 out.append((lineno, "code> <comment>"))
             else:
@@ -1385,6 +1406,14 @@ CHECKS = {
     "pages-translation": check_pages_translation,
 }
 
+# Checks whose logic is heuristic (no real AsciiDoc parser behind it) and can
+# therefore misfire on legitimate content -- flagged so --list-checks and the
+# README can warn people to treat their output as a review list, not a gate.
+BETA_CHECKS = {
+    "pages-structure-parity",
+    "pages-translation",
+}
+
 
 # ==========================================================================
 # SYNC: align a RU page's structure/content with its EN counterpart after an
@@ -1624,9 +1653,14 @@ def _align_replace_span(en_slice, ru_slice, en_sig_slice, ru_sig_slice, out, ins
                                                 )
 
 
-def sync_merge(en_lines, ru_lines):
+def sync_merge(en_lines, ru_lines, pins=None):
     en_sigs = sync_signatures(en_lines)
     ru_sigs = sync_signatures(ru_lines)
+    if pins:
+        for en_idx, ru_idx in pins.items():
+            if en_sigs[en_idx][0] in GENERIC_TYPES and ru_sigs[ru_idx][0] in GENERIC_TYPES:
+                en_sigs[en_idx] = ("PINNED", ru_idx)
+                ru_sigs[ru_idx] = ("PINNED", ru_idx)
     en_match = matching_signatures(en_sigs, "EN")
     ru_match = matching_signatures(ru_sigs, "RU")
     sm = difflib.SequenceMatcher(a=en_match, b=ru_match, autojunk=False)
@@ -1661,6 +1695,54 @@ def sync_merge(en_lines, ru_lines):
     return out, inserted, replaced, pairs, force_synced, orphaned
 
 
+def _content_diff_pins(old_en_lines, new_en_lines, ru_lines):
+    """Lines unchanged between the EN file's previous and current revision
+    can shift position when new content is inserted elsewhere -- e.g. a new
+    bullet added before an existing one in an anchor-free list. sync_merge
+    then has nothing but raw position to align RU against, and can pair the
+    shifted-but-unchanged EN line with the wrong RU line (see pg_depend's
+    PARTITION_PRI bullet landing on the pre-existing PIN bullet's RU text).
+
+    Since old-EN-vs-new-EN is a same-language exact-text diff, it can find
+    that unchanged content with certainty. Combined with a baseline
+    old-EN-to-RU alignment (RU should already mirror old EN structurally
+    from the last successful sync), this recovers new-EN-index -> RU-index
+    pins for content sync_merge would otherwise have to guess about."""
+    if not old_en_lines or not ru_lines:
+        return {}
+    baseline_pairs = sync_merge(old_en_lines, ru_lines)[3]
+    old_to_ru = dict(baseline_pairs)
+    pins = {}
+    used_ru = set()
+    sm = difflib.SequenceMatcher(a=old_en_lines, b=new_en_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag != "equal":
+            continue
+        for k in range(i2 - i1):
+            ru_idx = old_to_ru.get(i1 + k)
+            if ru_idx is not None and ru_idx not in used_ru:
+                pins[j1 + k] = ru_idx
+                used_ru.add(ru_idx)
+    return pins
+
+
+def _sync_merge_safe(en_lines, ru_lines, old_en_lines):
+    """Runs the plain structural merge first, and only reaches for the
+    old-EN-diff pins (see _content_diff_pins) when there's actually
+    something to fix. Skipping pins on an already-clean file matters
+    because the pins' baseline old-EN<->RU alignment assumes RU still
+    mirrors old EN -- if RU was already hand-updated ahead of the tool
+    (e.g. a manual fix applied before re-running --sync), that assumption
+    breaks and pins can misalign a file that was already fine."""
+    plain = sync_merge(en_lines, ru_lines)
+    if plain[0] == ru_lines or not old_en_lines:
+        return plain
+    pins = _content_diff_pins(old_en_lines, en_lines, ru_lines)
+    if not pins:
+        return plain
+    return sync_merge(en_lines, ru_lines, pins=pins)
+
+
 HUNK_RE = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
 
 
@@ -1671,6 +1753,16 @@ def _last_commit_touching(path: Path):
     )
     sha = result.stdout.strip()
     return sha or None
+
+
+def _git_show(ref: str, path: Path):
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path.as_posix()}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def _git_diff_hunks(ref: str, path: Path):
@@ -1806,15 +1898,24 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
         print(f"NOTE: {ru_path} does not exist yet -- creating it as a full (untranslated) copy of EN.")
         ru_lines = []
 
-    merged, inserted, replaced, pairs, force_synced, orphaned = sync_merge(en_lines, ru_lines)
-
-    ref, reworded, marked = None, [], 0
+    ref = None
+    old_en_lines = None
     if ru_existed:
-        ref, reworded = find_reworded_lines(en_path, ru_path, en_lines, ru_lines, pairs, force_synced, since=since)
+        ref = since or _last_commit_touching(ru_path)
+        if ref:
+            old_en_text = _git_show(ref, en_path)
+            if old_en_text is not None:
+                old_en_lines = old_en_text.splitlines()
+
+    merged, inserted, replaced, pairs, force_synced, orphaned = _sync_merge_safe(en_lines, ru_lines, old_en_lines)
+
+    reworded, marked = [], 0
+    if ru_existed:
+        ref, reworded = find_reworded_lines(en_path, ru_path, en_lines, ru_lines, pairs, force_synced, since=ref)
         if reworded:
             ru_lines_marked, marked = apply_stale_markers(ru_lines, reworded)
             if marked:
-                merged, inserted, replaced, pairs, force_synced, orphaned = sync_merge(en_lines, ru_lines_marked)
+                merged, inserted, replaced, pairs, force_synced, orphaned = _sync_merge_safe(en_lines, ru_lines_marked, old_en_lines)
 
     already_reported = set()
     for f in reworded:
@@ -1929,7 +2030,9 @@ def build_parser():
 
     sync_group = parser.add_argument_group("sync")
     sync_group.add_argument("--sync", metavar="EN_FILE",
-                            help="Align the RU counterpart of EN_FILE to match its current structure/content.")
+                            help="(beta) Align the RU counterpart of EN_FILE to match its current "
+                                 "structure/content. Heuristic aligner, not a semantic merge -- review its "
+                                 "output before trusting it.")
     sync_group.add_argument("-n", "--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
     sync_group.add_argument("--since", metavar="REF",
@@ -1946,7 +2049,11 @@ def main():
 
     if args.list_checks:
         for name in CHECKS:
-            print(f"--check-{name}")
+            tag = " (beta)" if name in BETA_CHECKS else ""
+            print(f"--check-{name}{tag}")
+        if any(name in BETA_CHECKS for name in CHECKS):
+            print("\n(beta): heuristic, not a real AsciiDoc parser -- treat findings as a "
+                  "review list, not a hard failure.")
         return
 
     if args.list_modules:
