@@ -1481,6 +1481,19 @@ _MASK_URL_RE = re.compile(r'https?://[^\s\[]*(?:\[[^\]]*\])?')
 # caught by the dotfile/extension checks, which are unaffected by this.
 _FILE_NOUN_GROUP = r'(?:files?|folders?|directories|directory|scripts?|archives?)'
 
+def _marked_alt(word_pattern: str) -> str:
+    """The "*word*|`word`|_word_" alternation (bold, code span, italic, in
+    that group order) shared by every marked-word regex below -- factored
+    out since it's identical in all of them; callers differ only in what
+    they wrap it with (a grammar-gated bare group, an ungated one, or none
+    at all), which is why this only covers the marked forms."""
+    return (
+            r'\*(' + word_pattern + r')\*'
+                                    r'|`(' + word_pattern + r')`'
+                                                            r'|_(' + word_pattern + r')_'
+    )
+
+
 # Bare (no extension, no leading "/") directory/file basenames that are
 # essentially never generic English words in this grammatical slot --
 # unlike e.g. "log"/"data"/"config"/"cache"/"share"/"run", which are
@@ -1504,10 +1517,7 @@ _BARE_DIR_BASENAME_ALT = '|'.join(_BARE_DIR_BASENAMES)
 # placeholder -- all real, confirmed via synthetic test cases like
 # "Declare a `var` in JavaScript" and "Set the `src` attribute").
 _BARE_NAME_MENTION_RE = re.compile(
-    r'\b(?:a|an|the)\s+(?:\*(' + _BARE_DIR_BASENAME_ALT + r')\*'
-                                                          r'|`(' + _BARE_DIR_BASENAME_ALT + r')`'
-                                                                                            r'|_(' + _BARE_DIR_BASENAME_ALT + r')_'
-                                                                                                                              r'|(' + _BARE_DIR_BASENAME_ALT + r'))\s+'
+    r'\b(?:a|an|the)\s+(?:' + _marked_alt(_BARE_DIR_BASENAME_ALT) + r'|(' + _BARE_DIR_BASENAME_ALT + r'))\s+'
     + _FILE_NOUN_GROUP + r'\b'
 )
 # Subset of the above that's safe to flag on bold/code-span alone, with no
@@ -1520,11 +1530,7 @@ _BARE_NAME_MENTION_RE = re.compile(
 # as the italicized `.bashrc` case this whole check started from.
 _BARE_DIR_BASENAMES_UNAMBIGUOUS = {"bin", "sbin", "etc", "tmp", "opt"}
 _UNAMBIGUOUS_BASENAME_ALT = '|'.join(_BARE_DIR_BASENAMES_UNAMBIGUOUS)
-_UNAMBIGUOUS_BASENAME_MARKED_RE = re.compile(
-    r'\*(' + _UNAMBIGUOUS_BASENAME_ALT + r')\*'
-                                         r'|`(' + _UNAMBIGUOUS_BASENAME_ALT + r')`'
-                                                                              r'|_(' + _UNAMBIGUOUS_BASENAME_ALT + r')_'
-)
+_UNAMBIGUOUS_BASENAME_MARKED_RE = re.compile(_marked_alt(_UNAMBIGUOUS_BASENAME_ALT))
 
 # Generalization of the whitelist above to any word, not just curated
 # ones: a word with an internal underscore or slash (not leading/
@@ -1541,10 +1547,7 @@ _UNAMBIGUOUS_BASENAME_MARKED_RE = re.compile(
 # combine with "file/folder" as its object).
 _COMPOUND_WORD = r'[A-Za-z0-9]+(?:[_/][A-Za-z0-9]+)+'
 _COMPOUND_NAME_MENTION_RE = re.compile(
-    r'\b(?:a|an|the)\s+(?:\*(' + _COMPOUND_WORD + r')\*'
-                                                  r'|`(' + _COMPOUND_WORD + r')`'
-                                                                            r'|_(' + _COMPOUND_WORD + r')_'
-                                                                                                      r'|(' + _COMPOUND_WORD + r'))\s+'
+    r'\b(?:a|an|the)\s+(?:' + _marked_alt(_COMPOUND_WORD) + r'|(' + _COMPOUND_WORD + r'))\s+'
     + _FILE_NOUN_GROUP + r'\b'
 )
 
@@ -1605,12 +1608,7 @@ _ITALIC_DOTFILES = ("bashrc", "bash_profile", "bash_login", "profile", "zshrc",
                     "vimrc", "gitconfig", "psqlrc", "pgpass", "npmrc", "editorconfig", "gitignore", "env",
                     "dockerignore", "eslintrc", "pylintrc", "htaccess", "htpasswd", "claude", "idea")
 _DOTFILE_CORE = r'\.(?:' + '|'.join(_ITALIC_DOTFILES) + r')'
-_DOTFILE_MENTION_RE = re.compile(
-    r'\*(' + _DOTFILE_CORE + r')\*'
-                             r'|`(' + _DOTFILE_CORE + r')`'
-                                                      r'|_(' + _DOTFILE_CORE + r')_'
-                                                                               r'|(?<!\w)(' + _DOTFILE_CORE + r')\b'
-)
+_DOTFILE_MENTION_RE = re.compile(_marked_alt(_DOTFILE_CORE) + r'|(?<!\w)(' + _DOTFILE_CORE + r')\b')
 
 
 def _mask_non_prose_spans(line: str) -> str:
@@ -1682,6 +1680,27 @@ def _iter_prose_lines(lines):
         yield i, line
 
 
+def _collect_marked_hits(pattern, text, matches):
+    """Run one of the "bold|code|italic[|bare]" marked-word regexes built
+    with _marked_alt (optionally plus a trailing bare-word group) against
+    `text`, appending "word (kind, should be italic)" to `matches` for
+    every non-italic hit. Shared by the four regex-based checks in
+    check_pages_file_path_italics that all follow this same shape --
+    _MARKED_WORD_BEFORE_FILE_RE is the odd one out (single group, always a
+    code span) and stays inline."""
+    for m in pattern.finditer(text):
+        groups = m.groups()
+        bold_w, code_w, italic_w = groups[0], groups[1], groups[2]
+        bare_w = groups[3] if len(groups) > 3 else None
+        if italic_w:
+            continue  # already correctly italicized
+        word = bold_w or code_w or bare_w
+        if not word:
+            continue
+        kind = "bold" if bold_w else ("code span" if code_w else "unformatted")
+        matches.append(f"{word} ({kind}, should be italic)")
+
+
 def check_pages_file_path_italics(verbose=False) -> bool:
     """New check (not a port of an existing shell script): flags file names
     (by a curated config/unit-file extension whitelist), directory paths
@@ -1703,42 +1722,16 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                     matches = sorted(set(_ITALIC_FILE_EXT_RE.findall(masked) + _ITALIC_DIR_PATH_RE.findall(masked)))
 
                     lightly_masked = _mask_non_prose_spans(line)
-                    for m in _BARE_NAME_MENTION_RE.finditer(lightly_masked):
-                        bold_w, code_w, italic_w, bare_w = m.groups()
-                        if italic_w:
-                            continue  # already correctly italicized
-                        word = bold_w or code_w or bare_w
-                        kind = "bold" if bold_w else ("code span" if code_w else "unformatted")
-                        matches.append(f"{word} ({kind}, should be italic)")
-                    for m in _UNAMBIGUOUS_BASENAME_MARKED_RE.finditer(lightly_masked):
-                        bold_w, code_w, italic_w = m.groups()
-                        if italic_w:
-                            continue  # already correctly italicized
-                        word = bold_w or code_w
-                        kind = "bold" if bold_w else "code span"
-                        matches.append(f"{word} ({kind}, should be italic)")
-                    for m in _COMPOUND_NAME_MENTION_RE.finditer(lightly_masked):
-                        bold_w, code_w, italic_w, bare_w = m.groups()
-                        if italic_w:
-                            continue  # already correctly italicized
-                        word = bold_w or code_w or bare_w
-                        kind = "bold" if bold_w else ("code span" if code_w else "unformatted")
-                        matches.append(f"{word} ({kind}, should be italic)")
+                    _collect_marked_hits(_BARE_NAME_MENTION_RE, lightly_masked, matches)
+                    _collect_marked_hits(_UNAMBIGUOUS_BASENAME_MARKED_RE, lightly_masked, matches)
+                    _collect_marked_hits(_COMPOUND_NAME_MENTION_RE, lightly_masked, matches)
                     for m in _MARKED_WORD_BEFORE_FILE_RE.finditer(lightly_masked):
                         word = m.group(1)
                         if word.lower() in _GENERIC_NOUN_WORDS:
                             continue  # format/type descriptor, not a literal name
                         if not any(c.isupper() for c in word[1:]):  # skip camelCase parameter names
                             matches.append(f"{word} (code span, should be italic)")
-
-                    for m in _DOTFILE_MENTION_RE.finditer(lightly_masked):
-                        bold_d, code_d, italic_d, bare_d = m.groups()
-                        if italic_d:
-                            continue  # already correctly italicized
-                        dotfile = bold_d or code_d or bare_d
-                        if dotfile:
-                            kind = "bold" if bold_d else ("code span" if code_d else "unformatted")
-                            matches.append(f"{dotfile} ({kind}, should be italic)")
+                    _collect_marked_hits(_DOTFILE_MENTION_RE, lightly_masked, matches)
 
                     matches = sorted(set(matches))
                     if matches:
