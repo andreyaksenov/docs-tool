@@ -1417,8 +1417,14 @@ def check_pages_translation(verbose=False) -> bool:
 # "archive.tar.gz" already matches on "...gz6.tar" (stopping at the "tar"
 # segment, not continuing through ".gz") -- a good enough anchor for -v
 # to show the full line, without needing a two-extension pattern.
+# xml added later: real Hadoop config files (hive-site.xml, hdfs-site.xml,
+# core-site.xml, ...) turned up ~13 times in docs-adh, almost all already
+# italicized correctly, with one confirmed miss in backticks
+# (release-notes.adoc: "manage granular parameters (`hdfs-site.xml`,
+# `core-site.xml`, `hive-site.xml`)") -- same low collision risk as
+# json/yaml already in the list.
 _ITALIC_FILE_EXT_RE = re.compile(
-    r'\b[\w][\w-]*\.(?:conf|ya?ml|cfg|ini|toml|json|service|socket|log|env|pem|crt|key|properties'
+    r'\b[\w][\w-]*\.(?:conf|ya?ml|cfg|ini|toml|json|xml|service|socket|log|env|pem|crt|key|properties'
     r'|jar|war|rpm|deb|tar|gz|tgz|whl|zip)\b'
 )
 # Absolute paths under directories that are essentially always literal
