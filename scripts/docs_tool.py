@@ -1981,16 +1981,17 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
             hits = []
             for i, line in _iter_prose_lines(lines):
                 masked = _mask_code_and_links(line)
-                for tok in _HOMOGLYPH_WORD_TOKEN_RE.findall(masked):
+                for m in _HOMOGLYPH_WORD_TOKEN_RE.finditer(masked):
+                    tok = m.group(0)
                     if len(tok) > 1 and CYRILLIC_RE.search(tok) and _LATIN_LETTER_RE.search(tok):
-                        hits.append((i, tok, line))
+                        hits.append((i, m.start() + 1, tok, line))
                 for m in _HOMOGLYPH_STANDALONE_LETTER_RE.finditer(masked):
-                    hits.append((i, m.group(1), line))
+                    hits.append((i, m.start(1) + 1, m.group(1), line))
             if hits:
                 ok = False
                 print(f"FILE     {f}")
-                for i, tok, line in hits:
-                    print(f"  {f}:{i}: {tok!r}")
+                for i, col, tok, line in hits:
+                    print(f"  {f}:{i}:{col}: {tok!r}")
                     if verbose:
                         print(f"    {line}")
     if ok:
