@@ -1895,6 +1895,110 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
 
 
 # --------------------------------------------------------------------------
+# PAGES: Latin/Cyrillic homoglyph mix-ups in ru/ prose
+# --------------------------------------------------------------------------
+
+_LATIN_LETTER_RE = re.compile(r'[A-Za-z]')
+_HOMOGLYPH_WORD_TOKEN_RE = re.compile(r'[A-Za-zЀ-ӿ]+')
+# The four Cyrillic/Latin lowercase pairs that are near-perfect visual
+# homoglyphs AND happen to double as real one-letter Russian words
+# (а "and/but", о "about", с "with", у "at/by") -- a standalone single
+# Latin letter matching one of these in ru/ prose is almost certainly the
+# wrong script for that letter, found via a real typo: "взаимодействия c
+# каждой" with a Latin "c" instead of Cyrillic "с". A mixed-script *word*
+# (see below) can't catch this case since it's a lone character, not part
+# of a longer token.
+#
+# Requires real word boundaries on both sides -- not just "not a letter"
+# but specifically not a letter *or* a hyphen -- since a hyphenated
+# identifier can otherwise leave a bare single letter as its own
+# "word" (e.g. "gcc-c++", "xerces-c-devel", real package names in
+# software_requirements.adoc, both false positives without this).
+#
+# Deliberately lowercase-only: uppercase "C" collided for real with "the
+# C language" (e.g. "языках, отличных от SQL и C" in udf.adoc, a
+# UDF/C-function doc) -- а/о/у have no equivalent common uppercase
+# standalone-letter meaning in this doc set, but dropping all four
+# uppercase forms uniformly is simpler and safer than special-casing just
+# "C" (also sidesteps "С" starting a sentence, e.g. a "С уважением"-style
+# closing, which would otherwise need its own carve-out).
+_HOMOGLYPH_STANDALONE_LETTER_RE = re.compile(r'(?<![\w-])([aocy])(?![\w-])')
+
+
+def _mask_code_and_links(line: str) -> str:
+    """Blank out code spans, bold-italic UI-element quotes, AsciiDoc
+    macros, `<<anchor,text>>` xrefs, and URLs -- legitimately pure-Latin
+    technical content -- while leaving plain bold/italic *text* in place,
+    since ordinarily-emphasized prose still needs to be checked for
+    homoglyphs (unlike the italics check's masking, which treats all
+    bold/italic as already-handled and blanks it too).
+    Bold-italic (`*_..._*`) specifically is excluded here because this
+    doc family uses it for verbatim third-party UI strings kept in
+    English by convention (e.g. DBeaver's own "*_Connect to a database_*"
+    dialog title) -- real prose typos never occur inside that quoting
+    convention, confirmed via false positives on exactly those two real
+    cases."""
+    s = _MASK_BOLDITALIC_RE.sub(lambda m: ' ' * len(m.group(0)), line)
+    s = _MASK_CODE_SPAN_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_MACRO_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_DOUBLE_ANGLE_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    s = _MASK_URL_RE.sub(lambda m: ' ' * len(m.group(0)), s)
+    return s
+
+
+def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): flags Latin
+    letters that look like they were meant to be Cyrillic in ru/ prose --
+    the mirror image of check_pages_no_cyrillic (which only looks for
+    Cyrillic contaminating en/; the reverse direction there, a stray
+    Cyrillic letter inside an otherwise-Latin word like "A Сlient ID",
+    is already caught by that check's broad Cyrillic-anywhere-in-en/
+    scan, so it doesn't need repeating here).
+
+    Two patterns, both requiring an actual mix of scripts rather than
+    just "any Latin in ru/" (which would flag every legitimate product
+    name/command and be useless):
+
+    - a word containing BOTH Cyrillic and Latin letters (token boundary
+      is any non-letter, so "PAM-аутентификация" is two clean single-
+      script tokens, not one mixed one -- this is a very common pattern
+      in this doc set and must not misfire on it);
+    - a standalone single Latin letter matching one of the four homoglyph
+      one-letter Russian words (see _HOMOGLYPH_STANDALONE_LETTER_RE).
+
+    Deliberately heuristic and ru/-only: code/literal blocks, comments,
+    tables, headings, and attribute lines are skipped via
+    _iter_prose_lines, and inline code spans/macros/xrefs/URLs are
+    additionally blanked per-line, since legitimate Latin content
+    (commands, product names, xref targets) lives in exactly those
+    places."""
+    ok = True
+    for _, _, ru_root in module_roots():
+        for f in list(_iter_files(ru_root / "pages", ".adoc")) + list(_iter_files(ru_root / "partials", ".adoc")):
+            lines = _read_lines(f)
+            if lines is None:
+                continue
+            hits = []
+            for i, line in _iter_prose_lines(lines):
+                masked = _mask_code_and_links(line)
+                for tok in _HOMOGLYPH_WORD_TOKEN_RE.findall(masked):
+                    if len(tok) > 1 and CYRILLIC_RE.search(tok) and _LATIN_LETTER_RE.search(tok):
+                        hits.append((i, tok, line))
+                for m in _HOMOGLYPH_STANDALONE_LETTER_RE.finditer(masked):
+                    hits.append((i, m.group(1), line))
+            if hits:
+                ok = False
+                print(f"FILE     {f}")
+                for i, tok, line in hits:
+                    print(f"  {f}:{i}: {tok!r}")
+                    if verbose:
+                        print(f"    {line}")
+    if ok:
+        print("OK: no Latin/Cyrillic homoglyph mix-ups found in ru/ pages.")
+    return ok
+
+
+# --------------------------------------------------------------------------
 # CHECK REGISTRY
 # --------------------------------------------------------------------------
 
@@ -1911,6 +2015,7 @@ CHECKS = {
     "pages-no-invisible-chars": check_pages_no_invisible_chars,
     "pages-no-unicode-dashes": check_pages_no_unicode_dashes,
     "pages-orphaned": check_pages_orphaned,
+    "pages-ru-latin-homoglyphs": check_pages_ru_latin_homoglyphs,
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-translation": check_pages_translation,
@@ -1921,6 +2026,7 @@ CHECKS = {
 # README can warn people to treat their output as a review list, not a gate.
 BETA_CHECKS = {
     "pages-file-path-italics",
+    "pages-ru-latin-homoglyphs",
     "pages-structure-parity",
     "pages-table-cell-periods",
     "pages-translation",

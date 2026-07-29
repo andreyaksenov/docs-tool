@@ -58,6 +58,7 @@ pages-no-cyrillic
 pages-no-invisible-chars
 pages-no-unicode-dashes
 pages-orphaned
+pages-ru-latin-homoglyphs (beta)
 pages-structure-parity (beta)
 pages-table-cell-periods (beta)
 pages-translation (beta)
@@ -161,6 +162,17 @@ Run `./docs_tool.py --list-checks` to see the full list.
 
   Checks (per language) that every `pages/*.adoc` file is reachable from some module's `nav.adoc`, resolving the `include::partial$...[]` sections nav.adoc pulls in (e.g. SQL command / utility reference lists) and allowing cross-module nav links.
   The site's `start_page` (from `antora.yml`) is exempt, since it's not expected to be in the sidebar.
+
+- `--check-pages-ru-latin-homoglyphs` (beta; `-v` also prints the full line for each hit)
+
+  Checks `ru/` pages/partials for Latin letters that look like they were meant to be Cyrillic — the mirror image of `--check-pages-no-cyrillic` (which only looks for Cyrillic contaminating `en/`; the reverse direction there, a stray Cyrillic letter inside an otherwise-Latin word like "A Сlient ID", is already caught by that check's broad scan, so it isn't repeated here).
+  Two patterns, both requiring an actual script mix rather than flagging "any Latin in `ru/`" (which would flag every legitimate product name/command and be useless):
+
+  - a word containing *both* Cyrillic and Latin letters — token boundary is any non-letter, so `PAM-аутентификация` is two clean single-script tokens, not one mixed one, a very common pattern in this doc set that must not misfire;
+  - a standalone single Latin letter matching one of four Cyrillic/Latin homoglyph pairs that double as real one-letter Russian words: `а` ("and/but"), `о` ("about"), `с` ("with"), `у` ("at/by"). Requires true word boundaries — not adjacent to a letter *or* a hyphen — since a hyphenated identifier can otherwise leave a bare single letter as its own "word" (`gcc-c++`, `xerces-c-devel`, real package names, both false positives without this). Deliberately lowercase-only: uppercase `C` collided for real with "the C language" in a UDF/C-function doc.
+
+  Found dozens of real typos across every repo tested during development (product/tool names like `ADСM`, `Сron`, `BlockСache`, `Сlient`, `Сoordinator`, `Сommunity` with a stray Cyrillic letter; recurring `с`/`а` preposition typos; abbreviations like `см.`/`МБ` with a stray Latin letter) — a strong, evidence-backed heuristic overall, with a small amount of known residual noise: an unusual `config.y(a)ml` "either extension" notation, and rare bare parenthetical English phrases/acronym expansions (e.g. "(a server instance)") that aren't wrapped in any excludable markup.
+  Bold-italic (`*_..._*`) is excluded from the scan: this doc family uses it for verbatim third-party UI strings kept in English by convention (e.g. DBeaver's own "*_Connect to a database_*" dialog title), and real typos never occur inside that quoting convention.
 
 - `--check-pages-structure-parity` (beta; reports the first differing line by default; `-v` shows the full diff with file:line references)
 
