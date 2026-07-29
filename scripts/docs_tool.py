@@ -1986,7 +1986,28 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
                     if len(tok) > 1 and CYRILLIC_RE.search(tok) and _LATIN_LETTER_RE.search(tok):
                         hits.append((i, m.start() + 1, tok, line))
                 for m in _HOMOGLYPH_STANDALONE_LETTER_RE.finditer(masked):
-                    hits.append((i, m.start(1) + 1, m.group(1), line))
+                    start, end = m.start(1), m.end(1)
+                    # A single-letter code that IS the entire content of a
+                    # parenthetical (e.g. Postgres catalog docs' own
+                    # "DEPENDENCY_AUTO (a)"/"SHARED_DEPENDENCY_OWNER (o)"
+                    # convention for showing an enum's underlying char
+                    # code) is never a typo -- checked as a matched pair,
+                    # not just "preceded by (", so a genuine "(с чем-то)"
+                    # phrase (letter followed by more text, not ")") still
+                    # gets flagged.
+                    if start > 0 and end < len(masked) and masked[start - 1] == '(' and masked[end] == ')':
+                        continue
+                    # A single-letter code at the very start of the line
+                    # immediately followed by " | " is a description-list
+                    # term enumerating a CLI flag's short codes (e.g.
+                    # pg_dump.adoc's own "p | plain:::"/"c | custom:::"/
+                    # "d | directory:::"/"t | tar:::" for `-F`/`--format`),
+                    # not a typo -- restricted to start==0 so this can't
+                    # accidentally swallow a genuine mid-sentence typo that
+                    # happens to precede an unrelated "|" elsewhere.
+                    if start == 0 and re.match(r'\s*\|', masked[end:]):
+                        continue
+                    hits.append((i, start + 1, m.group(1), line))
             if hits:
                 ok = False
                 print(f"FILE     {f}")
