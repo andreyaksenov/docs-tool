@@ -220,6 +220,7 @@ def check_examples_no_cyrillic(verbose=False) -> bool:
     """Port of check_examples_no_cyrillic.sh: no Cyrillic in en/ examples
     (checked across every module)."""
     ok = True
+    total_hits = 0
     for _, en_root, _ in module_roots():
         for f in _iter_files(en_root / "examples"):
             lines = _read_lines(f)
@@ -228,11 +229,14 @@ def check_examples_no_cyrillic(verbose=False) -> bool:
             hits = list(_first_match_hits(lines, CYRILLIC_RE))
             if hits:
                 ok = False
+                total_hits += len(hits)
                 print(f"FILE     {f}")
                 for i, col, l in hits:
                     print(f"  {f}:{i}:{col}: {l}")
     if ok:
         print("OK: no Cyrillic characters found in en/ examples.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with Cyrillic characters.")
     return ok
 
 
@@ -241,6 +245,7 @@ def check_examples_orphaned(verbose=False) -> bool:
     pulled in by an include::example$<path>[] somewhere in that module's
     pages/partials."""
     ok = True
+    orphaned_count = 0
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             examples_root = root / "examples"
@@ -258,9 +263,12 @@ def check_examples_orphaned(verbose=False) -> bool:
                 needle = f"example$${rel}".replace("$$", "$")
                 if needle not in corpus:
                     ok = False
+                    orphaned_count += 1
                     print(f"ORPHANED  {f}  (not included in any pages/partials)")
     if ok:
         print("OK: all examples are included somewhere.")
+    else:
+        print(f"\nTotal: {orphaned_count} orphaned example file(s).")
     return ok
 
 
@@ -298,6 +306,7 @@ def check_examples_parity(verbose=False) -> bool:
     files (per module); non-.sql files must match byte-for-byte, .sql files
     only need to match once comment-only lines are blanked out."""
     ok = True
+    mismatch_count = 0
 
     def skip(f: Path, base: Path):
         return "_demo_cluster" in f.relative_to(base).parts
@@ -314,6 +323,7 @@ def check_examples_parity(verbose=False) -> bool:
             if not ru_file.is_file():
                 print(f"MISSING  {en_file}  (no ru counterpart)")
                 ok = False
+                mismatch_count += 1
                 continue
 
             if en_file.suffix == ".sql":
@@ -325,6 +335,7 @@ def check_examples_parity(verbose=False) -> bool:
                     print(f"DIFF     {en_file}")
                     print(f"         {ru_file}")
                     ok = False
+                    mismatch_count += 1
                     if verbose:
                         print("\n".join(_labeled_unified_diff(en_blanked, ru_blanked, en_file, ru_file)))
                         print()
@@ -336,6 +347,7 @@ def check_examples_parity(verbose=False) -> bool:
                 print(f"DIFF     {en_file}")
                 print(f"         {ru_file}")
                 ok = False
+                mismatch_count += 1
                 if verbose:
                     en_lines = (_read_text(en_file) or "").splitlines()
                     ru_lines = (_read_text(ru_file) or "").splitlines()
@@ -349,9 +361,12 @@ def check_examples_parity(verbose=False) -> bool:
             if not (en_examples / rel).is_file():
                 print(f"MISSING  {ru_file}  (no en counterpart)")
                 ok = False
+                mismatch_count += 1
 
     if ok:
         print("OK: en/ru examples match.")
+    else:
+        print(f"\nTotal: {mismatch_count} mismatch(es).")
     return ok
 
 
@@ -486,6 +501,7 @@ def check_nav_structure_parity(verbose=False) -> bool:
     silently skipped."""
     ok = True
     any_nav = False
+    mismatch_count = 0
     for _, en_root, ru_root in module_roots():
         en_nav = en_root / "nav.adoc"
         ru_nav = ru_root / "nav.adoc"
@@ -494,6 +510,7 @@ def check_nav_structure_parity(verbose=False) -> bool:
         any_nav = True
         if not _compare_skeleton_pair(en_nav, ru_nav, _nav_skeleton, verbose):
             ok = False
+            mismatch_count += 1
 
         en_text = _read_text(en_nav) or ""
         for partial_name in _INCLUDE_PARTIAL_RE.findall(en_text):
@@ -502,11 +519,14 @@ def check_nav_structure_parity(verbose=False) -> bool:
             if en_partial.is_file() and ru_partial.is_file():
                 if not _compare_skeleton_pair(en_partial, ru_partial, _nav_skeleton, verbose):
                     ok = False
+                    mismatch_count += 1
 
     if not any_nav:
         print("OK: no nav.adoc found to compare.")
     elif ok:
         print("OK: nav structure matches for en/ru.")
+    else:
+        print(f"\nTotal: {mismatch_count} mismatched file(s).")
     return ok
 
 
@@ -514,7 +534,7 @@ def check_nav_structure_parity(verbose=False) -> bool:
 # PAGES: broken references
 # --------------------------------------------------------------------------
 
-_REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2})[^\]\[\s]+\[')
+_REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|image:{1,2})[^\]\[\s]+\[')
 _ANCHOR_ID_TPL = r'^\[#{0}\]$|\[\[{0}(,|\]\])'
 _INCLUDE_CONTENT_RE = re.compile(
     r'include::(?:([A-Za-z][A-Za-z0-9_-]*):)?(?:([A-Za-z][A-Za-z0-9_-]*):)?(partial|page)\$([^\[]+\.adoc)'
@@ -759,6 +779,24 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 elif not (directory / t).is_file():
                     report(file, lineno, target)
 
+            elif target.startswith("image::") or target.startswith("image:"):
+                prefix = "image::" if target.startswith("image::") else "image:"
+                t = target[len(prefix):]
+                if t.startswith(("http://", "https://")):
+                    continue  # remote image URL, not a local file to check
+                candidate_roots = list(fallback_roots)
+                m_component = _COMPONENT_PREFIX_RE.match(t)
+                if m_component:
+                    component = m_component.group(0)[:-1]  # strip trailing ':'
+                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang)
+                    if resolved is None:
+                        continue  # external component image (ADCM:ROOT:..., ...)
+                    candidate_roots = [resolved[0]]
+                    t = resolved[1]
+                t = _strip_root_slash(t)
+                if not any((cand / "images" / t).is_file() for cand in candidate_roots):
+                    report(file, lineno, target)
+
             elif target.startswith("injectSvg::"):
                 t = _strip_root_slash(target[len("injectSvg::"):])
                 if not (root / "images" / t).is_file():
@@ -804,10 +842,12 @@ def check_pages_broken_refs(verbose=False) -> bool:
     component-prefixed xrefs against sibling modules of the same language
     when the component name matches a discovered module."""
     ok = True
+    broken_count = 0
 
     def report(file, lineno, msg):
-        nonlocal ok
+        nonlocal ok, broken_count
         ok = False
+        broken_count += 1
         print(f"BROKEN   {file}:{lineno}  {msg}")
 
     modules = list(module_roots())
@@ -828,6 +868,235 @@ def check_pages_broken_refs(verbose=False) -> bool:
 
     if ok:
         print("OK: no broken xref/include/image references found.")
+    else:
+        print(f"\nTotal: {broken_count} broken reference(s).")
+    return ok
+
+
+# --------------------------------------------------------------------------
+# TAGS: orphaned tagged regions
+# --------------------------------------------------------------------------
+
+# Deliberately not anchored to a comment prefix (//, --, #, ...) -- tag/end
+# markers are always written inside whatever that file's comment syntax is
+# (adoc pages/partials use //, .sql examples use --), and the marker itself
+# is the same regardless of which one wraps it.
+_TAG_START_RE = re.compile(r'\btag::([\w][\w.-]*)\[\]')
+_TAG_END_RE = re.compile(r'\bend::([\w][\w.-]*)\[\]')
+
+
+def _parse_tag_regions(lines):
+    """Returns [(name, start_lineno, end_lineno), ...] for every balanced
+    tag::NAME[]/end::NAME[] region in `lines`. Matched by name (not simple
+    stack order) so a region opened while another is still open -- e.g. a
+    tag nested inside a wider one, like connect.adoc's part-02 wrapping
+    part-03 -- still pairs with the right end:: marker even if regions
+    close out of nesting order."""
+    open_stack = []
+    regions = []
+    for lineno, line in enumerate(lines, 1):
+        m = _TAG_START_RE.search(line)
+        if m:
+            open_stack.append((m.group(1), lineno))
+            continue
+        m = _TAG_END_RE.search(line)
+        if m:
+            name = m.group(1)
+            for i in range(len(open_stack) - 1, -1, -1):
+                if open_stack[i][0] == name:
+                    _, start = open_stack.pop(i)
+                    regions.append((name, start, lineno))
+                    break
+    return regions
+
+
+def _parse_include_attrs(attrs_str):
+    """Returns (tags_used, negated_tags, whole_file) parsed from an
+    include::...[...] attribute list. tag=/tags= may name one or more tags
+    (tags= separates them with ';', Asciidoctor style); a leading '!'
+    negates a tag (an explicit exclusion, tracked separately since it
+    overrides mere nesting -- see check_tags_orphaned) and a bare '*'/'**'
+    wildcard means every (non-negated) tag in the file is pulled in. An
+    include with no tag/tags attribute at all (the common case, e.g. `[]`
+    or `[leveloffset=+1]`) pulls in the whole file -- and therefore every
+    tag it contains -- same as a wildcard would."""
+    tags = set()
+    negated = set()
+    whole_file = True
+    for part in attrs_str.split(","):
+        part = part.strip()
+        if part.startswith("tags="):
+            whole_file = False
+            for tok in part[len("tags="):].split(";"):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                if tok.startswith("!"):
+                    negated.add(tok[1:])
+                    continue
+                if tok in ("*", "**"):
+                    whole_file = True
+                else:
+                    tags.add(tok)
+        elif part.startswith("tag="):
+            whole_file = False
+            tok = part[len("tag="):].strip()
+            if tok:
+                tags.add(tok)
+    return tags, negated, whole_file
+
+
+def _excluded_comment_lines(path: Path) -> set:
+    """Line numbers to skip as AsciiDoc comments: '//' line comments and
+    '////' block comments. Unlike _excluded_ref_lines, this deliberately
+    does NOT exclude ---- / .... listing/source blocks -- an
+    include::...[tag=...] macro living inside one (the standard way to pull
+    in an example snippet so it renders as code) is still processed by
+    Asciidoctor and must count as real usage, not be skipped the way a
+    broken-refs scan skips illustrative text inside a listing block."""
+    lines = _read_lines(path)
+    if lines is None:
+        return set()
+    excluded = set()
+    in_comment = False
+    for lineno, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if re.match(r'^/{4,}\s*$', line):
+            in_comment = not in_comment
+            excluded.add(lineno)
+            continue
+        if in_comment:
+            excluded.add(lineno)
+            continue
+        if stripped.startswith("//"):
+            excluded.add(lineno)
+    return excluded
+
+
+def _resolve_include_target(t, directory, root, lang_module_roots, lang):
+    """Resolve an include::TARGET[...] target string to a concrete file
+    Path, the same way _check_refs_in_file's include branch does: an
+    optional component/module prefix (peeled off via _resolve_module_ref),
+    then family$name (partial$/page$/example$) relative to that root's
+    subdir -- or, lacking a family marker, a plain filesystem path relative
+    to the *including* file's own directory (e.g.
+    `include::freeipa_kerberos.adoc[tag=x]` from a sibling page$ file,
+    which is a real, common form -- not every include is Antora
+    resource-id-qualified). Returns None for an unregistered external
+    component, same as broken-refs: can't resolve, not this tool's problem
+    to check."""
+    candidate_root = root
+    m_component = _COMPONENT_PREFIX_RE.match(t)
+    if m_component:
+        component = m_component.group(0)[:-1]
+        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang)
+        if resolved is None:
+            return None
+        candidate_root, t = resolved
+
+    if t.startswith("partial$"):
+        return candidate_root / "partials" / _strip_root_slash(t[len("partial$"):])
+    elif t.startswith("example$"):
+        return candidate_root / "examples" / _strip_root_slash(t[len("example$"):])
+    elif t.startswith("page$"):
+        return candidate_root / "pages" / _strip_root_slash(t[len("page$"):])
+    else:
+        return directory / t
+
+
+_INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')
+
+
+def _collect_tag_usage(lang_module_roots, lang):
+    """Scans every pages/partials file (in this language, across all
+    modules) for include::...[...] macros and returns (used_tags,
+    negated_tags, whole_file_used): used_tags maps a resolved target file
+    to the set of tag names directly requested from it; negated_tags maps
+    it to the set of tag names ever explicitly excluded (`!name`) from some
+    tags= include of it -- a tag that's *only* ever pulled in negated like
+    that is never actually used, even where it's nested inside a used
+    parent (see check_tags_orphaned); whole_file_used is the set of target
+    files pulled in without a tag/tags filter (or with a wildcard), meaning
+    every (non-negated) tag they contain counts as used. Only pages/partials
+    are scanned as *sources* of includes -- examples are always a leaf,
+    never something that itself includes other content."""
+    used_tags = {}
+    negated_tags = {}
+    whole_file_used = set()
+    for root in lang_module_roots.values():
+        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+            lines = _read_lines(f)
+            if lines is None:
+                continue
+            excluded = _excluded_comment_lines(f)
+            directory = f.parent
+            for lineno, line in enumerate(lines, 1):
+                if lineno in excluded:
+                    continue
+                for t, attrs in _INCLUDE_MACRO_RE.findall(line):
+                    target_file = _resolve_include_target(t, directory, root, lang_module_roots, lang)
+                    if target_file is None:
+                        continue  # external component's content, not registered via --external-root
+                    tags, negated, whole_file = _parse_include_attrs(attrs)
+                    if whole_file:
+                        whole_file_used.add(target_file)
+                    used_tags.setdefault(target_file, set()).update(tags)
+                    negated_tags.setdefault(target_file, set()).update(negated)
+    return used_tags, negated_tags, whole_file_used
+
+
+def check_tags_orphaned(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): every
+    tag::NAME[]/end::NAME[] region defined in an examples/pages/partials
+    file must actually be pulled in somewhere -- directly via
+    include::...[tag=NAME]/[tags=NAME;...], nested inside another region
+    that is itself used, or via a plain/wildcarded include of the whole
+    file. A tag satisfying none of those is dead: nothing in the rendered
+    site ever shows that content, however it looks in the source."""
+    ok = True
+    orphaned_count = 0
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+
+    for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
+        used_tags, negated_tags, whole_file_used = _collect_tag_usage(lang_module_roots, lang)
+
+        for root in lang_module_roots.values():
+            for d in ("examples", "pages", "partials"):
+                for f in _iter_files(root / d):
+                    if d != "examples" and f.suffix != ".adoc":
+                        continue
+                    if f in whole_file_used:
+                        continue
+                    lines = _read_lines(f)
+                    if lines is None:
+                        continue
+                    regions = _parse_tag_regions(lines)
+                    if not regions:
+                        continue
+                    direct_used = used_tags.get(f, set())
+                    file_negated = negated_tags.get(f, set())
+                    for name, start, end in regions:
+                        if name in direct_used:
+                            continue
+                        # A parent region covers this one by nesting only if
+                        # some use of the parent didn't also explicitly
+                        # exclude this tag (tags=parent;!this) -- a nested
+                        # tag pulled in and then immediately cut back out
+                        # never actually renders.
+                        if name not in file_negated and any(
+                                oname != name and ostart <= start and end <= oend and oname in direct_used
+                                for oname, ostart, oend in regions):
+                            continue
+                        ok = False
+                        orphaned_count += 1
+                        print(f"ORPHANED  {f}:{start}  tag::{name}[]  (never pulled in via tag=/tags=)")
+
+    if ok:
+        print("OK: all tagged regions are included somewhere.")
+    else:
+        print(f"\nTotal: {orphaned_count} orphaned tag(s).")
     return ok
 
 
@@ -839,6 +1108,7 @@ def check_pages_line_parity(verbose=False) -> bool:
     """Port of check_pages_line_parity.sh (matches `wc -l` semantics: counts
     newline characters, not logical/visual lines)."""
     ok = True
+    mismatch_count = 0
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
             for en_file in _iter_files(en_root / subdir, ".adoc"):
@@ -849,6 +1119,7 @@ def check_pages_line_parity(verbose=False) -> bool:
                 if not ru_file.is_file():
                     print(f"MISSING  {en_file}  (no ru counterpart)")
                     ok = False
+                    mismatch_count += 1
                     continue
                 en_n = (_read_text(en_file) or "").count("\n")
                 ru_n = (_read_text(ru_file) or "").count("\n")
@@ -856,6 +1127,7 @@ def check_pages_line_parity(verbose=False) -> bool:
                     print(f"DIFF     {en_file}  ({en_n} lines)")
                     print(f"         {ru_file}  ({ru_n} lines)")
                     ok = False
+                    mismatch_count += 1
 
             for ru_file in _iter_files(ru_root / subdir, ".adoc"):
                 if not _page_allowed(ru_file):
@@ -864,9 +1136,12 @@ def check_pages_line_parity(verbose=False) -> bool:
                 if not (en_root / rel).is_file():
                     print(f"MISSING  {ru_file}  (no en counterpart)")
                     ok = False
+                    mismatch_count += 1
 
     if ok:
         print("OK: all compared en/ru pages have matching line counts.")
+    else:
+        print(f"\nTotal: {mismatch_count} mismatch(es).")
     return ok
 
 
@@ -891,6 +1166,7 @@ def _first_match_hits(lines, pattern):
 def check_pages_no_cyrillic(verbose=False) -> bool:
     """Port of check_pages_no_cyrillic.sh (en/ only, all modules)."""
     ok = True
+    total_hits = 0
     for _, en_root, _ in module_roots():
         for f in list(_iter_files(en_root / "pages", ".adoc")) + list(_iter_files(en_root / "partials", ".adoc")):
             if not _page_allowed(f):
@@ -901,11 +1177,14 @@ def check_pages_no_cyrillic(verbose=False) -> bool:
             hits = list(_first_match_hits(lines, CYRILLIC_RE))
             if hits:
                 ok = False
+                total_hits += len(hits)
                 print(f"FILE     {f}")
                 for i, col, l in hits:
                     print(f"  {f}:{i}:{col}: {l}")
     if ok:
         print("OK: no Cyrillic characters found in en/ pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with Cyrillic characters.")
     return ok
 
 
@@ -966,6 +1245,7 @@ def check_pages_no_invisible_chars(verbose=False) -> bool:
 def check_pages_no_unicode_dashes(verbose=False) -> bool:
     """Port of check_pages_no_unicode_dashes.sh (en/ and ru/, all modules)."""
     ok = True
+    total_hits = 0
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
@@ -977,11 +1257,14 @@ def check_pages_no_unicode_dashes(verbose=False) -> bool:
                 hits = list(_first_match_hits(lines, EN_EM_DASH_RE))
                 if hits:
                     ok = False
+                    total_hits += len(hits)
                     print(f"FILE     {f}")
                     for i, col, l in hits:
                         print(f"  {f}:{i}:{col}: {l}")
     if ok:
         print("OK: no en dash (–) or em dash (—) characters found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with en/em dash characters.")
     return ok
 
 
@@ -1054,6 +1337,7 @@ def check_pages_orphaned(verbose=False) -> bool:
     component name explicitly instead of using the shorter module-qualified
     form)."""
     ok = True
+    orphaned_count = 0
     modules = list(module_roots())
 
     for lang_attr in ("en_root", "ru_root"):
@@ -1083,10 +1367,13 @@ def check_pages_orphaned(verbose=False) -> bool:
                 if page_text and _STANDALONE_PAGE_LAYOUT_RE.search(page_text):
                     continue
                 ok = False
+                orphaned_count += 1
                 print(f"ORPHANED  {f}  (not referenced in any nav.adoc)")
 
     if ok:
         print("OK: all pages are referenced in nav.adoc.")
+    else:
+        print(f"\nTotal: {orphaned_count} orphaned page(s).")
     return ok
 
 
@@ -1235,6 +1522,7 @@ def _structure_skeleton(path: Path):
 def check_pages_structure_parity(verbose=False) -> bool:
     """Port of check_pages_structure_parity.sh."""
     ok = True
+    mismatch_count = 0
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
             for en_file in _iter_files(en_root / subdir, ".adoc"):
@@ -1245,9 +1533,11 @@ def check_pages_structure_parity(verbose=False) -> bool:
                 if not ru_file.is_file():
                     print(f"MISSING  {en_file}  (no ru counterpart)")
                     ok = False
+                    mismatch_count += 1
                     continue
                 if not _compare_skeleton_pair(en_file, ru_file, _structure_skeleton, verbose):
                     ok = False
+                    mismatch_count += 1
 
             for ru_file in _iter_files(ru_root / subdir, ".adoc"):
                 if not _page_allowed(ru_file):
@@ -1256,9 +1546,12 @@ def check_pages_structure_parity(verbose=False) -> bool:
                 if not (en_root / rel).is_file():
                     print(f"MISSING  {ru_file}  (no en counterpart)")
                     ok = False
+                    mismatch_count += 1
 
     if ok:
         print("OK: en/ru structure matches for all compared files.")
+    else:
+        print(f"\nTotal: {mismatch_count} mismatch(es).")
     return ok
 
 
@@ -1359,16 +1652,18 @@ def _strip_noise(line: str) -> str:
 
 
 def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_header):
+    """Returns the number of UNTRANSLATED/SUSPECT lines flagged."""
     en_lines = _read_lines(en_file)
     ru_lines = _read_lines(ru_file)
     if en_lines is None or ru_lines is None:
-        return
+        return 0
     n = min(len(en_lines), len(ru_lines))
 
     in_code = None
     in_comment_block = False
     in_cell = False
     header_printed = False
+    finding_count = 0
 
     def ensure_header():
         nonlocal header_printed
@@ -1414,19 +1709,24 @@ def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_h
 
         if en_line == ru_line:
             ensure_header()
+            finding_count += 1
             print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_line}")
         elif strict and not _HEADING_RE.match(en_line):
             candidate = _strip_noise(ru_line).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
             if _STOPWORDS_RE.search(candidate):
                 ensure_header()
+                finding_count += 1
                 print(f"  SUSPECT       {ru_file}:{lineno}: {ru_line}")
+
+    return finding_count
 
 
 def check_pages_translation(verbose=False) -> bool:
     """Port of check_pages_translation.sh. `verbose` enables the stricter
     stopword-based heuristic (the script's `-v` flag)."""
     ok = True
+    total_hits = 0
 
     def report_header(ru_file):
         nonlocal ok
@@ -1442,10 +1742,12 @@ def check_pages_translation(verbose=False) -> bool:
                 ru_file = ru_root / rel
                 if not ru_file.is_file():
                     continue
-                _check_translation_pair(en_file, ru_file, verbose, report_header)
+                total_hits += _check_translation_pair(en_file, ru_file, verbose, report_header)
 
     if ok:
         print("OK: no untranslated lines detected.")
+    else:
+        print(f"\nTotal: {total_hits} untranslated/suspect line(s).")
     return ok
 
 
@@ -1759,6 +2061,7 @@ def check_pages_file_path_italics(verbose=False) -> bool:
     style guide requires for them. Deliberately narrow and heuristic -- see
     the regexes above for scope and reasoning."""
     ok = True
+    total_hits = 0
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
@@ -1789,6 +2092,7 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                         hits.append((i, line, matches))
                 if hits:
                     ok = False
+                    total_hits += len(hits)
                     print(f"FILE     {f}")
                     for i, line, matches in hits:
                         print(f"  {f}:{i}: {', '.join(matches)}")
@@ -1796,6 +2100,8 @@ def check_pages_file_path_italics(verbose=False) -> bool:
                             print(f"    {line}")
     if ok:
         print("OK: no un-italicized file/directory names found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with un-italicized file/directory names.")
     return ok
 
 
@@ -1867,6 +2173,7 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
     only a bare `|` cell (not `a|`/`m|`/etc., which always occupy the rest
     of their line) is split this way."""
     ok = True
+    total_hits = 0
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
@@ -1938,12 +2245,15 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
 
                 if hits:
                     ok = False
+                    total_hits += len(hits)
                     print(f"FILE     {f}")
                     for lineno, line in hits:
                         print(f"  {f}:{lineno}: {line.strip() if isinstance(line, str) else line}")
 
     if ok:
         print("OK: no table cell ends its last sentence with a period.")
+    else:
+        print(f"\nTotal: {total_hits} table cell(s) ending with a period.")
     return ok
 
 
@@ -2026,6 +2336,7 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
     (commands, product names, xref targets) lives in exactly those
     places."""
     ok = True
+    total_hits = 0
     for _, _, ru_root in module_roots():
         for f in list(_iter_files(ru_root / "pages", ".adoc")) + list(_iter_files(ru_root / "partials", ".adoc")):
             if not _page_allowed(f):
@@ -2065,6 +2376,7 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
                     hits.append((i, start + 1, m.group(1), line))
             if hits:
                 ok = False
+                total_hits += len(hits)
                 print(f"FILE     {f}")
                 for i, col, tok, line in hits:
                     print(f"  {f}:{i}:{col}: {tok!r}")
@@ -2072,6 +2384,8 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
                         print(f"    {line}")
     if ok:
         print("OK: no Latin/Cyrillic homoglyph mix-ups found in ru/ pages.")
+    else:
+        print(f"\nTotal: {total_hits} homoglyph hit(s).")
     return ok
 
 
@@ -2096,6 +2410,7 @@ CHECKS = {
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-translation": check_pages_translation,
+    "tags-orphaned": check_tags_orphaned,
 }
 
 # Checks whose logic is heuristic (no real AsciiDoc parser behind it) and can
