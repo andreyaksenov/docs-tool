@@ -258,11 +258,15 @@ blocking_failed=0
 echo "=== blocking checks ==="
 python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-no-cyrillic \
-  --check-pages-no-invisible-chars || blocking_failed=1
+  --check-pages-no-invisible-chars \
+  --check-pages-no-unicode-dashes || blocking_failed=1
 
 echo
 echo "=== warn-only checks (do not block commit) ==="
 python3 docs_tool.py --page UNCOMMITTED \
+  --check-pages-ru-latin-homoglyphs \
+  --check-pages-table-cell-periods \
+  --check-pages-file-path-italics \
   --check-examples-no-cyrillic \
   --check-examples-orphaned \
   --check-examples-parity \
@@ -270,7 +274,6 @@ python3 docs_tool.py --page UNCOMMITTED \
   --check-nav-structure-parity \
   --check-pages-broken-refs \
   --check-pages-line-parity \
-  --check-pages-no-unicode-dashes \
   --check-pages-orphaned || true
 
 if [ "$blocking_failed" -ne 0 ]; then
@@ -288,6 +291,6 @@ Then make it executable:
 chmod +x .git/hooks/pre-commit
 ```
 
-Only `--check-pages-no-cyrillic` and `--check-pages-no-invisible-chars` actually block the commit; the rest just print their findings.
-Move a check from the warn-only block into the blocking one once you're ready to enforce it.
+Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, and `--check-pages-no-unicode-dashes` actually block the commit; the rest just print their findings.
+The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run.
