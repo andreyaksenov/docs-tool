@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 """
 docs_tool.py -- unified consistency-check and EN->RU sync utility for
 Antora documentation trees laid out as en/modules/<module>/... and
@@ -37,6 +38,11 @@ import subprocess
 import sys
 import unicodedata
 from pathlib import Path
+
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
 
 EN_MODULES_ROOT = Path("en/modules")
 RU_MODULES_ROOT = Path("ru/modules")
@@ -3066,6 +3072,8 @@ def build_parser():
 def main():
     global EXTERNAL_COMPONENTS, _PAGE_FILTER
     parser = build_parser()
+    if argcomplete:
+        argcomplete.autocomplete(parser, print_suppressed=True)
     args = parser.parse_args()
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
 

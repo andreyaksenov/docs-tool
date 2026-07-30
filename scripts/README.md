@@ -2,7 +2,7 @@
 
 A single Python utility for checking that the `en/` and `ru/` documentation trees stay in sync, and for syncing a RU page's structure after an EN edit.
 Run it from the root of the Antora docs repo you want to check.
-Requires Python 3.7+ (no third-party dependencies) — nothing to install.
+Requires Python 3.7+ (no third-party dependencies) — nothing to install. (Tab completion is opt-in and needs the `argcomplete` package — see [Tab completion](#tab-completion-optional).)
 
 Works on both single-module Antora sites (just `en/modules/ROOT`) and multi-module ones (`en/modules/ROOT`, `en/modules/how-to`, ...).
 Every module under `en/modules/` and `ru/modules/` is auto-discovered, and every check scans all of them automatically.
@@ -32,6 +32,33 @@ python docs_tool.py --check-<name>
 
 `curl` also ships with modern Windows 10/11, so the `curl -O ...` command above works as-is in PowerShell or cmd too.
 `--sync` shells out to `git` to detect reworded lines, so make sure Git for Windows (or any git on `PATH`) is installed.
+
+## Tab completion (optional)
+
+`docs_tool.py` supports shell tab completion for every flag, including all `--check-<name>` options — generated live from the script's own argument parser, so it never drifts out of sync when checks are added or renamed. This is optional; the tool works exactly the same without it.
+
+```bash
+pip install --user argcomplete   # one-time, not required to run the tool itself
+```
+
+Then add this to `~/.zshrc` (or `~/.bashrc`):
+
+```bash
+eval "$(python3 -m argcomplete.scripts.register_python_argcomplete docs_tool.py)"
+```
+
+Two details that matter here:
+
+- Register the **bare filename** `docs_tool.py`, not `./docs_tool.py`. zsh resolves any path-qualified command (`./docs_tool.py`, `../foo/docs_tool.py`, an absolute path, ...) down to its basename before looking up which completer to run, so a registration under `./docs_tool.py` silently never matches and completion just beeps.
+- The `python3 -m ...` form is used instead of the `register-python-argcomplete` binary because `pip install --user` often installs it to a directory that isn't on `$PATH` (e.g. `~/Library/Python/3.x/bin` on macOS); invoking the module directly sidesteps that.
+
+Open a new shell (or `source ~/.zshrc`), then:
+
+```bash
+./docs_tool.py --check-<TAB>
+```
+
+lists every matching `--check-*` flag (as well as `--all-checks`, `--list-checks`, etc.). If `argcomplete` isn't installed, the script silently skips wiring it up and runs as normal.
 
 ## Usage
 
