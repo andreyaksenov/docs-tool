@@ -33,6 +33,7 @@ their output as a review list, not a hard gate.
 """
 import argparse
 import difflib
+import os
 import re
 import subprocess
 import sys
@@ -3072,7 +3073,14 @@ def build_parser():
 def main():
     global EXTERNAL_COMPONENTS, _PAGE_FILTER
     parser = build_parser()
-    if argcomplete:
+    if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
+        # Blank out the SUPPRESS sentinel so it doesn't leak into the completion
+        # listing as a fake description -- only touches argparse's in-memory
+        # action objects during an actual completion request, so --help (which
+        # relies on help=SUPPRESS to hide these from its output) is unaffected.
+        for action in parser._actions:
+            if action.help == argparse.SUPPRESS:
+                action.help = None
         argcomplete.autocomplete(parser, print_suppressed=True)
     args = parser.parse_args()
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
