@@ -36,7 +36,7 @@ python docs_tool.py --check-<name>
 ## Usage
 
 ```bash
-./docs_tool.py --check-<name> [--check-<name> ...] [-v] [--external-root NAME=PATH ...]
+./docs_tool.py --check-<name> [--check-<name> ...] [-v] [--page NAME ...] [--external-root NAME=PATH ...]
 ./docs_tool.py --all-checks [-v]
 ./docs_tool.py --sync <path/to/en/file.adoc> [-n] [--since REF]
 ./docs_tool.py --list-checks
@@ -69,6 +69,21 @@ pages-translation (beta)
 
 Multiple `--check-*` flags can be combined in one run.
 Exits `0` if every selected check passed, `1` if any check found something.
+
+### Scoping to specific pages with `--page`
+
+By default every check scans the whole site.
+Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
+
+```bash
+./docs_tool.py --check-pages-translation -v --page resource_groups
+```
+
+Whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) build a site-wide corpus (nav links, partial includers) before reporting, so `--page` doesn't narrow them — they always scan everything regardless.
+
+Pass the special value `--page UNCOMMITTED` instead of a name to scope to whatever `.adoc` files currently have uncommitted changes — staged, unstaged, or untracked — per `git status`.
+If nothing's uncommitted, the check prints `OK: no uncommitted .adoc changes to check.` and exits `0` immediately.
+This is what the [pre-commit hook](#pre-commit-hook) below uses, so a commit only gets checked against what it's actually touching instead of the whole site.
 
 ## Checks
 
@@ -236,18 +251,18 @@ Create `.git/hooks/pre-commit` in your local checkout with:
 ```bash
 #!/usr/bin/env bash
 # docs_tool.py pre-commit checks.
-cd "$(git rev-parse --show-toplevel)"``
+cd "$(git rev-parse --show-toplevel)"
 
 blocking_failed=0
 
 echo "=== blocking checks ==="
-python3 docs_tool.py \
+python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-no-cyrillic \
   --check-pages-no-invisible-chars || blocking_failed=1
 
 echo
 echo "=== warn-only checks (do not block commit) ==="
-python3 docs_tool.py \
+python3 docs_tool.py --page UNCOMMITTED \
   --check-examples-no-cyrillic \
   --check-examples-orphaned \
   --check-examples-parity \
@@ -275,3 +290,4 @@ chmod +x .git/hooks/pre-commit
 
 Only `--check-pages-no-cyrillic` and `--check-pages-no-invisible-chars` actually block the commit; the rest just print their findings.
 Move a check from the warn-only block into the blocking one once you're ready to enforce it.
+`--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run.

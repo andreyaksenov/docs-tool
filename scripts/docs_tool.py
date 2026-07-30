@@ -151,6 +151,39 @@ def _iter_files(root: Path, suffix: str = None):
             yield p
 
 
+# Optional --page filter (set of file stems, e.g. {"resource_groups"}), or
+# None when not requested. Only applied at the per-file "report" loops of
+# checks that compare an en/ru file pair directly -- corpus-building loops
+# (broken-refs' partial-includer map, orphaned pages/examples/images) scan
+# the whole site regardless, since narrowing those would just make them
+# wrong rather than faster.
+_PAGE_FILTER = None
+
+
+def _page_allowed(path: Path) -> bool:
+    return _PAGE_FILTER is None or path.stem in _PAGE_FILTER
+
+
+def _git_uncommitted_adoc_stems():
+    """Filename stems of every .adoc file with uncommitted changes --
+    staged, unstaged, or untracked -- per `git status --porcelain`. Backs
+    `--page UNCOMMITTED`, so a pre-commit hook can scope checks to just
+    what's about to be committed instead of the whole site."""
+    result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    if result.returncode != 0:
+        sys.exit("error: --page UNCOMMITTED requires running inside a git repository")
+    stems = set()
+    for line in result.stdout.splitlines():
+        path = line[3:]
+        if " -> " in path:  # renames: "old -> new"
+            path = path.split(" -> ", 1)[1]
+        path = path.strip('"')
+        p = Path(path)
+        if p.suffix == ".adoc":
+            stems.add(p.stem)
+    return stems
+
+
 def _format_size(num_bytes: int) -> str:
     size = float(num_bytes)
     for unit in ("B", "KB", "MB"):
@@ -809,6 +842,8 @@ def check_pages_line_parity(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
             for en_file in _iter_files(en_root / subdir, ".adoc"):
+                if not _page_allowed(en_file):
+                    continue
                 rel = en_file.relative_to(en_root)
                 ru_file = ru_root / rel
                 if not ru_file.is_file():
@@ -823,6 +858,8 @@ def check_pages_line_parity(verbose=False) -> bool:
                     ok = False
 
             for ru_file in _iter_files(ru_root / subdir, ".adoc"):
+                if not _page_allowed(ru_file):
+                    continue
                 rel = ru_file.relative_to(ru_root)
                 if not (en_root / rel).is_file():
                     print(f"MISSING  {ru_file}  (no en counterpart)")
@@ -856,6 +893,8 @@ def check_pages_no_cyrillic(verbose=False) -> bool:
     ok = True
     for _, en_root, _ in module_roots():
         for f in list(_iter_files(en_root / "pages", ".adoc")) + list(_iter_files(en_root / "partials", ".adoc")):
+            if not _page_allowed(f):
+                continue
             lines = _read_lines(f)
             if lines is None:
                 continue
@@ -902,6 +941,8 @@ def check_pages_no_invisible_chars(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
                 lines = _read_lines(f)
                 if lines is None:
                     continue
@@ -928,6 +969,8 @@ def check_pages_no_unicode_dashes(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
                 lines = _read_lines(f)
                 if lines is None:
                     continue
@@ -1195,6 +1238,8 @@ def check_pages_structure_parity(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
             for en_file in _iter_files(en_root / subdir, ".adoc"):
+                if not _page_allowed(en_file):
+                    continue
                 rel = en_file.relative_to(en_root)
                 ru_file = ru_root / rel
                 if not ru_file.is_file():
@@ -1205,6 +1250,8 @@ def check_pages_structure_parity(verbose=False) -> bool:
                     ok = False
 
             for ru_file in _iter_files(ru_root / subdir, ".adoc"):
+                if not _page_allowed(ru_file):
+                    continue
                 rel = ru_file.relative_to(ru_root)
                 if not (en_root / rel).is_file():
                     print(f"MISSING  {ru_file}  (no en counterpart)")
@@ -1389,6 +1436,8 @@ def check_pages_translation(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
             for en_file in _iter_files(en_root / subdir, ".adoc"):
+                if not _page_allowed(en_file):
+                    continue
                 rel = en_file.relative_to(en_root)
                 ru_file = ru_root / rel
                 if not ru_file.is_file():
@@ -1713,6 +1762,8 @@ def check_pages_file_path_italics(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
                 lines = _read_lines(f)
                 if lines is None:
                     continue
@@ -1819,6 +1870,8 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
                 lines = _read_lines(f)
                 if lines is None:
                     continue
@@ -1975,6 +2028,8 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
     ok = True
     for _, _, ru_root in module_roots():
         for f in list(_iter_files(ru_root / "pages", ".adoc")) + list(_iter_files(ru_root / "partials", ".adoc")):
+            if not _page_allowed(f):
+                continue
             lines = _read_lines(f)
             if lines is None:
                 continue
@@ -2661,6 +2716,18 @@ def build_parser():
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose mode: show diffs (parity checks) or enable the stricter "
                              "stopword heuristic (--check-pages-translation).")
+    parser.add_argument("--page", action="append", metavar="NAME",
+                        help="Limit the per-file en/ru checks (translation, line-parity, "
+                             "structure-parity, no-cyrillic, no-unicode-dashes, "
+                             "no-invisible-chars, ru-latin-homoglyphs, table-cell-periods, "
+                             "file-path-italics) to page(s)/partial(s) whose filename stem "
+                             "matches NAME, e.g. --page resource_groups. Repeatable. Pass the "
+                             "special value UNCOMMITTED instead of a name to scope to whatever "
+                             ".adoc files currently have uncommitted changes (staged, unstaged, "
+                             "or untracked) per `git status` -- handy in a pre-commit hook. "
+                             "Whole-site checks (broken-refs, orphaned, nav/structure parity of "
+                             "nav.adoc) are unaffected and always scan everything. Optional -- "
+                             "omit to check the whole site as before.")
     parser.add_argument("--external-root", action="append", metavar="NAME=PATH",
                         help="With --check-pages-broken-refs: resolve xref:/include:: targets "
                              "against another Antora component's repo checked out locally, e.g. "
@@ -2682,7 +2749,7 @@ def build_parser():
 
 
 def main():
-    global EXTERNAL_COMPONENTS
+    global EXTERNAL_COMPONENTS, _PAGE_FILTER
     parser = build_parser()
     args = parser.parse_args()
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
@@ -2704,6 +2771,18 @@ def main():
     if args.sync:
         run_sync(args.sync, dry_run=args.dry_run, since=args.since)
         return
+
+    if args.page:
+        stems = set()
+        for name in args.page:
+            if name == "UNCOMMITTED":
+                stems |= _git_uncommitted_adoc_stems()
+            else:
+                stems.add(name[:-len(".adoc")] if name.endswith(".adoc") else name)
+        if not stems:
+            print("OK: no uncommitted .adoc changes to check.")
+            sys.exit(0)
+        _PAGE_FILTER = stems
 
     selected = list(CHECKS) if args.all_checks else [
         name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
