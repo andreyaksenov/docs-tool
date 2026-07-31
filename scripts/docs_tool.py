@@ -1281,7 +1281,14 @@ def check_tags_orphaned(verbose=False) -> bool:
     in somewhere" includes registered --external-root components' own
     content, not just this repo's (see _collect_tag_usage) -- without that
     flag, a tag only ever consumed by a sibling repo looks orphaned here
-    even though it's genuinely rendered there."""
+    even though it's genuinely rendered there.
+
+    --page filters which files' own tag regions get reported on, not the
+    usage scan: _collect_tag_usage still scans every page/partial in the
+    site regardless of --page, since a tag defined in the filtered-in file
+    can be include::...[tag=...]'d from any other page -- narrowing that
+    scan would risk a false "orphaned" report for a tag that's actually
+    used from a file --page filtered out."""
     ok = True
     orphaned_count = 0
     modules = list(module_roots())
@@ -1295,6 +1302,8 @@ def check_tags_orphaned(verbose=False) -> bool:
             for d in ("examples", "pages", "partials"):
                 for f in _iter_files(root / d):
                     if d != "examples" and f.suffix != ".adoc":
+                        continue
+                    if not _page_allowed(f):
                         continue
                     events = tag_events.get(f, [])
                     lines = _read_lines(f)

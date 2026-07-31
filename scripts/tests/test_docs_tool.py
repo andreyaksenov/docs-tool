@@ -348,6 +348,23 @@ class TagsOrphanedTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_tags_orphaned)
         self.assertTrue(ok, output)
 
+    def test_page_filter_narrows_report_but_not_usage_scan(self):
+        """--page must narrow which files' own tag regions get reported
+        on, but the usage scan itself still has to cover the whole site --
+        a tag defined in the --page-filtered-in file, used only from a
+        page --page filters out, must still be recognized as used, not
+        reported as a false orphan just because its user was excluded from
+        the report."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/kept.adoc", "tag::kept_tag[]\nbody\nend::kept_tag[]\n")
+        self.write("en/modules/ROOT/partials/other.adoc", "tag::other_tag[]\nbody\nend::other_tag[]\n")
+        self.write("en/modules/ROOT/pages/user.adoc", "include::partial$kept.adoc[tag=kept_tag]\n")
+
+        dt._PAGE_FILTER = {"kept"}
+        ok, output = self.run_check(dt.check_tags_orphaned)
+        self.assertTrue(ok, output)  # kept_tag used (from user.adoc, filtered out of the report but still scanned)
+        self.assertNotIn("other_tag", output)  # other.adoc's own orphaned tag is filtered out of the report
+
     def test_cross_repo_usage_via_external_root_is_not_orphaned(self):
         """Regression test for the docs-adbes scenario: a tag defined here
         but only pulled in by a registered --external-root component's own

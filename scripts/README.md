@@ -107,7 +107,13 @@ Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-tr
 ./docs_tool.py --check-pages-translation -v --page resource_groups
 ```
 
-Whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`, `tags-orphaned`) build a site-wide corpus (nav links, partial includers) before reporting, so `--page` doesn't narrow them — they always scan everything regardless.
+`--check-tags-orphaned` also honors `--page`, but only to narrow *which files' own `tag::`/`end::` regions get reported on* — the usage scan (which file includes which tag) still covers the whole site regardless, since a tag defined in the filtered-in file can be pulled in from any other page:
+
+```bash
+./docs_tool.py --check-tags-orphaned --page external_data_formats
+```
+
+Whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) build a site-wide corpus (nav links, partial includers) before reporting, so `--page` doesn't narrow them at all — they always scan and report on everything regardless.
 
 Pass the special value `--page UNCOMMITTED` instead of a name to scope to whatever `.adoc` files currently have uncommitted changes — staged, unstaged, or untracked — per `git status`.
 If nothing's uncommitted, the check prints `OK: no uncommitted .adoc changes to check.` and exits `0` immediately.
@@ -271,7 +277,9 @@ Treat findings as a review list, not a hard failure.
   - it's nested inside another region that is itself directly used this way — tag markers are just comments, so including the outer region pulls in everything between its `tag::`/`end::` pair, nested markers included;
   - the whole file is pulled in without a tag filter (a plain `include::...[]`, or a wildcarded `tags=**`/`tags=*`).
 
-  A `!name` exclusion in a `tags=` list (`tags=parent;!child`) overrides nesting: a nested tag that's only ever pulled in by an include that immediately excludes it again is still orphaned, even though its enclosing region is used.
+  A `!name` exclusion in a `tags=` list (`tags=parent;!child`) overrides nesting for that specific `include::` call site: a nested tag that's *only* ever pulled in by includes that immediately exclude it again is still orphaned, even though its enclosing region is used elsewhere. This is judged per call site, not merged across every include of the file — if one page does `tags=parent;!child` but another page does plain `tag=parent` (no exclusion), `child` is correctly recognized as used via that second page.
+
+  `--page NAME` narrows which files' own tag regions get reported on (not the usage scan, which always covers the whole site — see [above](#scoping-to-specific-pages-with---page)).
 
   `include::` macros inside a commented-out line or a `////` block comment don't count as usage (they're dead in the rendered site too); macros inside a `----`/`....` listing block *do* count, since `include::example$file[tag=x]` living inside a source block — so the pulled-in snippet renders as code — is the normal way this is written, not illustrative text.
 
@@ -351,7 +359,7 @@ chmod +x .git/hooks/pre-commit
 
 Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, and `--check-pages-no-unicode-dashes` actually block the commit; the rest just print their findings.
 The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
-`--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run.
+`--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run. `tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
 
 ## Running the tests
 
