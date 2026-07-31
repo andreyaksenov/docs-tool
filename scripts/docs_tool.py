@@ -410,6 +410,8 @@ def check_images_orphaned(verbose=False) -> bool:
             if not images_root.is_dir():
                 continue
             for f in _iter_files(images_root):
+                if f.name == '.DS_Store':
+                    continue
                 if f.name not in corpus:
                     ok = False
                     orphaned_count += 1
