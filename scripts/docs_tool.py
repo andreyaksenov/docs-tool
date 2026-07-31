@@ -580,18 +580,27 @@ def _heading_autoids(title: str):
     }
 
 
-def _resolve_module_ref(name, rest, lang_module_roots, lang):
+def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
     """Resolve a single `name:` prefix already peeled off a target/include
     path. `name` may be a module in this repo's current language, or (if
     registered via --external-root) a sibling Antora component -- in which
     case an optional following `module:` segment at the start of `rest`
     selects the module within it (defaulting to ROOT, same as Antora).
+    `own_name` (this repo's own antora.yml `name:`, e.g. "ADB") lets a
+    self-qualified reference resolve back into `lang_module_roots` too --
+    needed when `name`/`rest` come from a *different* repo's content (see
+    _collect_tag_usage scanning a registered external component's pages/
+    partials), which may reference this repo the same fully-qualified way
+    it would reference any other sibling component, e.g.
+    `include::ADB:how-to:metrics.adoc[tag=...]` written in docs-adbes.
     Returns (target_root, remaining_rest), or None if `name` names
     something this tool can't resolve (unregistered external component --
     left unchecked, not reported broken)."""
     if name in lang_module_roots:
         return lang_module_roots[name], rest
     modules = EXTERNAL_COMPONENTS.get(name, {}).get(lang)
+    if modules is None and name == own_name:
+        modules = lang_module_roots
     if modules is None:
         return None
     m = _COMPONENT_PREFIX_RE.match(rest)
@@ -762,6 +771,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
             elif target.startswith("include::"):
                 t = target[len("include::"):]
                 candidate_roots = list(fallback_roots)
+                qualified = False
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
                     component = m_component.group(0)[:-1]  # strip trailing ':'
@@ -770,6 +780,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                         continue  # external component/module include (ADCM:ROOT:..., ...)
                     candidate_roots = [resolved[0]]
                     t = resolved[1]
+                    qualified = True
 
                 if t.startswith("partial$"):
                     name = _strip_root_slash(t[len("partial$"):])
@@ -781,6 +792,13 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                         report(file, lineno, target)
                 elif t.startswith("page$"):
                     name = _strip_root_slash(t[len("page$"):])
+                    if not any((cand / "pages" / name).is_file() for cand in candidate_roots):
+                        report(file, lineno, target)
+                elif qualified:
+                    # A component/module-qualified include with no family$
+                    # marker defaults to the page family, same as xref:
+                    # already does above for a bare module:page.adoc.
+                    name = _strip_root_slash(t)
                     if not any((cand / "pages" / name).is_file() for cand in candidate_roots):
                         report(file, lineno, target)
                 elif not (directory / t).is_file():
@@ -980,26 +998,33 @@ def _excluded_comment_lines(path: Path) -> set:
     return excluded
 
 
-def _resolve_include_target(t, directory, root, lang_module_roots, lang):
+def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name=None):
     """Resolve an include::TARGET[...] target string to a concrete file
     Path, the same way _check_refs_in_file's include branch does: an
-    optional component/module prefix (peeled off via _resolve_module_ref),
-    then family$name (partial$/page$/example$) relative to that root's
-    subdir -- or, lacking a family marker, a plain filesystem path relative
-    to the *including* file's own directory (e.g.
+    optional component/module prefix (peeled off via _resolve_module_ref,
+    passing through `own_name` so a self-qualified reference to this repo
+    written in someone else's content still resolves), then family$name
+    (partial$/page$/example$) relative to that root's subdir. Lacking a
+    family marker, a *qualified* target (one that had a component/module
+    prefix, e.g. `include::ADB:how-to:metrics.adoc[tag=x]`) defaults to the
+    page family, same as xref: already does for a bare `module:page.adoc`
+    -- while a truly plain, unqualified target is a filesystem path
+    relative to the *including* file's own directory (e.g.
     `include::freeipa_kerberos.adoc[tag=x]` from a sibling page$ file,
     which is a real, common form -- not every include is Antora
     resource-id-qualified). Returns None for an unregistered external
     component, same as broken-refs: can't resolve, not this tool's problem
     to check."""
     candidate_root = root
+    qualified = False
     m_component = _COMPONENT_PREFIX_RE.match(t)
     if m_component:
         component = m_component.group(0)[:-1]
-        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang)
+        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
         if resolved is None:
             return None
         candidate_root, t = resolved
+        qualified = True
 
     if t.startswith("partial$"):
         return candidate_root / "partials" / _strip_root_slash(t[len("partial$"):])
@@ -1007,6 +1032,8 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang):
         return candidate_root / "examples" / _strip_root_slash(t[len("example$"):])
     elif t.startswith("page$"):
         return candidate_root / "pages" / _strip_root_slash(t[len("page$"):])
+    elif qualified:
+        return candidate_root / "pages" / _strip_root_slash(t)
     else:
         return directory / t
 
@@ -1015,22 +1042,38 @@ _INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')
 
 
 def _collect_tag_usage(lang_module_roots, lang):
-    """Scans every pages/partials file (in this language, across all
-    modules) for include::...[...] macros and returns (used_tags,
-    negated_tags, whole_file_used): used_tags maps a resolved target file
-    to the set of tag names directly requested from it; negated_tags maps
-    it to the set of tag names ever explicitly excluded (`!name`) from some
-    tags= include of it -- a tag that's *only* ever pulled in negated like
-    that is never actually used, even where it's nested inside a used
-    parent (see check_tags_orphaned); whole_file_used is the set of target
-    files pulled in without a tag/tags filter (or with a wildcard), meaning
-    every (non-negated) tag they contain counts as used. Only pages/partials
-    are scanned as *sources* of includes -- examples are always a leaf,
-    never something that itself includes other content."""
+    """Scans every pages/partials file (in this language) for
+    include::...[...] macros and returns (used_tags, negated_tags,
+    whole_file_used): used_tags maps a resolved target file to the set of
+    tag names directly requested from it; negated_tags maps it to the set
+    of tag names ever explicitly excluded (`!name`) from some tags=
+    include of it -- a tag that's *only* ever pulled in negated like that
+    is never actually used, even where it's nested inside a used parent
+    (see check_tags_orphaned); whole_file_used is the set of target files
+    pulled in without a tag/tags filter (or with a wildcard), meaning every
+    (non-negated) tag they contain counts as used. Only pages/partials are
+    scanned as *sources* of includes -- examples are always a leaf, never
+    something that itself includes other content.
+
+    Sources aren't limited to this repo's own modules: a tag defined here
+    can just as well be pulled in from a registered --external-root
+    component's content (e.g. docs-adbes writing
+    `include::ADB:how-to:metrics.adoc[tag=view_metrics_prometheus]`), so
+    every registered external component's pages/partials (same `lang`) are
+    scanned too. `own_name` -- this repo's own antora.yml `name:` -- is
+    passed down so that a self-qualified reference like that one resolves
+    back into `lang_module_roots`, the same way it would for a genuinely
+    external sibling component. Without any --external-root, no component
+    is registered and this is exactly the previous, single-repo-only
+    behavior."""
     used_tags = {}
     negated_tags = {}
     whole_file_used = set()
-    for root in lang_module_roots.values():
+    own_name = _parse_component_name((EN_MODULES_ROOT if lang == "en" else RU_MODULES_ROOT).parent / "antora.yml")
+    source_roots = list(lang_module_roots.values())
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        source_roots.extend(comp_modules.get(lang, {}).values())
+    for root in source_roots:
         for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
             lines = _read_lines(f)
             if lines is None:
@@ -1041,7 +1084,7 @@ def _collect_tag_usage(lang_module_roots, lang):
                 if lineno in excluded:
                     continue
                 for t, attrs in _INCLUDE_MACRO_RE.findall(line):
-                    target_file = _resolve_include_target(t, directory, root, lang_module_roots, lang)
+                    target_file = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name)
                     if target_file is None:
                         continue  # external component's content, not registered via --external-root
                     tags, negated, whole_file = _parse_include_attrs(attrs)
@@ -1059,7 +1102,11 @@ def check_tags_orphaned(verbose=False) -> bool:
     include::...[tag=NAME]/[tags=NAME;...], nested inside another region
     that is itself used, or via a plain/wildcarded include of the whole
     file. A tag satisfying none of those is dead: nothing in the rendered
-    site ever shows that content, however it looks in the source."""
+    site ever shows that content, however it looks in the source. "Pulled
+    in somewhere" includes registered --external-root components' own
+    content, not just this repo's (see _collect_tag_usage) -- without that
+    flag, a tag only ever consumed by a sibling repo looks orphaned here
+    even though it's genuinely rendered there."""
     ok = True
     orphaned_count = 0
     modules = list(module_roots())

@@ -268,6 +268,10 @@ Treat findings as a review list, not a hard failure.
 
   `include::` macros inside a commented-out line or a `////` block comment don't count as usage (they're dead in the rendered site too); macros inside a `----`/`....` listing block *do* count, since `include::example$file[tag=x]` living inside a source block — so the pulled-in snippet renders as code — is the normal way this is written, not illustrative text.
 
+  Usage isn't limited to this repo's own content either: a tag defined here can be pulled in from a sibling Antora component instead, e.g. a docs-adbes page writing `include::ADB:how-to:metrics.adoc[tag=view_metrics_prometheus]`. Pass `--external-root NAME=PATH` (same flag as `--check-pages-broken-refs`, e.g. `--external-root ADBES=../docs-adbes`) and that component's `pages`/`partials` are scanned for `include::` macros too, so a tag only ever consumed that way is correctly recognized as used instead of reported orphaned. Without `--external-root`, such usage is invisible to this tool and the tag is reported orphaned even though it renders fine on the other site — same false-positive shape as an unregistered external component in `--check-pages-broken-refs`.
+
+  A component/module-qualified `include::` with no family marker (e.g. `include::ADB:how-to:metrics.adoc[]`, `include::how-to:metrics.adoc[]`) defaults to the page family, the same way a bare `xref:module:page.adoc[]` already does — both `--check-tags-orphaned` and `--check-pages-broken-refs` resolve it that way.
+
 ## Sync a RU page after an EN edit (beta)
 
 Heuristic aligner, not a semantic merge — review its output before trusting it; see the caveat below.
