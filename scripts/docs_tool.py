@@ -606,8 +606,22 @@ def check_nav_structure_parity(verbose=False) -> bool:
 # PAGES: broken references
 # --------------------------------------------------------------------------
 
-_REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2})[^\]\[\s]+\[')
+_REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2}|link:{1,2})[^\]\[\s]+\[')
 _ANCHOR_ID_TPL = r'^\[#{0}\]$|\[\[{0}(,|\]\])'
+
+# Antora injects these as page-scoped attributes pointing at each family's
+# directory for the current module (https://docs.antora.org -- "family
+# attributes"), since a generic Asciidoctor macro like link: isn't
+# Antora-resource-ID-aware the way xref:/include::/image:: are. Only
+# attachmentsdir is seen in practice in this org's repos (link:{attachmentsdir}/
+# file[]), but the others are legitimate Antora attributes too.
+_ANTORA_FAMILY_ATTR_RE = re.compile(r'^\{(attachmentsdir|examplesdir|imagesdir|partialsdir)\}/?(.*)$')
+_ANTORA_FAMILY_DIRS = {
+    "attachmentsdir": "attachments",
+    "examplesdir": "examples",
+    "imagesdir": "images",
+    "partialsdir": "partials",
+}
 _INCLUDE_CONTENT_RE = re.compile(
     r'include::(?:([A-Za-z][A-Za-z0-9_-]*):)?(?:([A-Za-z][A-Za-z0-9_-]*):)?(partial|page)\$([^\[]+\.adoc)'
 )
@@ -924,6 +938,22 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 t = _strip_root_slash(target[len("inlineSVG:"):])
                 if not (root / "images" / t).is_file():
                     report(file, lineno, f"inlineSVG:{t}")
+
+            elif target.startswith("link::") or target.startswith("link:"):
+                prefix = "link::" if target.startswith("link::") else "link:"
+                t = target[len(prefix):]
+                if "://" in t or t.startswith(("mailto:", "#")):
+                    continue  # remote URL, mailto, or same-page anchor -- not a local file
+                m_attr = _ANTORA_FAMILY_ATTR_RE.match(t)
+                if m_attr:
+                    family_dir = _ANTORA_FAMILY_DIRS[m_attr.group(1)]
+                    name = _strip_root_slash(m_attr.group(2))
+                    if not any((cand / family_dir / name).is_file() for cand in fallback_roots):
+                        report(file, lineno, target)
+                elif "{" in t:
+                    continue  # some other attribute (site/playbook-level, not visible to this tool) -- unchecked
+                elif not (directory / t).is_file():
+                    report(file, lineno, target)
 
 
 def _build_partial_includers(module_list, lang_module_roots, lang):
