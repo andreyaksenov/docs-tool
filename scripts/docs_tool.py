@@ -726,6 +726,20 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
         modules = lang_module_roots
     if modules is None:
         return None
+    if rest.startswith(":"):
+        # Antora's explicit-empty-module form (`component::page`) means the
+        # same thing as omitting the module segment entirely
+        # (`component:page`, the `not m` branch below) -- both default to
+        # ROOT -- so strip the leading ':' the same way a named module's
+        # trailing ':' is stripped just below. Without this, a self- or
+        # externally-qualified `component::page.adoc` xref/include/image
+        # resolves with a stray leading ':' still in the path, which never
+        # matches a real file and gets reported broken even though the
+        # reference is fine (seen in docs-greengagedb's own
+        # `xref:docs-gg::connect_with_psql.adoc[]`, self-qualified with its
+        # own antora.yml component name).
+        rest = rest[1:]
+        return (modules["ROOT"], rest) if "ROOT" in modules else None
     m = _COMPONENT_PREFIX_RE.match(rest)
     if m:
         module = m.group(0)[:-1]

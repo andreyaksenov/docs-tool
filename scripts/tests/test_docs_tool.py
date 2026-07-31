@@ -369,6 +369,33 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("missing.png", output)
 
+    def test_self_qualified_explicit_empty_module_xref_resolves(self):
+        """Regression test for the docs-greengagedb scenario:
+        xref:docs-gg::connect_with_psql.adoc[] -- Antora's explicit-empty-
+        module form ("component::page", double colon) meaning the same
+        thing as "component:page" (module omitted) -- must resolve to
+        ROOT, not be reported broken with a stray leading ':' left in the
+        path (the bug produced exactly "xref::connect_with_psql.adoc" in
+        the report, one colon short of the real target)."""
+        self.antora_yml("en", "docs-gg")
+        self.write("en/modules/ROOT/pages/connect_with_psql.adoc", "content\n")
+        self.write("en/modules/ROOT/partials/snippet.adoc",
+                    "xref:docs-gg::connect_with_psql.adoc[]\n")
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[]\n")
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_self_qualified_explicit_empty_module_missing_xref_is_broken(self):
+        self.antora_yml("en", "docs-gg")
+        self.write("en/modules/ROOT/partials/snippet.adoc",
+                    "xref:docs-gg::missing.adoc[]\n")
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[]\n")
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("missing.adoc", output)
+
     def test_different_unregistered_component_is_left_unchecked(self):
         """A reference into a genuinely different, unregistered component
         must stay silently skipped, not get validated as if it were this
