@@ -150,10 +150,16 @@ def _read_text(path: Path):
 
 def _iter_files(root: Path, suffix: str = None):
     """Yield all files under root (recursively), optionally filtered by
-    suffix (e.g. '.adoc'). Sorted for stable, reproducible output."""
+    suffix (e.g. '.adoc'). Sorted for stable, reproducible output. Skips
+    dotfiles/dotdirs (e.g. macOS' `.DS_Store`, a stray `.git`) -- unlike a
+    shell glob, pathlib's `rglob("*")` matches a leading dot too, and
+    that's never real Antora content, just editor/OS noise that would
+    otherwise show up as e.g. a bogus ORPHANED image."""
     if not root.is_dir():
         return
     for p in sorted(root.rglob("*")):
+        if any(part.startswith(".") for part in p.relative_to(root).parts):
+            continue
         if p.is_file() and (suffix is None or p.suffix == suffix):
             yield p
 
