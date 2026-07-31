@@ -13,7 +13,9 @@ independent of whatever docs currently exist here.
 """
 import contextlib
 import io
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -419,6 +421,443 @@ class PagesBrokenRefsTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_broken_refs)
         self.assertFalse(ok)
         self.assertIn("missing-sibling.txt", output)
+
+
+class PagesRuLatinHomoglyphsTests(FixtureTestCase):
+    def test_mixed_script_word_is_flagged(self):
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Настройте PAMавторизацию для example входа.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertFalse(ok)
+        self.assertIn("PAMавторизацию", output)
+
+    def test_standalone_homoglyph_letter_is_flagged(self):
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Взаимодействие c другими example службами.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertFalse(ok)
+        self.assertIn("'c'", output)
+
+    def test_hyphenated_identifier_is_not_flagged(self):
+        """gcc-c++/xerces-c-devel-style identifiers leave a bare single
+        letter between hyphens -- must not be treated as a standalone
+        homoglyph typo."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Пакет называется xerces-c-devel для example сборки.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertTrue(ok, output)
+
+    def test_parenthetical_enum_code_is_not_flagged(self):
+        """Postgres catalog docs' own "SHARED_DEPENDENCY_OWNER (o)" enum-code
+        convention must not be flagged as a typo'd Cyrillic letter."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Тип SHARED_DEPENDENCY_OWNER (o) example используется здесь.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertTrue(ok, output)
+
+    def test_pipe_delimited_short_code_is_not_flagged(self):
+        """pg_dump.adoc-style "c | custom" description-list short codes must
+        not be flagged."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "c | custom example формат вывода.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertTrue(ok, output)
+
+    def test_bold_italic_ui_string_is_not_flagged(self):
+        """DBeaver-style "*_Connect to a database_*" verbatim UI quoting is
+        kept in English by convention; the standalone "a" inside it must not
+        be flagged."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Нажмите *_Connect to a database_* example чтобы продолжить.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertTrue(ok, output)
+
+    def test_uppercase_c_is_not_flagged(self):
+        """Uppercase Latin C collides with real usage like "the C language";
+        the standalone-letter check is deliberately lowercase-only."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "В языках, отличных от SQL и C, example используется другой синтаксис.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertTrue(ok, output)
+
+
+class PagesFilePathItalicsTests(FixtureTestCase):
+    def test_extension_whitelist_match_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Edit the postgresql.conf file to change settings.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn("postgresql.conf", output)
+
+    def test_absolute_dir_path_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "The configuration lives under /etc/postgresql/data for this cluster.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn("/etc/postgresql/data", output)
+
+    def test_bare_basename_with_phrase_is_flagged(self):
+        """"src" is only flagged with the "a/the X folder" grammar gate,
+        unlike the unambiguous basenames below."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Copy the compiled binaries into the src folder before packaging.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn("src", output)
+
+    def test_unambiguous_basename_is_flagged_without_phrase(self):
+        """"bin" is flagged on bold/code-span alone, with no "a/the X
+        folder" phrase required."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "The install places scripts under `bin` for convenience.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn("bin", output)
+
+    def test_compound_underscore_or_slash_word_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Check the greengage_path folder and the backup/adb folder for the installed binaries.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn("greengage_path", output)
+        self.assertIn("backup/adb", output)
+
+    def test_code_span_word_before_file_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Delete the `backup` folder once the migration finishes.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn("backup", output)
+
+    def test_camelcase_parameter_name_is_not_flagged(self):
+        """A camelCase code-span word before "directory" reads as a config
+        parameter name (e.g. zookeeper's `dataLogDir`), not a literal Unix
+        directory name."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Configure the `dataLogDir` directory for dedicated disk usage.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertTrue(ok, output)
+
+    def test_generic_noun_format_descriptor_is_not_flagged(self):
+        """pg_dump's own "the `directory` archive format" names a format,
+        not a literal directory."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Parallel dumps are only supported for the `directory` archive format.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertTrue(ok, output)
+
+    def test_dotfile_mention_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "For example, edit .bashrc to update your shell startup.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertFalse(ok)
+        self.assertIn(".bashrc", output)
+
+    def test_already_italicized_is_not_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "Edit the _postgresql.conf_ file to change settings.\n")
+        ok, output = self.run_check(dt.check_pages_file_path_italics)
+        self.assertTrue(ok, output)
+
+
+class PagesTableCellPeriodsTests(FixtureTestCase):
+    def test_last_line_of_cell_with_period_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/table.adoc",
+            "|===\n|Description\n\nSome description sentence.\n|===\n",
+        )
+        ok, output = self.run_check(dt.check_pages_table_cell_periods)
+        self.assertFalse(ok)
+        self.assertIn("Some description sentence.", output)
+
+    def test_list_in_cell_is_exempt(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/table.adoc",
+            "|===\n|Options\n\n* First item.\n|===\n",
+        )
+        ok, output = self.run_check(dt.check_pages_table_cell_periods)
+        self.assertTrue(ok, output)
+
+    def test_admonition_in_cell_is_exempt(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/table.adoc",
+            "|===\n|Warning\n\nNOTE: This requires elevated privileges.\n|===\n",
+        )
+        ok, output = self.run_check(dt.check_pages_table_cell_periods)
+        self.assertTrue(ok, output)
+
+    def test_abbreviation_exceptions(self):
+        self.antora_yml("ru", "TEST")
+        self.write(
+            "ru/modules/ROOT/pages/table_a.adoc",
+            "|===\n|Ссылка\n\nПодробнее см. документацию и т.д.\n|===\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/table_b.adoc",
+            "|===\n|Мин.\n|===\n",
+        )
+        ok, output = self.run_check(dt.check_pages_table_cell_periods)
+        self.assertTrue(ok, output)
+
+    def test_multi_cell_single_line_is_split(self):
+        """A compact header-style row packs several plain "|"-cells on one
+        physical line; each must be checked individually, not just the last
+        one on the line."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/table.adoc",
+            "|===\n|Algorithm |Compression ratio. |Min |Max\n|===\n",
+        )
+        ok, output = self.run_check(dt.check_pages_table_cell_periods)
+        self.assertFalse(ok)
+        self.assertIn("Compression ratio.", output)
+
+
+class PagesTranslationTests(FixtureTestCase):
+    def test_identical_line_is_flagged_as_untranslated(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "This is a real sentence with enough words.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "This is a real sentence with enough words.\n")
+        ok, output = self.run_check(dt.check_pages_translation)
+        self.assertFalse(ok)
+        self.assertIn("UNTRANSLATED", output)
+
+    def test_code_block_is_skipped(self):
+        """A code block that's identical between EN and RU (as code
+        legitimately is) must not be flagged as untranslated prose."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "----\necho hello world\n----\nThis sentence has been properly translated for real.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "----\necho hello world\n----\nЭто предложение действительно переведено на русский.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_translation)
+        self.assertTrue(ok, output)
+
+    def test_verbose_stopword_flagging(self):
+        """A leftover English stopword inside otherwise-Russian text is only
+        flagged under the stricter -v/verbose heuristic."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "This paragraph explains the new caching behavior in detail.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "Этот абзац объясняет and новое поведение кэширования.\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_translation, verbose=False)
+        self.assertTrue(ok)
+
+        ok, output = self.run_check(dt.check_pages_translation, verbose=True)
+        self.assertFalse(ok)
+        self.assertIn("SUSPECT", output)
+
+
+class PagesStructureParityTests(FixtureTestCase):
+    def test_matching_structure_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\nSome intro text.\n\n=== Sub heading\n\nMore text.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\nНекоторый текст.\n\n=== Подзаголовок\n\nЕщё текст.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertTrue(ok, output)
+
+    def test_heading_level_mismatch_is_flagged(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\nText.\n\n=== Details\n\nMore text.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\nТекст.\n\n==== Детали\n\nЕщё текст.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertFalse(ok)
+        self.assertIn("DIFF", output)
+
+    def test_delimited_block_mismatch_is_flagged(self):
+        """A source/code block's delimiters dropped in the RU translation
+        (e.g. a translator accidentally deleting "----" lines) must be
+        caught even though line counts might coincidentally still match."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\n[source,sql]\n----\nSELECT 1;\n----\n\nText after.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\nSELECT 1;\n\nТекст после.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertFalse(ok)
+        self.assertIn("DIFF", output)
+
+    def test_include_directive_target_mismatch_is_flagged(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\ninclude::partial$foo.adoc[]\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\ninclude::partial$bar.adoc[]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertFalse(ok)
+        self.assertIn("DIFF", output)
+
+
+class SyncMergeTests(unittest.TestCase):
+    """Unit tests for sync_merge -- the pure structural-alignment function
+    behind --sync, no filesystem/git involved."""
+
+    def test_new_en_section_is_inserted_untranslated(self):
+        en_lines = ["== Intro", "Some text.", "== New Section", "More text."]
+        ru_lines = ["== Введение", "Какой-то текст."]
+        merged, inserted, replaced, pairs, force_synced, orphaned = dt.sync_merge(en_lines, ru_lines)
+        self.assertEqual(merged, ["== Введение", "Какой-то текст.", "== New Section", "More text."])
+        self.assertEqual(inserted, [["== New Section", "More text."]])
+        self.assertEqual(replaced, [])
+
+    def test_force_sync_type_corrects_drifted_technical_token(self):
+        """A FORCE_SYNC_TYPES line (e.g. an include path) that's drifted
+        between EN and RU is corrected to EN's version, the same way a
+        stale `plpythonu` gets corrected to `plpython3u`."""
+        en_lines = ["include::partial$new_name.adoc[]"]
+        ru_lines = ["include::partial$old_name.adoc[]"]
+        merged, inserted, replaced, pairs, force_synced, orphaned = dt.sync_merge(en_lines, ru_lines)
+        self.assertEqual(merged, ["include::partial$new_name.adoc[]"])
+        self.assertEqual(replaced, [("include::partial$old_name.adoc[]", "include::partial$new_name.adoc[]")])
+
+    def test_prose_mismatch_is_not_overwritten(self):
+        """A reworded EN paragraph must never silently overwrite existing
+        RU prose via the plain structural merge -- that's handled
+        separately (STALE VERSION marking) by run_sync's git-diff pass."""
+        en_lines = ["Some rewritten English paragraph text here."]
+        ru_lines = ["Другой русский текст здесь совершенно другой."]
+        merged, inserted, replaced, pairs, force_synced, orphaned = dt.sync_merge(en_lines, ru_lines)
+        self.assertEqual(merged, ru_lines)
+        self.assertEqual(replaced, [])
+
+
+class RunSyncTests(unittest.TestCase):
+    """Integration tests for run_sync -- the --sync entry point, writing
+    real files under a tempdir."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_sync_")
+        self.root = Path(self._tmpdir)
+
+    def tearDown(self):
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def write(self, rel_path: str, content: str) -> Path:
+        p = self.root / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def test_dry_run_does_not_write_file(self):
+        en_path = self.write(
+            "en/modules/ROOT/pages/foo.adoc",
+            "== Title\n\nText.\n\n== New Section\n\nNew content added later.\n",
+        )
+        ru_original = "== Заголовок\n\nТекст.\n"
+        ru_path = self.write("ru/modules/ROOT/pages/foo.adoc", ru_original)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync(str(en_path), dry_run=True)
+
+        self.assertEqual(ru_path.read_text(encoding="utf-8"), ru_original)
+        self.assertNotIn("Updated", buf.getvalue())
+        self.assertIn("New Section", buf.getvalue())
+
+    def test_new_content_is_written_and_reported(self):
+        en_path = self.write(
+            "en/modules/ROOT/pages/foo.adoc",
+            "== Title\n\nText.\n\n== New Section\n\nNew content added later.\n",
+        )
+        ru_path = self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync(str(en_path), dry_run=False)
+
+        result = ru_path.read_text(encoding="utf-8")
+        self.assertIn("== Заголовок", result)  # existing RU prose preserved
+        self.assertIn("== New Section", result)  # new EN section copied in
+        self.assertIn("New content added later.", result)
+        self.assertIn("Updated", buf.getvalue())
+        self.assertIn("Inserted", buf.getvalue())
+
+
+class RunSyncGitRewordTests(unittest.TestCase):
+    """Integration test for the git-backed reworded-paragraph detection in
+    run_sync: an EN paragraph reworded (not just extended) since RU was last
+    touched must be appended as new text with the old RU translation kept
+    alongside as a `// STALE VERSION:` comment, not silently discarded."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_sync_git_")
+        self._orig_cwd = os.getcwd()
+        os.chdir(self._tmpdir)
+        subprocess.run(["git", "init", "-q"], check=True)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _git(self, *args):
+        subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", *args],
+            check=True, capture_output=True,
+        )
+
+    def write(self, rel_path: str, content: str) -> Path:
+        p = Path(rel_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def test_reworded_paragraph_marked_stale_not_overwritten_silently(self):
+        en_rel = "en/modules/ROOT/pages/foo.adoc"
+        ru_rel = "ru/modules/ROOT/pages/foo.adoc"
+        self.write(en_rel, "== Title\n\nThis is the original explanation of caching behavior.\n")
+        self.write(ru_rel, "== Заголовок\n\nЭто оригинальное объяснение поведения кэширования.\n")
+        self._git("add", "-A")
+        self._git("commit", "-m", "initial")
+
+        self.write(en_rel, "== Title\n\nThis paragraph now explains caching in a completely different way.\n")
+        self._git("add", "-A")
+        self._git("commit", "-m", "reword EN paragraph")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync(en_rel, dry_run=False)
+
+        result = Path(ru_rel).read_text(encoding="utf-8")
+        self.assertIn("This paragraph now explains caching in a completely different way.", result)
+        self.assertIn("// STALE VERSION:", result)
+        self.assertIn("Это оригинальное объяснение поведения кэширования.", result)
 
 
 if __name__ == "__main__":
