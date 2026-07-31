@@ -387,36 +387,95 @@ def check_examples_parity(verbose=False) -> bool:
 # IMAGES checks
 # --------------------------------------------------------------------------
 
+_IMAGE_REF_RE = re.compile(r'(image:{1,2}|injectSvg:{1,2}|inlineSVG:{1,2})([^\]\[\s]+)\[')
+
+
+def _collect_used_images(lang_module_roots, lang, partial_includers):
+    """Scans every pages/partials file (in this language) for
+    image:/image::/injectSvg:/injectSvg::/inlineSVG:/inlineSVG:: macros and
+    returns the set of concrete images/ file Paths they resolve to -- the
+    same resolution _check_refs_in_file's image branch uses: a
+    component/module-qualified prefix goes through _resolve_module_ref
+    (skipped if it names an unregistered external component, same as
+    broken-refs); an unqualified one resolves against whichever module(s)
+    actually include the file (partial_includers), or the file's own
+    module for a page. This is deliberately resolution-based rather than a
+    basename-in-corpus-text check: two different modules can each have
+    their own same-named images/foo.png, and only resolving each reference
+    to a specific file -- instead of asking whether "foo.png" appears
+    anywhere in the site's text -- tells a genuinely-unused duplicate
+    apart from the one that's actually used (a substring match also has
+    the opposite failure mode: images/services.png went unflagged for
+    years because images/adb_add_services.png, an unrelated file in
+    another module, happens to end in "services.png"). `own_name` lets a
+    self-qualified reference to this repo's own component (e.g.
+    `image::ADCM:ROOT:clusters/downloads_en.png[]`, written inside
+    docs-adcm's own partials -- a real, existing pattern) still resolve,
+    the same way an unqualified one would."""
+    used = set()
+    own_name = _own_component_name(lang)
+    for root in lang_module_roots.values():
+        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+            lines = _read_lines(f)
+            if lines is None:
+                continue
+            excluded = _excluded_ref_lines(f)
+            fallback_roots = partial_includers.get(f) or {root}
+            for lineno, line in enumerate(lines, 1):
+                if lineno in excluded:
+                    continue
+                for macro, t in _IMAGE_REF_RE.findall(line):
+                    if t.startswith(("http://", "https://")):
+                        continue
+                    if macro.startswith("injectSvg") or macro.startswith("inlineSVG"):
+                        used.add(root / "images" / _strip_root_slash(t))
+                        continue
+                    candidate_roots = list(fallback_roots)
+                    m_component = _COMPONENT_PREFIX_RE.match(t)
+                    if m_component:
+                        component = m_component.group(0)[:-1]
+                        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
+                        if resolved is None:
+                            continue  # external component image, not registered via --external-root
+                        candidate_roots = [resolved[0]]
+                        t = resolved[1]
+                    t = _strip_root_slash(t)
+                    for cand in candidate_roots:
+                        used.add(cand / "images" / t)
+    return used
+
+
 def check_images_orphaned(verbose=False) -> bool:
-    """Port of check_images_orphaned.sh: every images/ file's basename must
-    be referenced somewhere in pages/partials -- anywhere in the site for
-    that language, not just its own module, since a page in one module can
-    reference another module's image via a qualified
-    image::<module>:path[] macro (the basename still appears as a
-    substring of that qualified target, so no path-aware matching is
-    needed once the corpus covers the whole site)."""
+    """Port of check_images_orphaned.sh, made resolution-aware (see
+    _collect_used_images) instead of a basename-in-corpus-text match: every
+    images/ file must be the actual target of some image:/image::/
+    injectSvg:/injectSvg::/inlineSVG:/inlineSVG:: macro somewhere in that
+    language across the whole site, not just its own module, since a page
+    in one module can reference another module's image via a qualified
+    image::<module>:path[] macro, or, for a partial's image, via whichever
+    module(s) actually include that partial."""
     ok = True
     orphaned_bytes = 0
     orphaned_count = 0
     modules = list(module_roots())
-    for lang_roots in (
-            [en_root for _, en_root, _ in modules],
-            [ru_root for _, _, ru_root in modules],
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+    en_module_list = [(name, en_root) for name, en_root, _ in modules]
+    ru_module_list = [(name, ru_root) for name, _, ru_root in modules]
+    en_includers = _build_partial_includers(en_module_list, en_module_roots, "en")
+    ru_includers = _build_partial_includers(ru_module_list, ru_module_roots, "ru")
+
+    for lang, lang_module_roots, includers in (
+            ("en", en_module_roots, en_includers),
+            ("ru", ru_module_roots, ru_includers),
     ):
-        corpus_parts = []
-        for root in lang_roots:
-            for d in (root / "pages", root / "partials"):
-                for f in _iter_files(d):
-                    text = _read_text(f)
-                    if text is not None:
-                        corpus_parts.append(text)
-        corpus = "\n".join(corpus_parts)
-        for root in lang_roots:
+        used = _collect_used_images(lang_module_roots, lang, includers)
+        for root in lang_module_roots.values():
             images_root = root / "images"
             if not images_root.is_dir():
                 continue
             for f in _iter_files(images_root):
-                if f.name not in corpus:
+                if f not in used:
                     ok = False
                     orphaned_count += 1
                     orphaned_bytes += f.stat().st_size
@@ -547,7 +606,7 @@ def check_nav_structure_parity(verbose=False) -> bool:
 # PAGES: broken references
 # --------------------------------------------------------------------------
 
-_REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|image:{1,2})[^\]\[\s]+\[')
+_REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2})[^\]\[\s]+\[')
 _ANCHOR_ID_TPL = r'^\[#{0}\]$|\[\[{0}(,|\]\])'
 _INCLUDE_CONTENT_RE = re.compile(
     r'include::(?:([A-Za-z][A-Za-z0-9_-]*):)?(?:([A-Za-z][A-Za-z0-9_-]*):)?(partial|page)\$([^\[]+\.adoc)'
@@ -584,6 +643,22 @@ def _heading_autoids(title: str):
         prefix + _ID_INVALID_CHARS_RE.sub(sep, plain).strip(sep)
         for prefix, sep in _ID_PREFIX_SEP_COMBOS
     }
+
+
+_OWN_COMPONENT_NAME_CACHE = {}
+
+
+def _own_component_name(lang):
+    """This repo's own antora.yml `name:` for `lang` (e.g. "ADB"), cached.
+    A page is free to reference its own component's content fully
+    qualified -- `image::ADCM:ROOT:clusters/downloads_en.png[]` written
+    inside docs-adcm's own partials is a real, existing pattern, not just
+    a hypothetical cross-repo one -- so every _resolve_module_ref call
+    site needs this, not just the ones added for cross-repo tag usage."""
+    if lang not in _OWN_COMPONENT_NAME_CACHE:
+        antora_yml = (EN_MODULES_ROOT if lang == "en" else RU_MODULES_ROOT).parent / "antora.yml"
+        _OWN_COMPONENT_NAME_CACHE[lang] = _parse_component_name(antora_yml)
+    return _OWN_COMPONENT_NAME_CACHE[lang]
 
 
 def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
@@ -637,10 +712,11 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
     if text is None:
         return result
     lang_module_roots = lang_module_roots or {}
+    own_name = _own_component_name(lang)
     for prefix1, prefix2, family, name in _INCLUDE_CONTENT_RE.findall(text):
         target_root = root
         if prefix1:
-            resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", lang_module_roots, lang)
+            resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", lang_module_roots, lang, own_name)
             if resolved is None:
                 continue  # external component's content, not registered via --external-root
             target_root, _ = resolved
@@ -736,6 +812,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
     excluded = _excluded_ref_lines(file)
     directory = file.parent
     lang_module_roots = lang_module_roots or {}
+    own_name = _own_component_name(lang)
     doc_attrs = _collect_doc_attrs(lines)
     fallback_roots = (partial_includers or {}).get(file) or {root}
 
@@ -753,7 +830,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
                     component = m_component.group(0)[:-1]  # strip trailing ':'
-                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang)
+                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
                     if resolved is None:
                         continue  # external component xref (blog::x, ...)
                     candidate_roots = [resolved[0]]
@@ -781,9 +858,9 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
                     component = m_component.group(0)[:-1]  # strip trailing ':'
-                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang)
+                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
                     if resolved is None:
-                        continue  # external component/module include (ADCM:ROOT:..., ...)
+                        continue  # external component/module include, not registered via --external-root
                     candidate_roots = [resolved[0]]
                     t = resolved[1]
                     qualified = True
@@ -819,9 +896,9 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
                     component = m_component.group(0)[:-1]  # strip trailing ':'
-                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang)
+                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
                     if resolved is None:
-                        continue  # external component image (ADCM:ROOT:..., ...)
+                        continue  # external component image, not registered via --external-root
                     candidate_roots = [resolved[0]]
                     t = resolved[1]
                 t = _strip_root_slash(t)
@@ -838,6 +915,16 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 if not (root / "images" / t).is_file():
                     report(file, lineno, f"injectSvg:{t}")
 
+            elif target.startswith("inlineSVG::"):
+                t = _strip_root_slash(target[len("inlineSVG::"):])
+                if not (root / "images" / t).is_file():
+                    report(file, lineno, f"inlineSVG::{t}")
+
+            elif target.startswith("inlineSVG:"):
+                t = _strip_root_slash(target[len("inlineSVG:"):])
+                if not (root / "images" / t).is_file():
+                    report(file, lineno, f"inlineSVG:{t}")
+
 
 def _build_partial_includers(module_list, lang_module_roots, lang):
     """{partial_file: {module_root, ...}} for every partials/*.adoc file
@@ -850,6 +937,7 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     module A must be checked against module A, even though the partial
     physically lives under module B's partials/."""
     includers = {}
+    own_name = _own_component_name(lang)
     for _, module_root in module_list:
         for f in list(_iter_files(module_root / "pages", ".adoc")) + list(_iter_files(module_root / "partials", ".adoc")):
             text = _read_text(f)
@@ -860,7 +948,7 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
                     continue
                 target_root = module_root
                 if prefix1:
-                    resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", lang_module_roots, lang)
+                    resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", lang_module_roots, lang, own_name)
                     if resolved is None:
                         continue
                     target_root, _ = resolved
@@ -1075,7 +1163,7 @@ def _collect_tag_usage(lang_module_roots, lang):
     used_tags = {}
     negated_tags = {}
     whole_file_used = set()
-    own_name = _parse_component_name((EN_MODULES_ROOT if lang == "en" else RU_MODULES_ROOT).parent / "antora.yml")
+    own_name = _own_component_name(lang)
     source_roots = list(lang_module_roots.values())
     for comp_modules in EXTERNAL_COMPONENTS.values():
         source_roots.extend(comp_modules.get(lang, {}).values())

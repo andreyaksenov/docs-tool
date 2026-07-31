@@ -139,9 +139,10 @@ Run `./docs_tool.py --list-checks` to see the full list.
 
 - `--check-images-orphaned`
 
-  Checks (per language) that every file under `images/` has its filename referenced somewhere in `pages/` or `partials/` — anywhere in that language across the whole site, not just its own module, since a page in one module can reference another module's image via a qualified `image::<module>:path[]` macro.
+  Checks (per language) that every file under `images/` is the actual resolved target of some `image:`/`image::`/`injectSvg:`/`injectSvg::`/`inlineSVG:`/`inlineSVG::` macro somewhere in `pages/` or `partials/` — anywhere in that language across the whole site, not just its own module, since a page in one module can reference another module's image via a qualified `image::<module>:path[]` macro, or, for a partial's image, via whichever module(s) actually include that partial.
   Ends with a total count and combined file size of the orphaned images found, as a rough gauge of cleanup impact.
   Dotfiles/dotdirs (e.g. macOS' `.DS_Store`, a stray `.git`) are skipped everywhere this tool scans a directory tree, not just here — they're never real Antora content.
+  Resolution-based, not a basename-in-text match: if two different modules each have their own `images/foo.png`, only the one an actual reference resolves to counts as used, so a genuinely-unused duplicate is still caught even though its filename appears elsewhere in the site's text.
 
 ### Nav
 
@@ -160,7 +161,8 @@ Run `./docs_tool.py --list-checks` to see the full list.
   - Comments (`//` lines and `////` blocks) are skipped.
   - A `{doc-attribute}` used inside a reference target (e.g. `xref:{install-link}[]`) is substituted using that file's own `:name: value` attribute definitions before resolving.
   - A module-prefixed `xref:`/`include::`/`image:`/`image::` (e.g. `xref:how-to:page.adoc[]`, `include::how-to:partial$foo.adoc[]`, `image::get-started:connections/foo.png[]`) resolves against that sibling module if the prefix matches a discovered module.
-    Otherwise it's treated as pointing outside this repo (e.g. `blog::x`, `include::ADCM:ROOT:partial$x.adoc[]`, `image::ADCM:ROOT:x.png[]`) and skipped.
+    A reference fully qualified with this repo's own component name (e.g. `image::ADCM:ROOT:x.png[]` written inside docs-adcm itself -- a real, existing pattern, not just a hypothetical one) resolves the same way, against this repo's own modules.
+    Otherwise it's treated as pointing outside this repo (e.g. `blog::x`, a genuinely different component like `include::ADPG:ROOT:partial$x.adoc[]` written from inside docs-adcm) and skipped.
   - `image:`/`image::` targets starting with `http://`/`https://` (a remote image) are skipped, not checked against the local `images/` directory.
   - An `image:`/`image::` written inside a partial is checked against the module(s) that actually include that partial (same `partial_includers` context used for bare xref/include resolution), not the partial file's own module -- Antora resolves it that way, so a partial's image only needs to exist in at least one includer's `images/`.
   - Anchors are matched against:
