@@ -1217,17 +1217,23 @@ _INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')
 
 def _collect_tag_usage(lang_module_roots, lang):
     """Scans every pages/partials file (in this language) for
-    include::...[...] macros and returns (used_tags, negated_tags,
-    whole_file_used): used_tags maps a resolved target file to the set of
-    tag names directly requested from it; negated_tags maps it to the set
-    of tag names ever explicitly excluded (`!name`) from some tags=
-    include of it -- a tag that's *only* ever pulled in negated like that
-    is never actually used, even where it's nested inside a used parent
-    (see check_tags_orphaned); whole_file_used is the set of target files
-    pulled in without a tag/tags filter (or with a wildcard), meaning every
-    (non-negated) tag they contain counts as used. Only pages/partials are
-    scanned as *sources* of includes -- examples are always a leaf, never
-    something that itself includes other content.
+    include::...[...] macros and returns a dict mapping a resolved target
+    file to a list of (tags, negated, whole_file) events, one per include
+    call site that references it -- kept per call site, deliberately not
+    merged into one blanket set of "tags ever requested"/"tags ever
+    negated" per file, because a nested tag's usage has to be judged
+    per call site: the same nested tag can be pulled in unnegated by one
+    include (`tag=parent`, which also renders everything nested inside
+    `parent`) and separately negated by another (`tags=parent;!nested`) --
+    merging those into one set would make the negation win globally and
+    call the nested tag orphaned even though the first include really
+    does render it (see check_tags_orphaned, and the real docs-greengagedb
+    case that motivated this: `compression_codecs_no_compression` nested
+    in `compression_codecs`, negated only in the includes that also list
+    `format_null`/`compression_codecs` explicitly alongside `!..._no_compression`,
+    but rendered plainly wherever `tag=compression_codecs` is used alone).
+    Only pages/partials are scanned as *sources* of includes -- examples
+    are always a leaf, never something that itself includes other content.
 
     Sources aren't limited to this repo's own modules: a tag defined here
     can just as well be pulled in from a registered --external-root
@@ -1240,9 +1246,7 @@ def _collect_tag_usage(lang_module_roots, lang):
     external sibling component. Without any --external-root, no component
     is registered and this is exactly the previous, single-repo-only
     behavior."""
-    used_tags = {}
-    negated_tags = {}
-    whole_file_used = set()
+    events = {}
     own_name = _own_component_name(lang)
     source_roots = list(lang_module_roots.values())
     for comp_modules in EXTERNAL_COMPONENTS.values():
@@ -1262,11 +1266,8 @@ def _collect_tag_usage(lang_module_roots, lang):
                     if target_file is None:
                         continue  # external component's content, not registered via --external-root
                     tags, negated, whole_file = _parse_include_attrs(attrs)
-                    if whole_file:
-                        whole_file_used.add(target_file)
-                    used_tags.setdefault(target_file, set()).update(tags)
-                    negated_tags.setdefault(target_file, set()).update(negated)
-    return used_tags, negated_tags, whole_file_used
+                    events.setdefault(target_file, []).append((tags, negated, whole_file))
+    return events
 
 
 def check_tags_orphaned(verbose=False) -> bool:
@@ -1288,34 +1289,49 @@ def check_tags_orphaned(verbose=False) -> bool:
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
 
     for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
-        used_tags, negated_tags, whole_file_used = _collect_tag_usage(lang_module_roots, lang)
+        tag_events = _collect_tag_usage(lang_module_roots, lang)
 
         for root in lang_module_roots.values():
             for d in ("examples", "pages", "partials"):
                 for f in _iter_files(root / d):
                     if d != "examples" and f.suffix != ".adoc":
                         continue
-                    if f in whole_file_used:
-                        continue
+                    events = tag_events.get(f, [])
                     lines = _read_lines(f)
                     if lines is None:
                         continue
                     regions = _parse_tag_regions(lines)
                     if not regions:
                         continue
-                    direct_used = used_tags.get(f, set())
-                    file_negated = negated_tags.get(f, set())
                     for name, start, end in regions:
-                        if name in direct_used:
-                            continue
-                        # A parent region covers this one by nesting only if
-                        # some use of the parent didn't also explicitly
-                        # exclude this tag (tags=parent;!this) -- a nested
-                        # tag pulled in and then immediately cut back out
-                        # never actually renders.
-                        if name not in file_negated and any(
-                                oname != name and ostart <= start and end <= oend and oname in direct_used
-                                for oname, ostart, oend in regions):
+                        # Judged per include call site (`events`), not by
+                        # merging tags/negations across every call site
+                        # into one blanket per-file verdict: the same
+                        # nested tag can be rendered plainly by one include
+                        # and separately excluded by another, and either
+                        # one alone is enough to make it "used" (see
+                        # _collect_tag_usage).
+                        used = False
+                        for tags, negated, whole_file in events:
+                            if name in tags:
+                                used = True
+                                break
+                            if name in negated:
+                                continue  # excluded in this call site -- check the others
+                            if whole_file:
+                                used = True
+                                break
+                            # A parent region covers this one by nesting only if
+                            # this call site's tags= actually requested that
+                            # parent (a nested tag pulled in and then cut back
+                            # out via !this in the *same* call site never
+                            # renders, but that's already handled by the
+                            # `name in negated` check above).
+                            if any(oname != name and ostart <= start and end <= oend and oname in tags
+                                   for oname, ostart, oend in regions):
+                                used = True
+                                break
+                        if used:
                             continue
                         ok = False
                         orphaned_count += 1

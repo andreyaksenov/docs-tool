@@ -325,6 +325,29 @@ class TagsOrphanedTests(FixtureTestCase):
         self.assertIn("tag::child[]", output)
         self.assertNotIn("tag::parent[]", output)
 
+    def test_nested_tag_negated_by_one_include_but_used_by_another_is_not_orphaned(self):
+        """Regression test for the docs-greengagedb scenario
+        (compression_codecs/compression_codecs_no_compression,
+        format_null/null_description/gpload_note): a nested tag negated by
+        one include call site (tags=parent;!child) but pulled in plainly
+        by a *different* include of the same parent (tag=parent, no
+        exclusion) really does render on that second page, so it must not
+        be reported orphaned just because some other call site excludes
+        it -- negation has to be judged per call site, not merged into one
+        blanket "ever negated in this file" verdict."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/snippet.adoc",
+            "tag::parent[]\ntag::child[]\ninner\nend::child[]\nend::parent[]\n",
+        )
+        self.write("en/modules/ROOT/pages/excludes-child.adoc",
+                    "include::partial$snippet.adoc[tags=parent;!child]\n")
+        self.write("en/modules/ROOT/pages/includes-child.adoc",
+                    "include::partial$snippet.adoc[tag=parent]\n")
+
+        ok, output = self.run_check(dt.check_tags_orphaned)
+        self.assertTrue(ok, output)
+
     def test_cross_repo_usage_via_external_root_is_not_orphaned(self):
         """Regression test for the docs-adbes scenario: a tag defined here
         but only pulled in by a registered --external-root component's own
