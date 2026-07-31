@@ -422,6 +422,49 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("missing-sibling.txt", output)
 
+    def test_version_pinned_xref_is_left_unchecked(self):
+        """Regression test for the docs-adbes scenario: a version-pinned
+        Antora xref (e.g. "6.29.1.1@ADB:tutorials:external-db.adoc[]",
+        linking to a specific past ADB release) must not be reported
+        broken just because "6.29.1.1@ADB" doesn't start with a letter and
+        so isn't recognized as a component prefix -- it's left unchecked
+        the same way any other unregistered external component is, even
+        with --external-root ADB=... registered, since that root only
+        holds the current checkout, not the pinned historical version."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "xref:6.29.1.1@ADB:tutorials:external-db.adoc[]\n")
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+        external = Path(tempfile.mkdtemp(prefix="docs_tool_ext_pin_"))
+        (external / "en" / "modules" / "ROOT").mkdir(parents=True)
+        try:
+            dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={external}"])
+            ok, output = self.run_check(dt.check_pages_broken_refs)
+            self.assertTrue(ok, output)
+        finally:
+            shutil.rmtree(external, ignore_errors=True)
+
+    def test_version_pinned_include_does_not_count_as_tag_usage(self):
+        """A tag only ever pulled in via a version-pinned include must
+        still be reported orphaned -- the tool can't verify usage against
+        a pinned historical version it doesn't have checked out."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/snippet.adoc",
+            "tag::example[]\nbody\nend::example[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "include::6.29.1.1@ADB:how-to:metrics.adoc[tag=example]\n",
+        )
+
+        ok, output = self.run_check(dt.check_tags_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("tag::example[]", output)
+
 
 class PagesRuLatinHomoglyphsTests(FixtureTestCase):
     def test_mixed_script_word_is_flagged(self):

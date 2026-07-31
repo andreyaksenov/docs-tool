@@ -445,6 +445,8 @@ def _collect_used_images(lang_module_roots, lang, partial_includers):
                     if macro.startswith("injectSvg") or macro.startswith("inlineSVG"):
                         used.add(root / "images" / _strip_root_slash(t))
                         continue
+                    if _VERSION_PIN_RE.match(t):
+                        continue  # version@component:... pin -- can't resolve, left unchecked
                     candidate_roots = list(fallback_roots)
                     m_component = _COMPONENT_PREFIX_RE.match(t)
                     if m_component:
@@ -641,6 +643,17 @@ _INCLUDE_CONTENT_RE = re.compile(
     r'include::(?:([A-Za-z][A-Za-z0-9_-]*):)?(?:([A-Za-z][A-Za-z0-9_-]*):)?(partial|page)\$([^\[]+\.adoc)'
 )
 _COMPONENT_PREFIX_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_-]*:')
+# Antora's version@component:module:page pin (e.g. "6.29.1.1@ADB:tutorials:
+# adbc/external-db.adoc[]", a real pattern in docs-adbes linking to a specific
+# past ADB release) -- the lookahead requires what follows "@" to actually
+# look like a component prefix, so this can't misfire on an unrelated string
+# that happens to contain "@". Deliberately never resolved even when
+# --external-root registers that component: the root only ever holds
+# whatever's checked out *now*, not the pinned historical version, so
+# resolving against it would silently validate (or invalidate) the wrong
+# content instead of just leaving it as the "external, unchecked" case this
+# tool already has for any other component it can't verify.
+_VERSION_PIN_RE = re.compile(r'^\d[\w.\-]*@(?=[A-Za-z][A-Za-z0-9_-]*:)')
 
 
 def _strip_root_slash(t: str) -> str:
@@ -855,6 +868,8 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
 
             if target.startswith("xref:"):
                 t = target[len("xref:"):]
+                if _VERSION_PIN_RE.match(t):
+                    continue  # version@component:... pin -- can't resolve, left unchecked
                 candidate_roots = list(fallback_roots)
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
@@ -882,6 +897,8 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
 
             elif target.startswith("include::"):
                 t = target[len("include::"):]
+                if _VERSION_PIN_RE.match(t):
+                    continue  # version@component:... pin -- can't resolve, left unchecked
                 candidate_roots = list(fallback_roots)
                 qualified = False
                 m_component = _COMPONENT_PREFIX_RE.match(t)
@@ -921,6 +938,8 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 t = target[len(prefix):]
                 if t.startswith(("http://", "https://")):
                     continue  # remote image URL, not a local file to check
+                if _VERSION_PIN_RE.match(t):
+                    continue  # version@component:... pin -- can't resolve, left unchecked
                 candidate_roots = list(fallback_roots)
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
@@ -1156,6 +1175,8 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_nam
     to check."""
     candidate_root = root
     qualified = False
+    if _VERSION_PIN_RE.match(t):
+        return None  # version@component:... pin -- can't resolve, left unchecked
     m_component = _COMPONENT_PREFIX_RE.match(t)
     if m_component:
         component = m_component.group(0)[:-1]
