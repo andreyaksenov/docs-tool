@@ -352,3 +352,11 @@ chmod +x .git/hooks/pre-commit
 Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, and `--check-pages-no-unicode-dashes` actually block the commit; the rest just print their findings.
 The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run.
+
+## Running the tests
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+`tests/test_docs_tool.py` (stdlib `unittest`, no extra dependencies) covers the trickier pure-parsing functions directly, plus fixture-based integration tests that build a throwaway Antora tree per test and run a `check_*()` function against it — including regression tests for bugs found along the way (a basename shared by two different modules' `images/`, `inlineSVG:` not being recognized as usage, a self-qualified `image::ADCM:ROOT:...[]` reference being treated as an unregistered external component instead of this repo's own content). Does not touch this repo's real `en/`/`ru/` content.
