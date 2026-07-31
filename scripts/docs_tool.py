@@ -108,7 +108,11 @@ def _load_external_components(specs):
     """Parse --external-root NAME=PATH values into
     {component_name: {"en": {module: root}, "ru": {module: root}}}, by
     running the same en/modules + ru/modules discovery this tool uses on
-    its own repo against each external repo root."""
+    its own repo against each external repo root. A typo'd or otherwise
+    wrong PATH doesn't fail the run -- every reference into that component
+    just falls back to "unregistered external, skip", identical to not
+    passing --external-root at all -- so a warning is printed instead,
+    since that silent fallback would otherwise look like a clean pass."""
     components = {}
     for spec in specs or []:
         if "=" not in spec:
@@ -121,6 +125,17 @@ def _load_external_components(specs):
         for base in (en_root, ru_root):
             if base.is_dir():
                 module_names.update(p.name for p in base.iterdir() if p.is_dir())
+        if not module_names:
+            if not repo_root.exists():
+                reason = "path does not exist"
+            elif not repo_root.is_dir():
+                reason = "path is not a directory"
+            else:
+                reason = "no en/modules or ru/modules found under it"
+            print(f"warning: --external-root {name}={path_str}: {reason} -- "
+                  f"every reference into {name}: will be silently left unchecked, "
+                  f"same as if --external-root had never been passed for it",
+                  file=sys.stderr)
         components[name] = {
             "en": {m: en_root / m for m in module_names},
             "ru": {m: ru_root / m for m in module_names},

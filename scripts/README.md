@@ -161,11 +161,11 @@ Run `./docs_tool.py --list-checks` to see the full list.
   - Comments (`//` lines and `////` blocks) are skipped.
   - A `{doc-attribute}` used inside a reference target (e.g. `xref:{install-link}[]`) is substituted using that file's own `:name: value` attribute definitions before resolving.
   - `link:`/`link::` targets are checked as local files, not URLs -- an `http://`/`https://` target, a `mailto:` target, or a same-page `#anchor` target is skipped.
-    A target using one of Antora's family attributes (`{attachmentsdir}`, `{examplesdir}`, `{imagesdir}`, `{partialsdir}` -- e.g. `link:{attachmentsdir}/sample.csv[]`, the common form for downloadable files) is resolved against that family's directory for the current module (or whichever module(s) actually includes the file if it's a partial).
-    A target using any other `{attribute}` (one this tool can't see, e.g. something only the site's playbook defines) is left unchecked; a target with no attribute at all is a plain path relative to the including file, the same as an unqualified `include::`.
+    A target using one of Antora's family attributes (`{attachmentsdir}`, `{examplesdir}`, `{imagesdir}`, `{partialsdir}` -- e.g. `link:{attachmentsdir}/sample.csv[]`, the common form for downloadable files) is resolved against that family's directory for the current module (or whichever module(s) actually include the file, if it's a partial).
+    A target using any other `{attribute}` (one this tool can't see, e.g. something only the site's playbook defines) is left unchecked; a target with no attribute at all is a plain path relative to the including file, same as an unqualified `include::`.
   - A module-prefixed `xref:`/`include::`/`image:`/`image::` (e.g. `xref:how-to:page.adoc[]`, `include::how-to:partial$foo.adoc[]`, `image::get-started:connections/foo.png[]`) resolves against that sibling module if the prefix matches a discovered module.
     A reference fully qualified with this repo's own component name (e.g. `image::ADCM:ROOT:x.png[]` written inside docs-adcm itself -- a real, existing pattern, not just a hypothetical one) resolves the same way, against this repo's own modules.
-    Otherwise, it's treated as pointing outside this repo (e.g. `blog::x`, a genuinely different component like `include::ADPG:ROOT:partial$x.adoc[]` written from inside docs-adcm) and skipped.
+    Otherwise it's treated as pointing outside this repo (e.g. `blog::x`, a genuinely different component like `include::ADPG:ROOT:partial$x.adoc[]` written from inside docs-adcm) and skipped.
   - `image:`/`image::` targets starting with `http://`/`https://` (a remote image) are skipped, not checked against the local `images/` directory.
   - An `image:`/`image::` written inside a partial is checked against the module(s) that actually include that partial (same `partial_includers` context used for bare xref/include resolution), not the partial file's own module -- Antora resolves it that way, so a partial's image only needs to exist in at least one includer's `images/`.
   - Anchors are matched against:
@@ -176,6 +176,7 @@ Run `./docs_tool.py --list-checks` to see the full list.
   - Anchor resolution follows module- and component-qualified `include::partial$...`/`include::page$...` chains, not just same-module ones.
   - By default, a reference into a component that isn't part of this repo (e.g. `xref:ADCM:ROOT:page.adoc[]`, pulled in from a separate Antora site like an ADCM docs repo) is left unchecked rather than reported broken, since this tool can't see that component's source.
     If you have that component's repo checked out locally, pass `--external-root NAME=PATH` (repeatable) to resolve against it too, e.g. `--external-root ADCM=../docs-adcm`.
+    A typo'd or otherwise wrong `PATH` doesn't fail the run -- it just silently falls back to the same "unregistered, skip" behavior as not passing the flag at all, so a warning is printed to stderr at startup if `PATH` doesn't exist, isn't a directory, or has no `en/modules`/`ru/modules` under it.
 
 - `--check-pages-file-path-italics` (beta; `-v` also prints the full line for each hit)
 
