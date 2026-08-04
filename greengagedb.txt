@@ -59,7 +59,8 @@ slice - слайс (slice)
 severity - критичность
 stack strace - стек вызовов
 schema search path - путь поиска схемы
-session - сессия
+session (generic database connection/login/auth sense, e.g. session ID, session timeout, user session) - сессия
+session (bounded maintenance operation with a start/duration/end, e.g. rebalance session, expansion session, concurrent session in a dump/snapshot context) - сеанс
 tablespace - табличное пространство
 clause - выражение
 partitioning - партиционирование
@@ -117,3 +118,56 @@ Global Deadlock Detector - процесс обнаружения взаимны�
 readable table - читающая таблица
 writable table - пишущая таблица
 leaf partition - листовая партиция
+logical backup - логический бэкап
+physical backup - физический бэкап
+incremental backup - инкрементальный бэкап
+point-in-time recovery - восстановление на определенный момент времени
+fault tolerance - отказоустойчивость
+port offset - смещение портов
+mirroring policy - политика зеркалирования
+unbalanced state - несбалансированное состояние
+standby coordinator - резервный координатор
+system catalog table - таблица системного каталога
+plaintext (crypto/unencrypted-data sense, distinct from the "plain text" file-format entry above) - в открытом виде
+certificate - сертификат
+keytab file - keytab-файл
+role - роль
+privilege - привилегия
+grant (verb, prose sense, not the SQL command) - выдать / выдавать
+revoke (verb) - отозвать / отзывать
+owner / ownership - владелец / владение
+inherit / inheritance (role attribute) - наследовать / наследование
+workload - нагрузка
+concurrent transaction / query - одновременная транзакция / одновременный запрос
+throughput - пропускная способность
+priority (queue/query) - приоритет
+active statement / query - активный запрос
+extension (database extension) - расширение
+character encoding - кодировка
+full-text search - полнотекстовый поиск
+data warehousing - хранилища данных
+bulk data insertion - массовая вставка данных
+commit changes - фиксация изменений
+roll back / rollback changes - откат изменений
+partial rollback - частичный откат (изменений)
+passwordless SSH - беспарольный SSH
+distribution key - ключ распределения
+distribution policy - тип распределения
+hash distribution - хеш-распределение
+replicated table - реплицируемая таблица
+data skew - перекос данных (skew)
+partition key - ключ партиционирования
+leaf child partition - листовая дочерняя партиция
+child partition - дочерняя партиция
+materialized view - материализованное представление
+window function - оконная функция
+window frame - рамка окна (window frame)
+correlated subquery - коррелированный подзапрос
+uncorrelated subquery - некоррелированный подзапрос
+common table expression (CTE) - общее табличное выражение (CTE)
+user-defined function (UDF) - пользовательская функция (UDF)
+query plan - план запроса
+execution plan - план выполнения (запроса)
+cost-based query optimizer - стоимостной оптимизатор запросов
+bloat - раздувание (bloat)
+autovacuum - автоматическое вакуумирование (autovacuum)
