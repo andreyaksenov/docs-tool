@@ -1759,8 +1759,8 @@ def _scan_delimiter_stack(line_stream):
     """Runs the LIFO delimiter-balance algorithm over `line_stream` -- an
     iterable of (source_file, source_lineno, line_text), possibly splicing
     content from more than one actual file via _flatten_delimiter_lines --
-    and returns whatever's left on the stack at the end: [(text,
-    source_file, source_lineno), ...] for each delimiter never closed.
+    and returns every delimiter that never got a proper close: [(text,
+    source_file, source_lineno), ...], in the order each was opened.
 
     Keyed by the delimiter's exact matched text (not just its family) to
     mirror how Asciidoctor itself supports nesting a *container* block
@@ -1771,6 +1771,22 @@ def _scan_delimiter_stack(line_stream):
     line of the same family but a different length instead opens a new,
     independent nesting level.
 
+    A line whose text doesn't match the top of the stack isn't necessarily
+    such a nested open, though -- it's just as likely a forgotten close
+    somewhere below (e.g. a table's `|===` open with no matching `|===`
+    before the enclosing `====` block closes around it). Blindly stacking
+    a new level on every mismatch, as a naive LIFO would, means that one
+    missing delimiter derails the pairing of everything after it, and the
+    leftover-stack report ends up blaming unrelated, far-away lines instead
+    of the actual culprit. So on a mismatch this also checks *deeper* in
+    the stack: if some still-open entry below the top has the exact same
+    text, that line is almost certainly meant to close it, meaning
+    everything stacked on top of that entry was never really closed --
+    the same recovery a browser does for mismatched HTML tags. Those
+    in-between entries are reported as unclosed and popped along with the
+    match; only when no entry anywhere in the stack matches does the line
+    genuinely open a new, independent nesting level.
+
     Listing (`----`), literal (`....`), and comment (`////`) blocks are
     different: Asciidoctor treats them as verbatim/opaque leaves that
     cannot contain a nested block of *any* kind, so once one is open, every
@@ -1779,8 +1795,10 @@ def _scan_delimiter_stack(line_stream):
     or an arbitrary run of dashes/dots/equals inside a terminal-output
     `....` block, shown verbatim, must not be mistaken for a nested block
     boundary. Only a line matching the *exact* text that opened it can
-    close such a block."""
+    close such a block -- no deeper-stack recovery for these, since
+    nothing else can ever be pushed on top of one anyway while it's open."""
     stack = []
+    unclosed = []
     for source_file, source_lineno, line in line_stream:
         m = _BLOCK_DELIM_LINE_RE.match(line)
         if not m:
@@ -1790,9 +1808,19 @@ def _scan_delimiter_stack(line_stream):
             continue  # raw content inside an open verbatim/opaque block
         if stack and stack[-1][0] == text:
             stack.pop()
-        else:
+            continue
+        match_index = None
+        for i in range(len(stack) - 1, -1, -1):
+            if stack[i][0] == text:
+                match_index = i
+                break
+        if match_index is None:
             stack.append((text, source_file, source_lineno))
-    return stack
+        else:
+            unclosed.extend(stack[match_index + 1:])
+            del stack[match_index:]
+    unclosed.extend(stack)
+    return unclosed
 
 
 def check_pages_unbalanced_delimiters(verbose=False) -> bool:

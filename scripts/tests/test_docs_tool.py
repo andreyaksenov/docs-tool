@@ -165,6 +165,61 @@ class ParseTagRegionsTests(unittest.TestCase):
         self.assertEqual(set(regions), {("inner", 2, 4), ("outer", 1, 6)})
 
 
+class ScanDelimiterStackTests(unittest.TestCase):
+    """Unit tests for _scan_delimiter_stack -- no filesystem needed. Feeds
+    plain (file, lineno, text) triples through the stream directly rather
+    than via _flatten_delimiter_lines, so these exercise the balancing
+    algorithm itself in isolation."""
+
+    @staticmethod
+    def stream(lines, file="f.adoc"):
+        return [(file, i, l) for i, l in enumerate(lines, 1)]
+
+    def test_balanced_nested_blocks_return_empty(self):
+        lines = ["====", "content", "===="]
+        self.assertEqual(dt._scan_delimiter_stack(self.stream(lines)), [])
+
+    def test_missing_table_close_is_pinpointed_not_cascaded(self):
+        """Regression test for the foreign-tables.adoc bug: a table opened
+        with `|===` inside an example block, with no matching `|===`
+        before the example block's own `====` closes around it. A naive
+        LIFO would treat the mismatched `====` as opening a new nesting
+        level and misattribute the imbalance to unrelated, far-away lines;
+        this must instead pin the blame on the actual unclosed `|===`."""
+        lines = [
+            "====",         # 1: open example block
+            "[cols=\"1\"]",  # 2
+            "|===",         # 3: open table -- never closed
+            "cell content",  # 4
+            "====",         # 5: closes the example block, table still open
+            "====",         # 6: open+close a second, unrelated example block
+            "content",      # 7
+            "====",         # 8
+        ]
+        result = dt._scan_delimiter_stack(self.stream(lines))
+        self.assertEqual(result, [("|===", "f.adoc", 3)])
+
+    def test_genuine_different_length_nesting_still_balances(self):
+        """A 5-equals example block nested inside a 4-equals one (real,
+        supported Asciidoctor nesting) must still balance cleanly -- the
+        deeper-stack recovery must not fire when the mismatch really is a
+        new nesting level, not a bug."""
+        lines = ["====", "=====", "inner content", "=====", "outer content", "===="]
+        self.assertEqual(dt._scan_delimiter_stack(self.stream(lines)), [])
+
+    def test_opaque_listing_block_content_is_not_mistaken_for_delimiters(self):
+        """A `----` separator row inside a psql-style ASCII table shown
+        verbatim inside a listing block must not be treated as closing or
+        nesting anything; only the exact `----` that opened it can close."""
+        lines = ["----", "id | name", "----+------", "1  | a", "----"]
+        self.assertEqual(dt._scan_delimiter_stack(self.stream(lines)), [])
+
+    def test_unclosed_delimiter_at_eof_is_still_reported(self):
+        lines = ["====", "content"]
+        result = dt._scan_delimiter_stack(self.stream(lines))
+        self.assertEqual(result, [("====", "f.adoc", 1)])
+
+
 class ComponentPrefixRegexTests(unittest.TestCase):
     def test_plain_module_prefix(self):
         m = dt._COMPONENT_PREFIX_RE.match("how-to:page.adoc")
