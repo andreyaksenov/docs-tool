@@ -86,6 +86,7 @@ pages-no-invisible-chars
 pages-no-unicode-dashes
 pages-orphaned
 pages-ru-latin-homoglyphs (beta)
+pages-stray-backticks
 pages-structure-parity (beta)
 pages-table-cell-periods (beta)
 pages-translation (beta)
@@ -100,8 +101,8 @@ Exits `0` if every selected check passed, `1` if any check found something.
 
 ### Scoping to specific pages with `--page`
 
-By default every check scans the whole site.
-Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
+By default, every check scans the whole site.
+Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-table-cell-periods`, `pages-file-path-italics` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
 
 ```bash
 ./docs_tool.py --check-pages-translation -v --page resource_groups
@@ -237,6 +238,11 @@ Run `./docs_tool.py --list-checks` to see the full list.
   Found dozens of real typos across every repo tested during development (product/tool names like `ADСM`, `Сron`, `BlockСache`, `Сlient`, `Сoordinator`, `Сommunity` with a stray Cyrillic letter; recurring `с`/`а` preposition typos; abbreviations like `см.`/`МБ` with a stray Latin letter) — a strong, evidence-backed heuristic overall, with a small amount of known residual noise: rare bare parenthetical English phrases/acronym expansions (e.g. "(a server instance)", "Data Platform as a Service") that aren't wrapped in any excludable markup.
   Bold-italic (`*_..._*`) is excluded from the scan: this doc family uses it for verbatim third-party UI strings kept in English by convention (e.g. DBeaver's own "*_Connect to a database_*" dialog title), and real typos never occur inside that quoting convention.
 
+- `--check-pages-stray-backticks`
+
+  Checks (per language) that no `pages/`/`partials/` `.adoc` line has an odd number of backticks — almost always a missing or stray `` ` `` around an inline monospace span (e.g. a trailing `` ` `` left dangling after an `xref:...[]`, or a closing `` ` `` dropped from `` `code` ``).
+  Lines inside comments (`//`, `////`) and listing/literal blocks (`----`, `....`) are skipped, and `` ++...++ `` passthrough spans are stripped before counting, since that's AsciiDoc's own way to embed a literal backtick inside a span (e.g. `` `++`++` `` to show the literal `` ` `` character) and would otherwise make a correctly paired line look unbalanced.
+
 - `--check-pages-structure-parity` (beta; reports the first differing line by default; `-v` shows the full diff with file:line references)
 
   Deeper check for `pages/`/`partials/` `.adoc` files: compares the structural "skeleton" of each EN/RU pair (heading levels, block titles, delimited blocks, block attributes, `include::` directives) so structural drift is caught even when line counts match.
@@ -324,7 +330,8 @@ echo "=== blocking checks ==="
 python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-no-cyrillic \
   --check-pages-no-invisible-chars \
-  --check-pages-no-unicode-dashes || blocking_failed=1
+  --check-pages-no-unicode-dashes \
+  --check-pages-stray-backticks || blocking_failed=1
 
 echo
 echo "=== warn-only checks (do not block commit) ==="
@@ -357,7 +364,7 @@ Then make it executable:
 chmod +x .git/hooks/pre-commit
 ```
 
-Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, and `--check-pages-no-unicode-dashes` actually block the commit; the rest just print their findings.
+Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, and `--check-pages-stray-backticks` actually block the commit; the rest just print their findings.
 The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run. `tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
 

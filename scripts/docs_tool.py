@@ -798,15 +798,25 @@ def _anchor_exists(target_file: Path, anchor_id: str, root: Path, lang_module_ro
     return False
 
 
+_CODE_DELIM_LINE_RE = re.compile(r'^(----|\.\.\.\.)\s*$')
+
+
 def _excluded_ref_lines(path: Path) -> set:
     """Line numbers to skip when scanning for references: AsciiDoc line
     (`//`) and block (`////`) comments, and anything inside a ---- / ....
-    literal/listing block."""
+    literal/listing block. Tracks *which* delimiter opened the current
+    block rather than a single shared on/off toggle, so a line that looks
+    like the *other* delimiter but is really just literal content inside an
+    already-open block -- e.g. a `----` table-separator row from `psql`
+    output sitting inside a `....` literal block -- doesn't prematurely
+    close tracking (only a line matching the delimiter that opened the
+    block can close it, matching how Asciidoctor itself pairs delimiters by
+    type)."""
     lines = _read_lines(path)
     if lines is None:
         return set()
     excluded = set()
-    in_code = False
+    open_delim = None
     in_comment = False
     for lineno, line in enumerate(lines, 1):
         stripped = line.strip()
@@ -820,11 +830,15 @@ def _excluded_ref_lines(path: Path) -> set:
         if stripped.startswith("//"):
             excluded.add(lineno)
             continue
-        if re.match(r'^(----|\.\.\.\.)\s*$', line):
-            in_code = not in_code
+        m = _CODE_DELIM_LINE_RE.match(line)
+        if m:
+            if open_delim is None:
+                open_delim = m.group(1)
+            elif open_delim == m.group(1):
+                open_delim = None
             excluded.add(lineno)
             continue
-        if in_code:
+        if open_delim is not None:
             excluded.add(lineno)
     return excluded
 
@@ -1518,6 +1532,51 @@ def check_pages_no_unicode_dashes(verbose=False) -> bool:
         print("OK: no en dash (–) or em dash (—) characters found in pages.")
     else:
         print(f"\nTotal: {total_hits} line(s) with en/em dash characters.")
+    return ok
+
+
+_PASSTHROUGH_RE = re.compile(r'\+\+.*?\+\+')
+
+
+def _count_delimiter_backticks(line: str) -> int:
+    """Backtick count after stripping `++...++` passthrough spans. AsciiDoc
+    has no double-backtick span the way Markdown does, so the only way to
+    put a literal backtick inside a monospace span is a passthrough like
+    `` `++`++` `` -- the backtick inside `++...++` is literal content, not
+    a delimiter, and left in would make a correctly paired line look
+    unbalanced."""
+    return _PASSTHROUGH_RE.sub('', line).count('`')
+
+
+def check_pages_stray_backticks(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): flags lines in
+    en/ru pages/partials with an odd number of backticks -- almost always a
+    missing or stray ` around an inline monospace span (e.g. a trailing `
+    left dangling after an xref, or a closing ` dropped from `code`). Lines
+    inside comments/listing blocks are skipped (see _excluded_ref_lines)."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = [(i, l) for i, l in enumerate(lines, 1)
+                        if i not in excluded and _count_delimiter_backticks(l) % 2 == 1]
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l.strip()}")
+    if ok:
+        print("OK: no stray/unbalanced backticks found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with an odd number of backticks.")
     return ok
 
 
@@ -2660,6 +2719,7 @@ CHECKS = {
     "pages-no-unicode-dashes": check_pages_no_unicode_dashes,
     "pages-orphaned": check_pages_orphaned,
     "pages-ru-latin-homoglyphs": check_pages_ru_latin_homoglyphs,
+    "pages-stray-backticks": check_pages_stray_backticks,
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-translation": check_pages_translation,
