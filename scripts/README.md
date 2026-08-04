@@ -90,6 +90,7 @@ pages-stray-backticks
 pages-structure-parity (beta)
 pages-table-cell-periods (beta)
 pages-translation (beta)
+pages-unbalanced-delimiters
 tags-orphaned
 ```
 
@@ -102,7 +103,7 @@ Exits `0` if every selected check passed, `1` if any check found something.
 ### Scoping to specific pages with `--page`
 
 By default, every check scans the whole site.
-Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-table-cell-periods`, `pages-file-path-italics` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
+Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
 
 ```bash
 ./docs_tool.py --check-pages-translation -v --page resource_groups
@@ -271,6 +272,21 @@ Run `./docs_tool.py --list-checks` to see the full list.
 This is a heuristic, not a full AsciiDoc parser.
 Treat findings as a review list, not a hard failure.
 
+- `--check-pages-unbalanced-delimiters`
+
+  Checks that every AsciiDoc block delimiter — open `--`, listing `----`, literal `....`, example `====`, sidebar `****`, quote `____`, passthrough `++++`, table `|===`, comment `////` — is properly closed once a page's full `include::partial$/page$/example$` chain is flattened (recursively, honoring `tag=`/`tags=` filtering and component/module qualification) into the single continuous document Asciidoctor actually renders.
+  An unclosed one is almost always a forgotten closing delimiter, which silently swallows every following line into that block (or, for a table, corrupts everything after it) once rendered.
+
+  Checking each file in isolation would misfire both ways on a block deliberately split across an include boundary — a real, existing pattern in this doc family: a shared partial opens a table and relies on whichever page includes it to supply the closing `|===`. Flattening first means the partial isn't wrongly reported as broken on its own, and the page isn't wrongly reported as broken for supplying a "stray" closing delimiter that's actually closing something the partial opened. Partials never reached by any page's include chain (in that language) — typically genuinely orphaned content, also caught by `--check-pages-orphaned`/`--check-examples-orphaned` for other reasons — are still checked standalone afterward, so a partial that isn't wired up anywhere doesn't silently lose delimiter coverage entirely.
+
+  Tracked with a LIFO stack keyed by the delimiter's exact matched text (not just its family), mirroring how Asciidoctor itself lets you nest a *container* block (example/sidebar/quote/open/table) inside a same-type container by using a different length for the inner one (e.g. a 5-equals `=====` example block nested inside a 4-equals `====` one) — so only a line matching the text that opened the current innermost container can close it; a same-family line of a different length instead opens a new, independent nesting level.
+
+  Listing, literal, and comment blocks are different: Asciidoctor treats them as verbatim/opaque leaves that can't contain a nested block of any kind, so once one is open, any other delimiter-looking line is just its raw content, not a real delimiter — e.g. a `psql` ASCII-art table's own `----` separator row, or an arbitrary run of dashes/dots/equals shown inside a terminal-output `....` block. Only a line matching the *exact* text that opened it can close such a block.
+
+  A table cell's style prefix (`a|`, `e|`, `h|`, `l|`, `m|`, `s|`, `d|`) can be glued directly onto an opening delimiter with no space (e.g. `a|....` opening an AsciiDoc-cell's own literal block) — Asciidoctor re-parses that cell's content as its own mini-document starting right after the prefix, so the delimiter is recognized as if it were alone on its own line; the matching close is always written on its own plain line with no prefix.
+
+  Known limitation: a commented-out `include::` line (inside a `////` block, or `//`-prefixed on its own) isn't specially detected and would incorrectly be resolved as if live. Also, since this is a LIFO stack rather than a real parser, a genuinely broken document could in principle have a stray unclosed delimiter accidentally "cancelled out" by an unrelated same-text delimiter much later in the same flattened document — not observed in practice, but a structural limit of this approach.
+
 ### Tags
 
 - `--check-tags-orphaned`
@@ -331,7 +347,8 @@ python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-no-cyrillic \
   --check-pages-no-invisible-chars \
   --check-pages-no-unicode-dashes \
-  --check-pages-stray-backticks || blocking_failed=1
+  --check-pages-stray-backticks \
+  --check-pages-unbalanced-delimiters || blocking_failed=1
 
 echo
 echo "=== warn-only checks (do not block commit) ==="
@@ -364,7 +381,7 @@ Then make it executable:
 chmod +x .git/hooks/pre-commit
 ```
 
-Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, and `--check-pages-stray-backticks` actually block the commit; the rest just print their findings.
+Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, `--check-pages-stray-backticks`, and `--check-pages-unbalanced-delimiters` actually block the commit; the rest just print their findings.
 The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run. `tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
 

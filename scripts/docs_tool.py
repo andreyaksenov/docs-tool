@@ -1580,6 +1580,264 @@ def check_pages_stray_backticks(verbose=False) -> bool:
     return ok
 
 
+_BLOCK_DELIM_LINE_RE = re.compile(
+    r'^(?:[aehlmsd]\|)?(-{4,}|-{2}|\.{4,}|={4,}|\*{4,}|_{4,}|\+{4,}|\|={3,}|/{4,})\s*$'
+)
+
+
+def _delimiter_kind(text: str) -> str:
+    """Human label for a delimiter line's block kind, for reporting only --
+    not used for matching/pairing."""
+    ch = text[0]
+    if ch == '-':
+        return "open block (--)" if len(text) == 2 else "listing block (----)"
+    return {
+        '.': "literal block (....)",
+        '=': "example block (====)",
+        '*': "sidebar block (****)",
+        '_': "quote block (____)",
+        '+': "passthrough block (++++)",
+        '|': "table (|===)",
+        '/': "comment block (////)",
+    }.get(ch, "block")
+
+
+_OPAQUE_DELIM_CHARS = frozenset('-.  /'.replace(' ', ''))  # listing, literal, comment
+
+
+def _resolve_include_for_flatten(target, directory, root, lang_module_roots, lang, own_name):
+    """Like _resolve_include_target, but also returns the module root that
+    the resolved file's *own* unqualified include::partial$/page$/example$
+    targets should resolve against -- its own module, not necessarily the
+    including file's -- since a component/module-qualified include can
+    cross into a different module (or, via --external-root, a different
+    repo entirely) whose further nested includes must resolve there, not
+    back where the chain started. A plain, unqualified target stays within
+    the current module's `root`. Returns (None, None) if `target` can't be
+    resolved (an unregistered external component, same left-unchecked
+    policy as everywhere else) or doesn't exist on disk."""
+    if _VERSION_PIN_RE.match(target):
+        return None, None
+    t = target
+    candidate_root = root
+    qualified = False
+    m_component = _COMPONENT_PREFIX_RE.match(t)
+    if m_component:
+        component = m_component.group(0)[:-1]
+        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
+        if resolved is None:
+            return None, None
+        candidate_root, t = resolved
+        qualified = True
+    if t.startswith("partial$"):
+        f = candidate_root / "partials" / _strip_root_slash(t[len("partial$"):])
+    elif t.startswith("page$"):
+        f = candidate_root / "pages" / _strip_root_slash(t[len("page$"):])
+    elif t.startswith("example$"):
+        f = candidate_root / "examples" / _strip_root_slash(t[len("example$"):])
+    elif qualified:
+        f = candidate_root / "pages" / _strip_root_slash(t)
+    else:
+        f = directory / t
+        candidate_root = root
+    if not f.is_file():
+        return None, None
+    return f, candidate_root
+
+
+def _tag_filtered_line_numbers(lines, tags, negated, whole_file):
+    """Which 1-based line numbers of `lines` an include::...[tag=/tags=...]
+    call actually pulls in, mirroring Asciidoctor's own selection rules (see
+    _parse_include_attrs): with no filter (or a `*`/`**` wildcard) every
+    line is included except any explicitly negated region; with specific
+    tags requested, only lines inside those regions are included, and a
+    negated region removes itself even if nested inside a requested one.
+    Returns None (not a set) for the plain, no-filter case as a cheap
+    "everything, don't bother building a set" sentinel."""
+    if whole_file and not negated:
+        return None
+    regions = _parse_tag_regions(lines)
+    if whole_file:
+        included = set(range(1, len(lines) + 1))
+        for name, start, end in regions:
+            if name in negated:
+                included -= set(range(start, end + 1))
+        return included
+    included = set()
+    for name, start, end in regions:
+        if name in tags:
+            included |= set(range(start, end + 1))
+    for name, start, end in regions:
+        if name in negated:
+            included -= set(range(start, end + 1))
+    return included
+
+
+def _flatten_delimiter_lines(file, root, lang_module_roots, lang, own_name, active_path, visited, depth=0, only_lines=None):
+    """Yields (source_file, source_lineno, line_text) for `file`, splicing
+    include::partial$/page$/example$ targets in place (recursively,
+    honoring tag=/tags= filtering and component/module qualification) the
+    way Asciidoctor actually assembles the rendered document -- so a
+    delimited block deliberately (or accidentally) split across an include
+    boundary is tracked as one continuous stream instead of two separately
+    "broken" files.
+
+    `active_path` guards against a genuine include cycle (A includes B
+    includes A) without preventing the same partial from being included
+    more than once at separate, non-overlapping points -- a real, common
+    pattern (see e.g. custom-ulimits.adoc, reused by three different
+    pages) where each occurrence's content must still be spliced in
+    independently. `visited` collects every file actually reached this
+    way, across the whole run, so the caller can afterward find partials
+    no page ever includes and still check those standalone.
+
+    A commented-out include:: line (inside a `////` block, or `//`-prefixed
+    on its own) is not specially detected here and would incorrectly be
+    resolved as if live -- a known, narrow limitation shared with the
+    rest of this tool's include handling, accepted because a real
+    disabled-include-inside-a-comment pattern hasn't been observed in
+    practice and detecting it fully would require duplicating full
+    comment-state tracking at every recursion level."""
+    if depth > 25 or file in active_path:
+        return
+    lines = _read_lines(file)
+    if lines is None:
+        return
+    visited.add(file)
+    active_path = active_path + [file]
+    directory = file.parent
+    for lineno, line in enumerate(lines, 1):
+        if only_lines is not None and lineno not in only_lines:
+            continue
+        stripped = line.strip()
+        m = _INCLUDE_MACRO_RE.match(stripped) if stripped.startswith("include::") else None
+        if not m:
+            yield file, lineno, line
+            continue
+        target, attrs_str = m.group(1), m.group(2)
+        resolved, target_root = _resolve_include_for_flatten(target, directory, root, lang_module_roots, lang, own_name)
+        if resolved is None:
+            continue  # external/unresolvable -- left unchecked, same policy as broken-refs
+        target_lines = _read_lines(resolved)
+        if target_lines is None:
+            continue
+        tags, negated, whole_file = _parse_include_attrs(attrs_str)
+        included = _tag_filtered_line_numbers(target_lines, tags, negated, whole_file)
+        yield from _flatten_delimiter_lines(resolved, target_root, lang_module_roots, lang, own_name,
+                                             active_path, visited, depth + 1, included)
+
+
+def _scan_delimiter_stack(line_stream):
+    """Runs the LIFO delimiter-balance algorithm over `line_stream` -- an
+    iterable of (source_file, source_lineno, line_text), possibly splicing
+    content from more than one actual file via _flatten_delimiter_lines --
+    and returns whatever's left on the stack at the end: [(text,
+    source_file, source_lineno), ...] for each delimiter never closed.
+
+    Keyed by the delimiter's exact matched text (not just its family) to
+    mirror how Asciidoctor itself supports nesting a *container* block
+    (example/sidebar/quote/open/table) inside a same-type container: the
+    inner one uses a *different* length (e.g. a 5-equals `=====` example
+    block nested inside a 4-equals `====` one), so only a line matching the
+    text that opened the current innermost container can close it -- a
+    line of the same family but a different length instead opens a new,
+    independent nesting level.
+
+    Listing (`----`), literal (`....`), and comment (`////`) blocks are
+    different: Asciidoctor treats them as verbatim/opaque leaves that
+    cannot contain a nested block of *any* kind, so once one is open, every
+    other delimiter-looking line is just its raw content, not a real
+    delimiter -- e.g. a `psql` ASCII-art table's own `----` separator row,
+    or an arbitrary run of dashes/dots/equals inside a terminal-output
+    `....` block, shown verbatim, must not be mistaken for a nested block
+    boundary. Only a line matching the *exact* text that opened it can
+    close such a block."""
+    stack = []
+    for source_file, source_lineno, line in line_stream:
+        m = _BLOCK_DELIM_LINE_RE.match(line)
+        if not m:
+            continue
+        text = m.group(1)
+        if stack and stack[-1][0][0] in _OPAQUE_DELIM_CHARS and text != stack[-1][0]:
+            continue  # raw content inside an open verbatim/opaque block
+        if stack and stack[-1][0] == text:
+            stack.pop()
+        else:
+            stack.append((text, source_file, source_lineno))
+    return stack
+
+
+def check_pages_unbalanced_delimiters(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): flags AsciiDoc
+    block delimiters -- open `--`, listing `----`, literal `....`, example
+    `====`, sidebar `****`, quote `____`, passthrough `++++`, table `|===`,
+    comment `////` -- left unclosed once a page's full include chain
+    (partial$/page$/example$, recursively, honoring tag=/tags= filtering)
+    is flattened into the single continuous document Asciidoctor actually
+    renders (see _flatten_delimiter_lines). Checking each file in
+    isolation would misfire both ways on a block deliberately split across
+    an include boundary -- a shared partial that opens a table and relies
+    on whichever page includes it to supply the closing `|===` -- reporting
+    the partial as broken even though it's fine in context, or the other
+    way around, reporting a page as broken because of decorative dashes
+    living inside a partial's own already-open literal block. Almost
+    always a forgotten closing delimiter, which silently swallows every
+    following line into that block (or, for a table, corrupts everything
+    after it) when actually rendered.
+
+    Every page is checked this way, since the flattened document is what a
+    page actually renders as. Partials never reached by any page's include
+    chain (in this language) -- typically genuinely orphaned content, also
+    caught by --check-pages-orphaned/--check-examples-orphaned for other
+    reasons -- are still checked standalone afterward, so a partial that
+    happens not to be wired up anywhere doesn't silently lose delimiter
+    coverage entirely."""
+    ok = True
+    total_hits = 0
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+
+    for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
+        own_name = _own_component_name(lang)
+        visited = set()
+        for root in lang_module_roots.values():
+            for page in _iter_files(root / "pages", ".adoc"):
+                if not _page_allowed(page):
+                    continue
+                stream = _flatten_delimiter_lines(page, root, lang_module_roots, lang, own_name, [], visited)
+                stack = _scan_delimiter_stack(stream)
+                if stack:
+                    ok = False
+                    total_hits += len(stack)
+                    print(f"FILE     {page}")
+                    for text, sfile, slineno in stack:
+                        if sfile == page:
+                            print(f"  {sfile}:{slineno}: unclosed {_delimiter_kind(text)}: {text!r}")
+                        else:
+                            print(f"  {sfile}:{slineno}: unclosed {_delimiter_kind(text)}: {text!r}  (included from {page})")
+
+        for root in lang_module_roots.values():
+            for partial in _iter_files(root / "partials", ".adoc"):
+                if partial in visited or not _page_allowed(partial):
+                    continue
+                lines = _read_lines(partial)
+                if lines is None:
+                    continue
+                stack = _scan_delimiter_stack((partial, i, l) for i, l in enumerate(lines, 1))
+                if stack:
+                    ok = False
+                    total_hits += len(stack)
+                    print(f"FILE     {partial}  (not reached by any page's includes -- checked standalone)")
+                    for text, sfile, slineno in stack:
+                        print(f"  {sfile}:{slineno}: unclosed {_delimiter_kind(text)}: {text!r}")
+    if ok:
+        print("OK: no unbalanced block delimiters found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} unclosed block delimiter(s).")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: orphaned (not reachable from nav.adoc)
 # --------------------------------------------------------------------------
@@ -2723,6 +2981,7 @@ CHECKS = {
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-translation": check_pages_translation,
+    "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
     "tags-orphaned": check_tags_orphaned,
 }
 
