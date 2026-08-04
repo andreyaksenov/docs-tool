@@ -489,6 +489,46 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("missing-sibling.txt", output)
 
+    def test_include_tag_not_present_in_target_is_broken(self):
+        """Regression test for the connections.adoc bug: the target file
+        exists, but the requested tag= doesn't match any tag::NAME[] region
+        in it (e.g. a rename left the include pointing at the old name).
+        Asciidoctor silently renders nothing for this, so a plain
+        file-exists check missed it -- it must be reported as broken."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/snippet.adoc",
+            "tag::allow-remote-connections1[]\nbody\nend::allow-remote-connections1[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[tag=allow-remote-connections]\n")
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("allow-remote-connections", output)
+        self.assertIn("not found", output)
+
+    def test_include_tag_present_in_target_is_not_broken(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/snippet.adoc",
+            "tag::intro[]\nbody\nend::intro[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[tag=intro]\n")
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_include_without_tag_attribute_does_not_check_tags(self):
+        """A plain include (no tag=/tags=) pulls in the whole file, so a
+        target with no tag regions at all -- or different ones -- must not
+        be flagged; only an explicit tag= request is checked."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/snippet.adoc", "plain content, no tags\n")
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[]\n")
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
     def test_version_pinned_xref_is_left_unchecked(self):
         """Regression test for the docs-adbes scenario: a version-pinned
         Antora xref (e.g. "6.29.1.1@ADB:tutorials:external-db.adoc[]",

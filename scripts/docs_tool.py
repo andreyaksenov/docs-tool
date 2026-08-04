@@ -939,27 +939,55 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                     t = resolved[1]
                     qualified = True
 
+                target_file = None
                 if t.startswith("partial$"):
                     name = _strip_root_slash(t[len("partial$"):])
-                    if not any((cand / "partials" / name).is_file() for cand in candidate_roots):
+                    target_file = next((cand / "partials" / name for cand in candidate_roots
+                                         if (cand / "partials" / name).is_file()), None)
+                    if target_file is None:
                         report(file, lineno, target)
                 elif t.startswith("example$"):
                     name = _strip_root_slash(t[len("example$"):])
-                    if not any((cand / "examples" / name).is_file() for cand in candidate_roots):
+                    target_file = next((cand / "examples" / name for cand in candidate_roots
+                                         if (cand / "examples" / name).is_file()), None)
+                    if target_file is None:
                         report(file, lineno, target)
                 elif t.startswith("page$"):
                     name = _strip_root_slash(t[len("page$"):])
-                    if not any((cand / "pages" / name).is_file() for cand in candidate_roots):
+                    target_file = next((cand / "pages" / name for cand in candidate_roots
+                                         if (cand / "pages" / name).is_file()), None)
+                    if target_file is None:
                         report(file, lineno, target)
                 elif qualified:
                     # A component/module-qualified include with no family$
                     # marker defaults to the page family, same as xref:
                     # already does above for a bare module:page.adoc.
                     name = _strip_root_slash(t)
-                    if not any((cand / "pages" / name).is_file() for cand in candidate_roots):
+                    target_file = next((cand / "pages" / name for cand in candidate_roots
+                                         if (cand / "pages" / name).is_file()), None)
+                    if target_file is None:
                         report(file, lineno, target)
-                elif not (directory / t).is_file():
+                elif (directory / t).is_file():
+                    target_file = directory / t
+                else:
                     report(file, lineno, target)
+
+                if target_file is not None:
+                    # tag=/tags= names a region that must actually exist in
+                    # the included file -- Antora silently renders nothing
+                    # for a tag that isn't there (e.g. connections.adoc
+                    # defining tag::allow-remote-connections1[] while a page
+                    # includes tag=allow-remote-connections), so a plain
+                    # file-exists check misses it.
+                    attrs_end = line.find("]", m.end())
+                    attrs_str = line[m.end():attrs_end] if attrs_end != -1 else ""
+                    wanted_tags, _negated, _whole_file = _parse_include_attrs(attrs_str)
+                    if wanted_tags:
+                        target_lines = _read_lines(target_file)
+                        if target_lines is not None:
+                            defined_tags = {name for name, _, _ in _parse_tag_regions(target_lines)}
+                            for missing in sorted(wanted_tags - defined_tags):
+                                report(file, lineno, f"{target}  (tag '{missing}' not found in {target_file})")
 
             elif target.startswith("image::") or target.startswith("image:"):
                 prefix = "image::" if target.startswith("image::") else "image:"
