@@ -25,6 +25,14 @@
 # - note: optional human-readable context distinguishing why this row
 #   exists (e.g. which sense of a duplicated en term it covers). Purely
 #   informational -- never used for matching.
+#
+# If you're an AI (or human) using this file as EN->RU translation guidance
+# rather than running it through docs_tool.py: only columns 1 (en), 2 (ru),
+# and 4 (note) are meant for you. Ignore column 3 (ru_pattern) entirely --
+# the `<>`/stem-matching syntax there is machinery for the automated checker
+# only and carries no translation meaning. Coverage here is curated from
+# observed drift, not exhaustive -- treat it as a style guide for the terms
+# it does cover, not a complete dictionary of every term in the domain.
 en|ru|ru_pattern|note
 based on Greenplum|на основе Greenplum|основ<> Greenplum|
 Greengage DB|Greengage DB|Greengage DB|do-not-translate
