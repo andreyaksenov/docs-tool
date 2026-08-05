@@ -1,3 +1,29 @@
+# Terminology glossary: one entry per line, `EN term - RU translation`.
+# Lines starting with "#" are comments and are ignored.
+#
+# Format conventions used by entries below (and expected by any tool that
+# parses this file):
+#
+# 1. Disambiguation note on the EN side: `term (context note) - translation`.
+#    The parenthetical is dropped when matching the EN term; it's there so a
+#    human can tell which sense a duplicate EN key refers to (e.g. the two
+#    "session" entries below). Multiple entries sharing the same EN term are
+#    all treated as valid translations of it -- any one of them counts as
+#    correct, since the sense can't always be told apart automatically.
+#
+# 2. The literal translation `не переводить` ("do not translate") means the
+#    EN term must be kept as-is in RU text, not replaced by a Cyrillic word.
+#
+# 3. Multiple acceptable RU forms are separated by " / " on the translation
+#    side, e.g. `выдать / выдавать` for a verb's aspect pair -- either form
+#    is correct.
+#
+# 4. Parenthetical content on the RU side is informational (usually the EN
+#    term repeated for clarity, e.g. `слайс (slice)`) and is not required to
+#    match literally. Backtick-quoted content on the RU side (e.g.
+#    `` ограничение `NOT NULL` ``) is a required literal token, not
+#    commentary -- it must appear verbatim.
+
 based on Greenplum - на основе Greenplum
 Greengage DB - не переводить
 Greengage DBMS - СУБД Greengage
