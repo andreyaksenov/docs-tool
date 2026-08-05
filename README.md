@@ -161,6 +161,8 @@ Each check's heuristics, exceptions, and the false positives they were tuned aga
 
 - `--check-pages-no-unicode-dashes` — no `pages/`/`partials/` `.adoc` file may contain a literal en dash (`–`) or em dash (`—`); house style uses `--` instead.
 
+- `--check-pages-no-yo` — no `ru/` `pages/`/`partials/` `.adoc` file may contain `ё`/`Ё`; house style spells it out as `е` instead. The `:page-author:` attribute is exempt, since a real person's name can legitimately contain `ё`.
+
 - `--check-pages-orphaned` — every `pages/*.adoc` file must be reachable from some module's `nav.adoc` (including nav's own `include::partial$...[]` sections and cross-module links). The site's `start_page` is exempt.
 
 - `--check-pages-ru-latin-homoglyphs` (beta; `-v` also prints the full line for each hit) — flags Latin letters in `ru/` prose that look like they were meant to be Cyrillic: a word mixing both scripts, or a standalone Latin letter matching one of four Cyrillic/Latin homoglyph pairs that double as real one-letter Russian words (`а`/`о`/`с`/`у`). Found dozens of real typos across every repo tested during development.
@@ -223,6 +225,7 @@ python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-no-cyrillic \
   --check-pages-no-invisible-chars \
   --check-pages-no-unicode-dashes \
+  --check-pages-no-yo \
   --check-pages-stray-backticks \
   --check-pages-unbalanced-delimiters || blocking_failed=1
 
@@ -257,7 +260,7 @@ Then make it executable:
 chmod +x .git/hooks/pre-commit
 ```
 
-Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, `--check-pages-stray-backticks`, and `--check-pages-unbalanced-delimiters` actually block the commit; the rest just print their findings.
+Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, `--check-pages-no-yo`, `--check-pages-stray-backticks`, and `--check-pages-unbalanced-delimiters` actually block the commit; the rest just print their findings.
 The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run. `tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
 

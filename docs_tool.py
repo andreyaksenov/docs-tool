@@ -1697,6 +1697,41 @@ def check_pages_no_unicode_dashes(verbose=False) -> bool:
     return ok
 
 
+_YO_RE = re.compile(r'[ёЁ]')
+
+
+def check_pages_no_yo(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): flags the
+    letter ё/Ё in ru/ pages/partials -- house style spells it out as е
+    instead, standard practice for most Russian technical writing (and
+    already the convention this doc set's own content follows). The
+    `:page-author:` attribute is exempt: a real person's name can
+    legitimately contain ё (e.g. "Фёдоров"), and that's not something to
+    rewrite."""
+    ok = True
+    total_hits = 0
+    for _, _, ru_root in module_roots():
+        for f in list(_iter_files(ru_root / "pages", ".adoc")) + list(_iter_files(ru_root / "partials", ".adoc")):
+            if not _page_allowed(f):
+                continue
+            lines = _read_lines(f)
+            if lines is None:
+                continue
+            hits = [(i, col, l) for i, col, l in _first_match_hits(lines, _YO_RE)
+                    if not l.startswith(":page-author:")]
+            if hits:
+                ok = False
+                total_hits += len(hits)
+                print(f"FILE     {f}")
+                for i, col, l in hits:
+                    print(f"  {f}:{i}:{col}: {l}")
+    if ok:
+        print("OK: no ё/Ё characters found in ru/ pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with ё/Ё characters.")
+    return ok
+
+
 _PASSTHROUGH_RE = re.compile(r'\+\+.*?\+\+')
 
 
@@ -3332,6 +3367,7 @@ CHECKS = {
     "pages-no-cyrillic": check_pages_no_cyrillic,
     "pages-no-invisible-chars": check_pages_no_invisible_chars,
     "pages-no-unicode-dashes": check_pages_no_unicode_dashes,
+    "pages-no-yo": check_pages_no_yo,
     "pages-orphaned": check_pages_orphaned,
     "pages-ru-latin-homoglyphs": check_pages_ru_latin_homoglyphs,
     "pages-stray-backticks": check_pages_stray_backticks,

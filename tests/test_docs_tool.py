@@ -761,6 +761,35 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertIn("tag::example[]", output)
 
 
+class PagesNoYoTests(FixtureTestCase):
+    def test_yo_is_flagged(self):
+        self.write("ru/modules/ROOT/pages/page.adoc", "Настройте параметр для Ёлка и ёж.\n")
+        ok, output = self.run_check(dt.check_pages_no_yo)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_no_yo_passes(self):
+        self.write("ru/modules/ROOT/pages/page.adoc", "Настройте параметр елка.\n")
+        ok, _ = self.run_check(dt.check_pages_no_yo)
+        self.assertTrue(ok)
+
+    def test_page_author_attribute_is_exempt(self):
+        self.write("ru/modules/ROOT/pages/page.adoc", ":page-author: Фёдоров\n\nОбычный текст.\n")
+        ok, _ = self.run_check(dt.check_pages_no_yo)
+        self.assertTrue(ok)
+
+    def test_page_author_exemption_does_not_leak_to_other_lines(self):
+        self.write("ru/modules/ROOT/pages/page.adoc", ":page-author: Фёдоров\n\nОн живёт здесь.\n")
+        ok, output = self.run_check(dt.check_pages_no_yo)
+        self.assertFalse(ok)
+        self.assertIn("живёт", output)
+
+    def test_en_pages_are_not_scanned(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "This mentions ёж as a loanword.\n")
+        ok, _ = self.run_check(dt.check_pages_no_yo)
+        self.assertTrue(ok)
+
+
 class PagesRuLatinHomoglyphsTests(FixtureTestCase):
     def test_mixed_script_word_is_flagged(self):
         self.write("ru/modules/ROOT/pages/page.adoc",
