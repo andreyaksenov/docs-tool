@@ -63,7 +63,7 @@ lists every matching `--check-*` flag (as well as `--all-checks`, `--list-checks
 ## Usage
 
 ```bash
-./docs_tool.py --check-<name> [--check-<name> ...] [-v] [--page NAME ...] [--external-root NAME=PATH ...]
+./docs_tool.py --check-<name> [--check-<name> ...] [-v] [--page NAME ...] [--external-root NAME=PATH ...] [--glossary PATH ...]
 ./docs_tool.py --all-checks [-v]
 ./docs_tool.py --sync <path/to/en/file.adoc> [-n] [--since REF]
 ./docs_tool.py --list-checks
@@ -89,6 +89,7 @@ pages-ru-latin-homoglyphs (beta)
 pages-stray-backticks
 pages-structure-parity (beta)
 pages-table-cell-periods (beta)
+pages-terminology (beta)
 pages-translation (beta)
 pages-unbalanced-delimiters
 tags-orphaned
@@ -103,7 +104,7 @@ Exits `0` if every selected check passed, `1` if any check found something.
 ### Scoping to specific pages with `--page`
 
 By default, every check scans the whole site.
-Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
+Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-terminology` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
 
 ```bash
 ./docs_tool.py --check-pages-translation -v --page resource_groups
@@ -166,6 +167,8 @@ Each check's heuristics, exceptions, and the false positives they were tuned aga
 - `--check-pages-structure-parity` (beta; reports the first differing line by default; `-v` shows the full diff with file:line references) — deeper structural comparison of each EN/RU `.adoc` pair (heading levels, block titles, delimited blocks, block attributes, `include::` directives), catching drift even when line counts match.
 
 - `--check-pages-table-cell-periods` (beta) — the last sentence in a table cell shouldn't end with a period, per house style, with exceptions for cells ending in a list, an admonition, or a known abbreviation.
+
+- `--check-pages-terminology` (beta; `-v` also prints the full EN/RU line pair for each hit) — requires `--glossary PATH` (repeatable; a CSV with `en,ru,ru_pattern,note` columns, format documented in a `*-glossary.csv` file's own header). If `--glossary` is omitted, it defaults to every `*-glossary.csv` file found directly under the current directory — so a docs repo carrying its own glossary (e.g. `greengagedb-glossary.csv`) doesn't need the path spelled out on every run; a note is printed to stderr when this default kicks in. Flags an EN glossary term whose aligned RU line doesn't match any of its `ru_pattern` alternatives — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for. Each pattern is hand-authored, not guessed: a `word<>` token requires that stem plus any suffix (tolerating declension/conjugation), a bare `word` token requires that exact word (used for do-not-translate terms and invariant tokens like SQL keywords). See `check_pages_terminology`'s docstring in `docs_tool.py` for the full matching rationale.
 
 - `--check-pages-translation` (beta; `-v` also flags RU lines containing common English stopwords) — flags `pages/`/`partials/` lines that look untranslated: RU byte-identical to its EN counterpart, skipping code, attributes, comments, table cells, and keyword-only lines.
 

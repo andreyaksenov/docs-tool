@@ -37,10 +37,12 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_ru = dt.RU_MODULES_ROOT
         self._orig_external = dt.EXTERNAL_COMPONENTS
         self._orig_page_filter = dt._PAGE_FILTER
+        self._orig_glossary = dt.GLOSSARY
         dt.EN_MODULES_ROOT = self.root / "en" / "modules"
         dt.RU_MODULES_ROOT = self.root / "ru" / "modules"
         dt.EXTERNAL_COMPONENTS = {}
         dt._PAGE_FILTER = None
+        dt.GLOSSARY = {}
         dt._OWN_COMPONENT_NAME_CACHE.clear()
 
     def tearDown(self):
@@ -48,6 +50,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.RU_MODULES_ROOT = self._orig_ru
         dt.EXTERNAL_COMPONENTS = self._orig_external
         dt._PAGE_FILTER = self._orig_page_filter
+        dt.GLOSSARY = self._orig_glossary
         dt._OWN_COMPONENT_NAME_CACHE.clear()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
@@ -300,6 +303,125 @@ class LoadExternalComponentsTests(unittest.TestCase):
             self.assertIn("not a directory", buf.getvalue())
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class LoadGlossaryTests(unittest.TestCase):
+    def _load(self, rows_text: str):
+        """rows_text is the CSV body (without header row/comments)."""
+        tmpdir = tempfile.mkdtemp(prefix="docs_tool_glossary_")
+        try:
+            path = Path(tmpdir) / "glossary.csv"
+            path.write_text("# a comment\nen,ru,ru_pattern,note\n" + rows_text, encoding="utf-8")
+            return dt._load_glossary([str(path)])
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_comment_and_header_lines_skipped(self):
+        glossary = self._load("host,хост,хост<>,\n")
+        self.assertEqual(set(glossary), {"host"})
+
+    def test_rows_sharing_en_term_merge_with_note_ignored_for_matching(self):
+        glossary = self._load(
+            "session,сессия,сесси<>,generic database sense\n"
+            "session,сеанс,сеанс<>,bounded maintenance-operation sense\n"
+        )
+        self.assertEqual(set(glossary), {"session"})
+        self.assertEqual(glossary["session"]["ru_display"], {"сессия", "сеанс"})
+        self.assertEqual(len(glossary["session"]["patterns"]), 2)
+
+    def test_missing_file_exits(self):
+        with self.assertRaises(SystemExit):
+            dt._load_glossary(["/no/such/glossary/file.csv"])
+
+    def test_row_missing_pattern_is_skipped_with_warning(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            glossary = self._load("host,хост,\n")
+        self.assertEqual(glossary, {})
+        self.assertIn("missing en/ru_pattern", buf.getvalue())
+
+
+class DiscoverDefaultGlossariesTests(unittest.TestCase):
+    """--glossary's fallback: every *-glossary.csv directly under the
+    current directory, so a docs repo carrying its own glossary doesn't
+    need --glossary spelled out on every run."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_discover_glossary_")
+        self._orig_cwd = os.getcwd()
+        os.chdir(self._tmpdir)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_no_match_returns_empty(self):
+        self.assertEqual(dt._discover_default_glossaries(), [])
+
+    def test_single_match_found(self):
+        Path("greengagedb-glossary.csv").write_text("en,ru,ru_pattern,note\n", encoding="utf-8")
+        self.assertEqual(dt._discover_default_glossaries(), ["greengagedb-glossary.csv"])
+
+    def test_multiple_matches_found_sorted(self):
+        Path("zzz-glossary.csv").write_text("en,ru,ru_pattern,note\n", encoding="utf-8")
+        Path("aaa-glossary.csv").write_text("en,ru,ru_pattern,note\n", encoding="utf-8")
+        self.assertEqual(dt._discover_default_glossaries(), ["aaa-glossary.csv", "zzz-glossary.csv"])
+
+    def test_non_matching_files_ignored(self):
+        Path("glossary.csv").write_text("en,ru,ru_pattern,note\n", encoding="utf-8")  # no "-glossary" prefix
+        Path("notes-glossary.txt").write_text("irrelevant\n", encoding="utf-8")  # wrong extension
+        self.assertEqual(dt._discover_default_glossaries(), [])
+
+    def test_subdirectory_not_searched(self):
+        Path("sub").mkdir()
+        (Path("sub") / "nested-glossary.csv").write_text("en,ru,ru_pattern,note\n", encoding="utf-8")
+        self.assertEqual(dt._discover_default_glossaries(), [])
+
+
+class CompileGlossaryPatternTests(unittest.TestCase):
+    def _matches(self, ru_pattern: str, ru_line: str) -> bool:
+        pattern = dt._compile_glossary_pattern(ru_pattern)
+        return all(regex.search(ru_line) for regex in pattern)
+
+    def test_stem_token_matches_declined_form(self):
+        self.assertTrue(self._matches("таблиц<>", "в случае читающих таблиц распаковка выполняется"))
+        self.assertTrue(self._matches("таблиц<>", "это таблица"))
+
+    def test_stem_token_requires_word_boundary(self):
+        # "стол<>" must not match inside an unrelated longer word like "престол".
+        self.assertFalse(self._matches("стол<>", "царский престол"))
+        self.assertTrue(self._matches("стол<>", "деревянный стол"))
+
+    def test_bare_token_requires_exact_word(self):
+        self.assertTrue(self._matches("NOT NULL", "ограничение NOT NULL здесь"))
+        self.assertFalse(self._matches("NOT NULL", "ограничение NOTNULL здесь"))
+
+    def test_missing_word_does_not_match(self):
+        self.assertFalse(self._matches("хеш<>", "здесь этого слова нет"))
+
+    def test_multiword_pattern_requires_all_tokens_any_order(self):
+        self.assertTrue(self._matches(
+            "стоимостн<> оптимизатор<> запрос<>",
+            "запросов используется новый оптимизатор, стоимостной по своей природе",
+        ))
+        self.assertFalse(self._matches(
+            "стоимостн<> оптимизатор<> запрос<>",
+            "используется новый оптимизатор запросов",  # missing "стоимостн..."
+        ))
+
+    def test_entry_satisfied_by_any_alternative_pattern(self):
+        entry = {
+            "ru_display": {"сессия", "сеанс"},
+            "patterns": [dt._compile_glossary_pattern("сесси<>"), dt._compile_glossary_pattern("сеанс<>")],
+        }
+        self.assertTrue(dt._glossary_entry_satisfied(entry, "начните новый сеанс"))
+        self.assertTrue(dt._glossary_entry_satisfied(entry, "текущая сессия истекла"))
+        self.assertFalse(dt._glossary_entry_satisfied(entry, "текущее подключение истекло"))
+
+    def test_do_not_translate_entry_requires_verbatim_en(self):
+        entry = {"ru_display": {"не переводить"}, "patterns": [dt._compile_glossary_pattern("Greengage DB")]}
+        self.assertTrue(dt._glossary_entry_satisfied(entry, "работает в Greengage DB кластере"))
+        self.assertFalse(dt._glossary_entry_satisfied(entry, "работает в кластере gpdb"))
 
 
 class ImagesOrphanedTests(FixtureTestCase):
@@ -872,6 +994,75 @@ class PagesTranslationTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_translation, verbose=True)
         self.assertFalse(ok)
         self.assertIn("SUSPECT", output)
+
+
+class PagesTerminologyTests(FixtureTestCase):
+    def _set_glossary(self, *rows: str):
+        """Each row is an "en,ru,ru_pattern" CSV line (no trailing newline)."""
+        path = self.write("glossary.csv", "en,ru,ru_pattern\n" + "\n".join(rows) + "\n")
+        dt.GLOSSARY = dt._load_glossary([str(path)])
+
+    def test_missing_glossary_exits(self):
+        dt.GLOSSARY = {}
+        with self.assertRaises(SystemExit):
+            dt.check_pages_terminology()
+
+    def test_correct_translation_passes(self):
+        self._set_glossary("host,хост,хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc", "Connect to the host over SSH.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "Подключитесь к хосту по SSH.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_missing_translation_is_flagged(self):
+        self._set_glossary("host,хост,хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc", "Connect to the host over SSH.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "Подключитесь к серверу по SSH.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertIn("MISMATCH", output)
+        self.assertIn("'host'", output)
+
+    def test_duplicate_key_accepts_either_translation(self):
+        self._set_glossary(
+            "session,сессия,сесси<>",
+            "session,сеанс,сеанс<>",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc", "Start a new session before continuing.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "Перед продолжением начните новый сеанс.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_do_not_translate_term_must_stay_literal(self):
+        self._set_glossary("Greengage DB,не переводить,Greengage DB")
+        self.write("en/modules/ROOT/pages/page.adoc", "This is a Greengage DB cluster.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "Это кластер GPDB.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertIn("MISMATCH", output)
+
+        self.write("ru/modules/ROOT/pages/page.adoc", "Это кластер Greengage DB.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_term_inside_code_span_is_skipped(self):
+        self._set_glossary("host,хост,хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc", "Set the `host` config option.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "Настройте параметр `host`.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_page_filter_scopes_check(self):
+        self._set_glossary("host,хост,хост<>")
+        self.write("en/modules/ROOT/pages/keep.adoc", "Connect to the host.\n")
+        self.write("ru/modules/ROOT/pages/keep.adoc", "Подключитесь к серверу.\n")
+        self.write("en/modules/ROOT/pages/skip.adoc", "Connect to the host.\n")
+        self.write("ru/modules/ROOT/pages/skip.adoc", "Подключитесь к серверу.\n")
+        dt._PAGE_FILTER = {"keep"}
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertIn("keep.adoc", output)
+        self.assertNotIn("skip.adoc", output)
 
 
 class PagesStructureParityTests(FixtureTestCase):

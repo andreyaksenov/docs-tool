@@ -32,6 +32,7 @@ than a real AsciiDoc parser and can misfire on legitimate content -- treat
 their output as a review list, not a hard gate.
 """
 import argparse
+import csv
 import difflib
 import os
 import re
@@ -141,6 +142,84 @@ def _load_external_components(specs):
             "ru": {m: ru_root / m for m in module_names},
         }
     return components
+
+
+# Populated from --glossary PATH (see main()). Backs --check-pages-terminology:
+# {lookup_key: {"ru_display": {ru_translation, ...}, "patterns": [pattern, ...]}}
+# where each `pattern` is a tuple of compiled regexes (see _compile_glossary_pattern)
+# -- an entry is satisfied if the RU line matches every regex in any one
+# pattern. Multiple CSV rows sharing the same EN term (e.g. the two "session"
+# rows, or an abbreviation given its own row alongside the spelled-out term
+# like "WAL" next to "write-ahead logging") contribute additional
+# alternative patterns/translations under one merged key.
+GLOSSARY = {}
+
+_GLOSSARY_STEM_TOKEN_RE = re.compile(r'^(.+)<>$')
+
+
+def _compile_glossary_pattern(ru_pattern: str):
+    """Compiles one ru_pattern CSV cell (format documented in
+    greengagedb-glossary.csv's header) into a tuple of regexes, one per
+    whitespace-separated token: a `word<>` token becomes a word-boundary
+    stem-prefix match (tolerating any Russian declension/conjugation
+    suffix, or none); a bare `word` token becomes a word-boundary exact
+    match. All regexes in the tuple must find a hit (in any order,
+    anywhere in the line) for the pattern to be satisfied."""
+    regexes = []
+    for token in ru_pattern.split():
+        m = _GLOSSARY_STEM_TOKEN_RE.match(token)
+        stem = m.group(1) if m else token
+        regexes.append(re.compile(r'\b' + re.escape(stem), re.IGNORECASE))
+    return tuple(regexes)
+
+
+def _discover_default_glossaries():
+    """Default for --glossary when it isn't passed: every *-glossary.csv
+    file directly under the current directory (the repo root docs_tool.py
+    is run from -- same convention EN_MODULES_ROOT/RU_MODULES_ROOT rely on).
+    Lets a docs repo that carries its own glossary file run
+    --check-pages-terminology without spelling out the path every time.
+    Sorted for stable, reproducible output; not recursive, so a glossary
+    tucked away in a subdirectory still needs to be passed explicitly."""
+    return sorted(str(p) for p in Path(".").glob("*-glossary.csv"))
+
+
+def _load_glossary(paths):
+    """Parses --glossary PATH CSV file(s) (columns en,ru,ru_pattern,note;
+    format documented in greengagedb-glossary.csv's own header) into
+    {lookup_key: {"ru_display": {...}, "patterns": [...]}}. `en` is used
+    verbatim (lowercased) as the lookup key -- unlike the retired plain-text
+    glossary format, there's no disambiguation note embedded in it to strip;
+    that context now lives in the (match-irrelevant) `note` column instead.
+    Multiple files, or multiple rows within one file, sharing the same `en`
+    are merged: the key accumulates every contributing row's
+    translation/pattern as an alternative, since a sense that can't be told
+    apart automatically (e.g. the two "session" rows) must accept either as
+    correct rather than guessing which one applies."""
+    glossary = {}
+    for path_str in paths or []:
+        path = Path(path_str)
+        text = _read_text(path)
+        if text is None:
+            sys.exit(f"error: --glossary {path_str}: file not found or unreadable")
+        # "#"-prefixed and blank lines are comments -- stripped before
+        # handing the rest to csv.reader, same convention as the retired
+        # plain-text glossary format used.
+        data_lines = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+        reader = csv.DictReader(data_lines)
+        for row in reader:
+            en_part = (row.get("en") or "").strip()
+            ru = (row.get("ru") or "").strip()
+            ru_pattern = (row.get("ru_pattern") or "").strip()
+            if not en_part or not ru_pattern:
+                print(f"warning: --glossary {path_str}: skipping row with missing en/ru_pattern: {row!r}",
+                      file=sys.stderr)
+                continue
+            key = en_part.lower()
+            entry = glossary.setdefault(key, {"ru_display": set(), "patterns": []})
+            entry["ru_display"].add(ru)
+            entry["patterns"].append(_compile_glossary_pattern(ru_pattern))
+    return glossary
 
 
 # --------------------------------------------------------------------------
@@ -2884,6 +2963,173 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
 
 
 # --------------------------------------------------------------------------
+# PAGES: glossary terminology consistency
+# --------------------------------------------------------------------------
+
+def _glossary_entry_satisfied(entry, ru_line: str) -> bool:
+    """True if `ru_line` matches at least one of the entry's accepted
+    patterns -- i.e. every compiled regex in that pattern (see
+    _compile_glossary_pattern) finds a hit somewhere in the line. Each
+    pattern comes straight from a glossary row's ru_pattern column, so
+    there's no guessing here: a stem token's boundary was chosen by whoever
+    authored the glossary, not inferred at match time."""
+    return any(all(regex.search(ru_line) for regex in pattern) for pattern in entry["patterns"])
+
+
+def _build_glossary_term_re(glossary):
+    """One alternation of every glossary key, longest-first so a multi-word
+    key (e.g. "master host") wins over a shorter key that's one of its words
+    (e.g. "host") when both would otherwise match at the same position --
+    same leftmost-longest ordering trick check_pages_file_path_italics's
+    regexes use."""
+    if not glossary:
+        return None
+    keys = sorted(glossary, key=len, reverse=True)
+    return re.compile(r'\b(?:' + '|'.join(re.escape(k) for k in keys) + r')\b', re.IGNORECASE)
+
+
+def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, verbose, report_header):
+    """Returns the number of glossary mismatches flagged. Walks EN/RU by
+    line index -- same positional alignment _check_translation_pair uses --
+    so it carries the same known limitation: if the two files have drifted
+    out of line-parity, a matched EN line can end up checked against the
+    wrong RU line."""
+    en_lines = _read_lines(en_file)
+    ru_lines = _read_lines(ru_file)
+    if en_lines is None or ru_lines is None:
+        return 0
+    n = min(len(en_lines), len(ru_lines))
+
+    in_code = None
+    in_comment_block = False
+    in_cell = False
+    header_printed = False
+    finding_count = 0
+
+    def ensure_header():
+        nonlocal header_printed
+        if not header_printed:
+            report_header(ru_file)
+            header_printed = True
+
+    for i in range(n):
+        en_line = en_lines[i]
+        ru_line = ru_lines[i]
+        lineno = i + 1
+
+        if re.match(r'^////\s*$', en_line):
+            in_comment_block = not in_comment_block
+            continue
+        if in_comment_block:
+            continue
+
+        delim = _code_delim_type(en_line)
+        if delim:
+            if in_code == delim:
+                in_code = None
+            elif in_code is None:
+                in_code = delim
+            continue
+        if in_code:
+            continue
+
+        if en_line.startswith("|==="):
+            in_cell = False
+        elif re.match(r'^(\.\d+\+)?a\|', en_line):
+            in_cell = True
+        elif _SKIP_TABLE_CELL_RE.match(en_line):
+            in_cell = False
+        elif in_cell:
+            continue
+
+        if _is_skip_line(en_line):
+            continue
+
+        masked_en = _mask_code_and_links(en_line)
+        matched_keys = {m.group(0).lower() for m in term_re.finditer(masked_en)}
+        if not matched_keys:
+            continue
+
+        for key in sorted(matched_keys):
+            entry = glossary[key]
+            if _glossary_entry_satisfied(entry, ru_line):
+                continue
+            ensure_header()
+            finding_count += 1
+            forms = ", ".join(f"'{f}'" for f in sorted(entry["ru_display"]))
+            print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- expected one of [{forms}], not found")
+            if verbose:
+                print(f"    EN: {en_line}")
+                print(f"    RU: {ru_line}")
+
+    return finding_count
+
+
+def check_pages_terminology(verbose=False) -> bool:
+    """New check (not a port of an existing shell script): flags an EN
+    glossary term (see --glossary) whose aligned RU line doesn't contain any
+    of its accepted RU translations, catching a translator drifting onto an
+    inconsistent or outdated Russian term for something the glossary already
+    has a house-style answer for.
+
+    An EN term is located via a longest-first regex alternation over every
+    glossary key (see _build_glossary_term_re). Whether the RU line "has the
+    right translation" is then decided entirely by the glossary author's own
+    ru_pattern column, not a guessed heuristic: each pattern is a set of
+    word tokens (see _compile_glossary_pattern), a `word<>` one matching
+    that stem plus any suffix (declension/conjugation-tolerant) and a bare
+    `word` one requiring that exact word -- e.g. a do-not-translate entry's
+    pattern is just the EN term's own words, all bare, so it's effectively
+    required verbatim. All tokens in a pattern must be found somewhere in
+    the RU line (any order) for that pattern to count as a match; an entry
+    is satisfied if any one of its patterns matches. This still can't tell
+    "right words in an unrelated sentence" from a real match, so it's
+    deliberately biased toward fewer false positives at the cost of some
+    missed drift -- same "beta, review list" tradeoff as this file's other
+    heuristic checks.
+
+    Two glossary rows sharing an EN key (e.g. the two "session" senses) are
+    merged by _load_glossary into one set of alternative patterns, so either
+    translation counts as correct -- a bare EN term match can't tell the
+    senses apart, so this deliberately doesn't try.
+
+    Requires --glossary PATH (repeatable) -- or, if omitted, at least one
+    *-glossary.csv file discoverable in the current directory (see
+    _discover_default_glossaries, wired up in main()); exits with an error
+    if neither is available, since that's a misconfiguration, not "nothing
+    to check"."""
+    if not GLOSSARY:
+        sys.exit("error: --check-pages-terminology requires --glossary PATH "
+                  "(no *-glossary.csv found in the current directory to default to either)")
+
+    term_re = _build_glossary_term_re(GLOSSARY)
+    ok = True
+    total_hits = 0
+
+    def report_header(ru_file):
+        nonlocal ok
+        ok = False
+        print(f"FILE     {ru_file}")
+
+    for _, en_root, ru_root in module_roots():
+        for subdir in ("pages", "partials"):
+            for en_file in _iter_files(en_root / subdir, ".adoc"):
+                if not _page_allowed(en_file):
+                    continue
+                rel = en_file.relative_to(en_root)
+                ru_file = ru_root / rel
+                if not ru_file.is_file():
+                    continue
+                total_hits += _check_terminology_pair(en_file, ru_file, term_re, GLOSSARY, verbose, report_header)
+
+    if ok:
+        print("OK: no glossary terminology mismatches found.")
+    else:
+        print(f"\nTotal: {total_hits} terminology mismatch(es).")
+    return ok
+
+
+# --------------------------------------------------------------------------
 # PAGES: Latin/Cyrillic homoglyph mix-ups in ru/ prose
 # --------------------------------------------------------------------------
 
@@ -3036,6 +3282,7 @@ CHECKS = {
     "pages-stray-backticks": check_pages_stray_backticks,
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
+    "pages-terminology": check_pages_terminology,
     "pages-translation": check_pages_translation,
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
     "tags-orphaned": check_tags_orphaned,
@@ -3049,6 +3296,7 @@ BETA_CHECKS = {
     "pages-ru-latin-homoglyphs",
     "pages-structure-parity",
     "pages-table-cell-periods",
+    "pages-terminology",
     "pages-translation",
 }
 
@@ -3663,7 +3911,7 @@ def build_parser():
                         help="Limit the per-file en/ru checks (translation, line-parity, "
                              "structure-parity, no-cyrillic, no-unicode-dashes, "
                              "no-invisible-chars, ru-latin-homoglyphs, table-cell-periods, "
-                             "file-path-italics) to page(s)/partial(s) whose filename stem "
+                             "file-path-italics, terminology) to page(s)/partial(s) whose filename stem "
                              "matches NAME, e.g. --page resource_groups. Repeatable. Pass the "
                              "special value UNCOMMITTED instead of a name to scope to whatever "
                              ".adoc files currently have uncommitted changes (staged, unstaged, "
@@ -3677,6 +3925,13 @@ def build_parser():
                              "--external-root ADCM=../docs-adcm. Repeatable. Without this, "
                              "references into a component that isn't part of this repo are left "
                              "unchecked rather than reported broken.")
+    parser.add_argument("--glossary", action="append", metavar="PATH",
+                        help="With --check-pages-terminology: an EN-term-to-RU-translation "
+                             "glossary CSV file (columns en,ru,ru_pattern,note -- format "
+                             "documented in a *-glossary.csv file's own header) to check "
+                             "pages/partials against. Repeatable -- entries from every file "
+                             "passed are merged. If omitted, defaults to every *-glossary.csv "
+                             "file found directly under the current directory.")
 
     sync_group = parser.add_argument_group("sync")
     sync_group.add_argument("--sync", metavar="EN_FILE",
@@ -3692,7 +3947,7 @@ def build_parser():
 
 
 def main():
-    global EXTERNAL_COMPONENTS, _PAGE_FILTER
+    global EXTERNAL_COMPONENTS, GLOSSARY, _PAGE_FILTER
     parser = build_parser()
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         # Blank out the SUPPRESS sentinel so it doesn't leak into the completion
@@ -3743,6 +3998,15 @@ def main():
     if not selected:
         parser.print_help()
         sys.exit(2)
+
+    if "pages-terminology" in selected:
+        glossary_paths = args.glossary
+        if not glossary_paths:
+            glossary_paths = _discover_default_glossaries()
+            if glossary_paths:
+                print(f"info: --glossary not passed -- defaulting to discovered "
+                      f"{', '.join(glossary_paths)}", file=sys.stderr)
+        GLOSSARY = _load_glossary(glossary_paths)
 
     overall_ok = True
     for i, name in enumerate(selected):
