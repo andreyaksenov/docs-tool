@@ -548,7 +548,7 @@ class TagsOrphanedTests(FixtureTestCase):
         self.write("en/modules/ROOT/partials/other.adoc", "tag::other_tag[]\nbody\nend::other_tag[]\n")
         self.write("en/modules/ROOT/pages/user.adoc", "include::partial$kept.adoc[tag=kept_tag]\n")
 
-        dt._PAGE_FILTER = {"names": {"kept"}, "dirs": set()}
+        dt._PAGE_FILTER = {"names": {("kept",)}, "dirs": set()}
         ok, output = self.run_check(dt.check_tags_orphaned)
         self.assertTrue(ok, output)  # kept_tag used (from user.adoc, filtered out of the report but still scanned)
         self.assertNotIn("other_tag", output)  # other.adoc's own orphaned tag is filtered out of the report
@@ -1024,6 +1024,34 @@ class ContentRelpathTests(unittest.TestCase):
         self.assertIsNone(dt._content_relpath(Path("en/modules/ROOT/examples/foo.sql")))
 
 
+class ContentRelpartsStemTests(unittest.TestCase):
+    def test_strips_adoc_extension_from_final_segment_only(self):
+        p = Path("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc")
+        self.assertEqual(dt._content_relparts_stem(p), ("reference", "gp_toolkit", "gp_ao_diskquota_no_perm_map"))
+
+    def test_bare_top_level_file(self):
+        p = Path("en/modules/ROOT/pages/index.adoc")
+        self.assertEqual(dt._content_relparts_stem(p), ("index",))
+
+    def test_none_when_not_under_pages_or_partials(self):
+        self.assertIsNone(dt._content_relparts_stem(Path("en/modules/ROOT/examples/foo.sql")))
+
+
+class EndsWithPartsTests(unittest.TestCase):
+    def test_bare_single_segment_matches_last_segment_only(self):
+        self.assertTrue(dt._ends_with_parts(("reference", "gp_toolkit", "gp_ao"), ("gp_ao",)))
+
+    def test_multi_segment_suffix_must_match_in_order(self):
+        self.assertTrue(dt._ends_with_parts(("reference", "gp_toolkit", "gp_ao"), ("gp_toolkit", "gp_ao")))
+        self.assertFalse(dt._ends_with_parts(("reference", "gp_toolkit", "gp_ao"), ("gp_ao", "gp_toolkit")))
+
+    def test_suffix_longer_than_parts_never_matches(self):
+        self.assertFalse(dt._ends_with_parts(("gp_ao",), ("reference", "gp_toolkit", "gp_ao")))
+
+    def test_non_matching_middle_segment_fails(self):
+        self.assertFalse(dt._ends_with_parts(("reference", "gp_toolkit", "gp_ao"), ("reference", "utils", "gp_ao")))
+
+
 class PageAllowedDirectoryFilterTests(unittest.TestCase):
     """_page_allowed's directory-matching half of --page: recursive,
     content-relative, module-agnostic."""
@@ -1066,10 +1094,90 @@ class PageAllowedDirectoryFilterTests(unittest.TestCase):
             self.assertTrue(dt._page_allowed(Path(root)), root)
 
     def test_file_filter_and_directory_filter_both_apply(self):
-        dt._PAGE_FILTER = {"names": {"index"}, "dirs": {("reference",)}}
+        dt._PAGE_FILTER = {"names": {("index",)}, "dirs": {("reference",)}}
         self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/index.adoc")))
         self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/reference/gpstate.adoc")))
         self.assertFalse(dt._page_allowed(Path("en/modules/ROOT/pages/unrelated.adoc")))
+
+    def test_bare_filename_matches_regardless_of_directory(self):
+        """Unqualified single-segment NAME (the pre-existing form, e.g.
+        --page foo.adoc) must keep matching a file with that stem in ANY
+        directory -- no behavior change for the common case."""
+        dt._PAGE_FILTER = {"names": {("gp_ao",)}, "dirs": set()}
+        self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")))
+        self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/gp_ao.adoc")))
+
+    def test_qualified_name_disambiguates_same_stem_in_different_directories(self):
+        """The actual bug this was built to fix: a directory-qualified NAME
+        (--page reference/gp_toolkit/gp_ao.adoc) must select only the file
+        under that directory, not silently match a same-named file
+        elsewhere too."""
+        dt._PAGE_FILTER = {"names": {("gp_toolkit", "gp_ao")}, "dirs": set()}
+        self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")))
+        self.assertFalse(dt._page_allowed(Path("en/modules/ROOT/pages/reference/utils/gp_ao.adoc")))
+        self.assertFalse(dt._page_allowed(Path("en/modules/ROOT/pages/gp_ao.adoc")))
+
+    def test_fully_qualified_name_is_also_module_agnostic(self):
+        """The module name is never part of the matched path (see
+        _content_relpath), so even a fully directory-qualified name still
+        matches the same subpath in any module -- consistent with the
+        directory filter's own module-agnostic behavior."""
+        dt._PAGE_FILTER = {"names": {("reference", "gp_toolkit", "gp_ao")}, "dirs": set()}
+        self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")))
+        self.assertTrue(dt._page_allowed(Path("en/modules/how-to/pages/reference/gp_toolkit/gp_ao.adoc")))
+        self.assertFalse(dt._page_allowed(Path("en/modules/ROOT/pages/reference/utils/gp_ao.adoc")))
+
+
+class ResolvePageStemQualifiedNameTests(unittest.TestCase):
+    """--sync's fallback (_resolve_page_stem) gets the same suffix-matching
+    treatment as --page, for the same reason: a bare filename can be
+    ambiguous across directories, and a qualifying prefix should actually
+    disambiguate instead of being silently dropped."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_resolve_stem_")
+        self._orig_cwd = os.getcwd()
+        os.chdir(self._tmpdir)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def write(self, rel_path: str) -> Path:
+        p = Path(self._tmpdir) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("", encoding="utf-8")
+        return p
+
+    def test_bare_name_matches_across_directories_ambiguously(self):
+        self.write("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")
+        self.write("en/modules/ROOT/pages/reference/utils/gp_ao.adoc")
+        matches = dt._resolve_page_stem(("gp_ao",))
+        self.assertEqual(len(matches), 2)
+
+    def test_qualified_name_disambiguates(self):
+        self.write("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")
+        self.write("en/modules/ROOT/pages/reference/utils/gp_ao.adoc")
+        matches = dt._resolve_page_stem(("gp_toolkit", "gp_ao"))
+        self.assertEqual(matches, [Path("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")])
+
+    def test_run_sync_accepts_qualified_name_end_to_end(self):
+        self.write("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")
+        self.write("en/modules/ROOT/pages/reference/utils/gp_ao.adoc")
+        self.write("ru/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync("reference/gp_toolkit/gp_ao.adoc", dry_run=True)
+        self.assertIn("reference/gp_toolkit/gp_ao.adoc", buf.getvalue())
+        self.assertIn("already matches", buf.getvalue())
+
+    def test_run_sync_bare_name_still_ambiguous(self):
+        self.write("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao.adoc")
+        self.write("en/modules/ROOT/pages/reference/utils/gp_ao.adoc")
+        with self.assertRaises(SystemExit) as ctx:
+            dt.run_sync("gp_ao.adoc", dry_run=True)
+        self.assertIn("matches multiple files", str(ctx.exception))
 
 
 class PagesTerminologyTests(FixtureTestCase):
@@ -1134,7 +1242,7 @@ class PagesTerminologyTests(FixtureTestCase):
         self.write("ru/modules/ROOT/pages/keep.adoc", "Подключитесь к серверу.\n")
         self.write("en/modules/ROOT/pages/skip.adoc", "Connect to the host.\n")
         self.write("ru/modules/ROOT/pages/skip.adoc", "Подключитесь к серверу.\n")
-        dt._PAGE_FILTER = {"names": {"keep"}, "dirs": set()}
+        dt._PAGE_FILTER = {"names": {("keep",)}, "dirs": set()}
         ok, output = self.run_check(dt.check_pages_terminology)
         self.assertFalse(ok)
         self.assertIn("keep.adoc", output)
@@ -1394,7 +1502,7 @@ class MainPageValueFormTests(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             with self.assertRaises(SystemExit):
                 dt.main()
-        self.assertEqual(dt._PAGE_FILTER, {"names": {"resource_groups"}, "dirs": set()})
+        self.assertEqual(dt._PAGE_FILTER, {"names": {("resource_groups",)}, "dirs": set()})
 
     def test_bare_name_becomes_a_directory_filter(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands"]
@@ -1445,13 +1553,32 @@ class CompletePageNameTests(FixtureTestCase):
         self.assertIs(actions_by_flag["--page"].completer, dt._complete_page_or_dir_name)
         self.assertIs(actions_by_flag["--sync"].completer, dt._complete_page_name)
 
-    def test_dir_completer_includes_every_nesting_level(self):
+    def test_dir_completer_includes_every_nesting_level_with_trailing_slash(self):
+        """Trailing "/" on every directory candidate (not "reference",
+        "reference/") -- otherwise completion goes dead the instant the
+        user types the "/" themselves, since nothing in the candidate list
+        would start with what's already typed."""
         self.antora_yml("en", "TEST")
         self.write("en/modules/ROOT/pages/reference/sql_commands/create_role.adoc", "")
 
         names, dirs = dt._discover_page_completions()
         self.assertIn("create_role.adoc", names)
-        self.assertEqual(dirs, {"reference", "reference/sql_commands"})
+        self.assertEqual(dirs, {"reference/", "reference/sql_commands/"})
+
+    def test_file_candidates_include_every_qualified_suffix_form(self):
+        """A nested file gets one candidate per suffix length -- bare
+        filename, then each directory-qualified form up to the full
+        content-relative path -- so completion can keep narrowing down
+        after a directory prefix instead of stopping at the bare name."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc", "")
+
+        names, _ = dt._discover_page_completions()
+        self.assertEqual(names, {
+            "gp_ao_diskquota_no_perm_map.adoc",
+            "gp_toolkit/gp_ao_diskquota_no_perm_map.adoc",
+            "reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc",
+        })
 
 
 class RunSyncGitRewordTests(unittest.TestCase):

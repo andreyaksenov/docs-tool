@@ -262,13 +262,17 @@ def _iter_files(root: Path, suffix: str = None):
 
 
 # Optional --page filter, or None when not requested:
-# {"names": {file stem, ...}, "dirs": {dir-parts tuple, ...}}
-# "names" matches a file by exact stem (from a NAME ending in .adoc);
-# "dirs" matches every file under that content-relative directory,
-# recursively (from a NAME not ending in .adoc -- see main()). Only
-# applied at the per-file "report" loops of checks that compare an en/ru
-# file pair directly -- corpus-building loops (broken-refs' partial-includer
-# map, orphaned pages/examples/images) scan the whole site regardless, since
+# {"names": {file-path-parts tuple, ...}, "dirs": {dir-parts tuple, ...}}
+# "names" matches a file whose content-relative path (with its own .adoc
+# stripped, see _content_relparts_stem) ENDS WITH the given parts tuple --
+# from a NAME ending in .adoc, split on "/" (a bare "resource_groups.adoc"
+# is just the 1-element case, matching by stem alone regardless of
+# directory, same as before qualified names were supported). "dirs"
+# matches every file under that content-relative directory, recursively
+# (from a NAME not ending in .adoc -- see main()). Only applied at the
+# per-file "report" loops of checks that compare an en/ru file pair
+# directly -- corpus-building loops (broken-refs' partial-includer map,
+# orphaned pages/examples/images) scan the whole site regardless, since
 # narrowing those would just make them wrong rather than faster.
 _PAGE_FILTER = None
 
@@ -289,10 +293,29 @@ def _content_relpath(path: Path):
     return None
 
 
+def _content_relparts_stem(path: Path):
+    """_content_relpath(path), as a tuple of parts with the final segment's
+    .adoc extension stripped, e.g. ("reference", "sql_commands",
+    "create_role") -- what a --page/--sync file NAME (also .adoc-stripped
+    and split on "/") is suffix-matched against, so a qualifying directory
+    prefix disambiguates a same-named file in two different directories
+    instead of being silently dropped. None if `path` isn't under a
+    pages/partials directory (see _content_relpath)."""
+    relpath = _content_relpath(path)
+    if relpath is None:
+        return None
+    return relpath.parts[:-1] + (relpath.stem,)
+
+
+def _ends_with_parts(parts, suffix) -> bool:
+    return len(suffix) <= len(parts) and parts[len(parts) - len(suffix):] == suffix
+
+
 def _page_allowed(path: Path) -> bool:
     if _PAGE_FILTER is None:
         return True
-    if path.stem in _PAGE_FILTER["names"]:
+    relparts_stem = _content_relparts_stem(path)
+    if relparts_stem is not None and any(_ends_with_parts(relparts_stem, n) for n in _PAGE_FILTER["names"]):
         return True
     if not _PAGE_FILTER["dirs"]:
         return False
@@ -3801,18 +3824,22 @@ def ru_path_for(en_path: Path) -> Path:
     return Path(s.replace(EN_MARK, RU_MARK, 1))
 
 
-def _resolve_page_stem(stem: str):
+def _resolve_page_stem(name_parts):
     """Every EN pages/partials .adoc file (across all discovered modules)
-    whose filename stem matches `stem` -- the same stem-matching convention
-    --page's NAME already uses (see _page_allowed). Backs --sync's fallback
-    when its argument (already validated to end in .adoc) isn't an existing
-    path: lets --sync take a bare filename like "analyzedb.adoc" instead of
-    always requiring the full relative path."""
+    whose content-relative path (.adoc stripped) ends with `name_parts` --
+    the same suffix-matching convention --page's NAME already uses (see
+    _page_allowed). Backs --sync's fallback when its argument (already
+    validated to end in .adoc) isn't an existing path: lets --sync take a
+    bare filename like "analyzedb.adoc", or a directory-qualified one like
+    "reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc" to disambiguate
+    a same-named file in two different directories, instead of always
+    requiring the full relative path."""
     matches = []
     for _, en_root, _ in module_roots():
         for subdir in ("pages", "partials"):
             for f in _iter_files(en_root / subdir, ".adoc"):
-                if f.stem == stem:
+                relparts_stem = _content_relparts_stem(f)
+                if relparts_stem is not None and _ends_with_parts(relparts_stem, name_parts):
                     matches.append(f)
     return matches
 
@@ -3823,10 +3850,12 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
                   f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
     en_path = Path(en_file)
     if not en_path.is_file():
-        # Not an existing path -- try resolving it as a --page-style bare
-        # filename (e.g. "analyzedb.adoc") against the discovered EN
-        # pages/partials instead of immediately failing.
-        matches = _resolve_page_stem(en_path.stem)
+        # Not an existing path -- try resolving it as a --page-style bare or
+        # directory-qualified filename (e.g. "analyzedb.adoc" or
+        # "reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc") against
+        # the discovered EN pages/partials instead of immediately failing.
+        name_parts = tuple(p for p in en_file[:-len(".adoc")].split("/") if p)
+        matches = _resolve_page_stem(name_parts)
         if len(matches) == 1:
             en_path = matches[0]
         elif len(matches) > 1:
@@ -3958,19 +3987,39 @@ def _discover_page_completions():
     nesting level, across all discovered modules. Shared source for both
     --page (accepts files and directories) and --sync (files only) tab
     completion. A no-op unless argcomplete is installed and active (see
-    Tab completion in the README); harmless to always attach."""
+    Tab completion in the README); harmless to always attach.
+
+    Each directory candidate carries a trailing "/" (e.g. "reference/",
+    not "reference") -- --page's own parsing tolerates either form (a
+    trailing slash is stripped, see main()), but the completer needs it:
+    without it, no candidate starts with what the shell has typed the
+    moment the user types the "/" themselves (real path completion always
+    appends it too, for the same reason), so completion would go dead
+    right after completing a directory instead of continuing into it.
+
+    Each file gets one candidate per suffix-length qualified form, from
+    the bare filename up to its full content-relative path (e.g. for
+    reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc:
+    "gp_ao_diskquota_no_perm_map.adoc", then
+    "gp_toolkit/gp_ao_diskquota_no_perm_map.adoc", then the full path) --
+    matching every qualified form --page/--sync's own suffix-matching (see
+    _page_allowed/_resolve_page_stem) actually accepts, so completion can
+    keep going after a directory prefix to narrow down to one file, e.g.
+    when the bare filename alone would be ambiguous across directories."""
     names = set()
     dirs = set()
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for subdir in ("pages", "partials"):
                 for f in _iter_files(root / subdir, ".adoc"):
-                    names.add(f.name)
                     rel = _content_relpath(f)
-                    if rel:
-                        parts = rel.parts[:-1]
-                        for i in range(1, len(parts) + 1):
-                            dirs.add("/".join(parts[:i]))
+                    if rel is None:
+                        continue
+                    parts = rel.parts[:-1]
+                    for i in range(len(parts), -1, -1):
+                        names.add("/".join(parts[i:] + (f.name,)))
+                    for i in range(1, len(parts) + 1):
+                        dirs.add("/".join(parts[:i]) + "/")
     return names, dirs
 
 
@@ -4013,6 +4062,11 @@ def build_parser():
                              "file-path-italics, terminology) to page(s)/partial(s) whose filename "
                              "matches NAME, e.g. --page resource_groups.adoc -- NAME must end with .adoc "
                              "(AsciiDoc/Antora has no separate topic-id, the filename is the identifier). "
+                             "A same-named file in two different directories can be disambiguated by "
+                             "qualifying NAME with as much of the trailing directory path as needed, e.g. "
+                             "--page reference/gp_toolkit/gp_ao.adoc or just --page gp_toolkit/gp_ao.adoc "
+                             "(matched by the path relative to pages/partials ending with NAME; the module "
+                             "itself is never part of the match, same as the directory form below). "
                              "Alternatively, a NAME not ending in .adoc scopes every page/partial under "
                              "that content-relative directory instead, recursively, in any module, e.g. "
                              "--page reference/sql_commands matches every file under any module's "
@@ -4045,8 +4099,10 @@ def build_parser():
                                  "structure/content. EN_FILE must end with .adoc, and can be the full "
                                  "relative path (e.g. en/modules/ROOT/pages/foo.adoc) or, like --page NAME, "
                                  "just the bare filename (e.g. foo.adoc) -- resolved by searching all "
-                                 "discovered modules' pages/partials, same as --page; a filename matching "
-                                 "more than one file requires the full path instead to disambiguate. "
+                                 "discovered modules' pages/partials, same as --page. A bare filename "
+                                 "matching more than one file can be disambiguated the same way --page's "
+                                 "can, by qualifying it with trailing directory path segments (e.g. "
+                                 "reference/gp_toolkit/gp_ao.adoc), or by passing the full path instead. "
                                  "Heuristic aligner, not a semantic merge -- review its output before "
                                  "trusting it.")
     sync_action.completer = _complete_page_name
@@ -4096,9 +4152,9 @@ def main():
         dirs = set()
         for name in args.page:
             if name == "UNCOMMITTED":
-                names |= _git_uncommitted_adoc_stems()
+                names |= {(s,) for s in _git_uncommitted_adoc_stems()}
             elif name.endswith(".adoc"):
-                names.add(name[:-len(".adoc")])
+                names.add(tuple(p for p in name[:-len(".adoc")].split("/") if p))
             else:
                 dirs.add(tuple(p for p in name.split("/") if p))
         if not names and not dirs:
