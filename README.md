@@ -79,6 +79,7 @@ pages-line-parity
 pages-no-cyrillic
 pages-no-invisible-chars
 pages-no-unicode-dashes
+pages-no-yo
 pages-orphaned
 pages-ru-latin-homoglyphs (beta)
 pages-stray-backticks
@@ -99,7 +100,7 @@ Exits `0` if every selected check passed, `1` if any check found something.
 ### Scoping to specific pages with `--page`
 
 By default, every check scans the whole site.
-Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-terminology` — to just the page(s)/partial(s) whose filename matches `NAME`, e.g.:
+Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-yo`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-terminology` — to just the page(s)/partial(s) whose filename matches `NAME`, e.g.:
 
 ```bash
 ./docs_tool.py --check-pages-translation -v --page resource_groups.adoc
@@ -235,6 +236,8 @@ python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-ru-latin-homoglyphs \
   --check-pages-table-cell-periods \
   --check-pages-file-path-italics \
+  --check-pages-translation \
+  --check-pages-structure-parity \
   --check-examples-no-cyrillic \
   --check-examples-orphaned \
   --check-examples-parity \
@@ -261,7 +264,8 @@ chmod +x .git/hooks/pre-commit
 ```
 
 Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, `--check-pages-no-yo`, `--check-pages-stray-backticks`, and `--check-pages-unbalanced-delimiters` actually block the commit; the rest just print their findings.
-The other three checks that carry a `(beta)` tag above (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
+The `(beta)` checks in the warn-only block (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-translation`, `pages-structure-parity`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss. Move one into the blocking block once it's run clean for a while in practice.
+`pages-terminology` isn't included at all, deliberately: it requires `--glossary PATH` (or an auto-discovered `*-glossary.psv`), which most repos using this tool don't have, and since every `--check-*` flag in one `docs_tool.py` invocation shares a single process, that check's `sys.exit()` when no glossary is available would abort every other check bundled in the same call, not just itself. A repo that does carry a glossary can add `--check-pages-terminology` to its own copy of this hook.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run. `tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
 
 ## Running the tests

@@ -4093,7 +4093,7 @@ def build_parser():
                              "stopword heuristic (--check-pages-translation).")
     page_action = parser.add_argument("--page", action="append", metavar="NAME",
                         help="Limit the per-file en/ru checks (translation, line-parity, "
-                             "structure-parity, no-cyrillic, no-unicode-dashes, "
+                             "structure-parity, no-cyrillic, no-unicode-dashes, no-yo, "
                              "no-invisible-chars, ru-latin-homoglyphs, table-cell-periods, "
                              "file-path-italics, terminology) to page(s)/partial(s) whose filename "
                              "matches NAME, e.g. --page resource_groups.adoc -- NAME must end with .adoc "
