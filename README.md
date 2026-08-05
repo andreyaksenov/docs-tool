@@ -14,7 +14,7 @@ It's a single self-contained file.
 Copy it into any Antora docs repo without cloning this repo:
 
 ```bash
-curl -O https://raw.githubusercontent.com/andreyaksenov/docs-translation-tools/main/scripts/docs_tool.py && chmod +x docs_tool.py
+curl -O https://raw.githubusercontent.com/andreyaksenov/docs-translation-tools/main/docs_tool.py && chmod +x docs_tool.py
 ```
 
 Run it with an explicit path (`./docs_tool.py ...` or `python3 docs_tool.py ...`) from the repo root.
@@ -26,7 +26,7 @@ That's normal shell behavior, not a broken install.
 Windows doesn't have an executable bit, so skip the `chmod` step and run the file with `python` (or the `py` launcher) instead of `./docs_tool.py`:
 
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/andreyaksenov/docs-translation-tools/main/scripts/docs_tool.py -OutFile docs_tool.py
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/andreyaksenov/docs-translation-tools/main/docs_tool.py -OutFile docs_tool.py
 python docs_tool.py --check-<name>
 ```
 
