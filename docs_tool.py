@@ -3923,6 +3923,21 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
 # CLI
 # --------------------------------------------------------------------------
 
+def _complete_page_name(**kwargs):
+    """argcomplete completer for --page/--sync: every EN or RU pages/partials
+    .adoc filename (bare, no path -- matching what NAME actually accepts)
+    across all discovered modules, deduplicated. A no-op unless argcomplete
+    is installed and active (see Tab completion in the README); harmless to
+    always attach."""
+    names = set()
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for subdir in ("pages", "partials"):
+                for f in _iter_files(root / subdir, ".adoc"):
+                    names.add(f.name)
+    return sorted(names)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -3939,7 +3954,7 @@ def build_parser():
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="Verbose mode: show diffs (parity checks) or enable the stricter "
                              "stopword heuristic (--check-pages-translation).")
-    parser.add_argument("--page", action="append", metavar="NAME",
+    page_action = parser.add_argument("--page", action="append", metavar="NAME",
                         help="Limit the per-file en/ru checks (translation, line-parity, "
                              "structure-parity, no-cyrillic, no-unicode-dashes, "
                              "no-invisible-chars, ru-latin-homoglyphs, table-cell-periods, "
@@ -3953,6 +3968,7 @@ def build_parser():
                              "Whole-site checks (broken-refs, orphaned, nav/structure parity of "
                              "nav.adoc) are unaffected and always scan everything. Optional -- "
                              "omit to check the whole site as before.")
+    page_action.completer = _complete_page_name
     parser.add_argument("--external-root", action="append", metavar="NAME=PATH",
                         help="With --check-pages-broken-refs: resolve xref:/include:: targets "
                              "against another Antora component's repo checked out locally, e.g. "
@@ -3968,7 +3984,7 @@ def build_parser():
                              "file found directly under the current directory.")
 
     sync_group = parser.add_argument_group("sync")
-    sync_group.add_argument("--sync", metavar="EN_FILE",
+    sync_action = sync_group.add_argument("--sync", metavar="EN_FILE",
                             help="(beta) Align the RU counterpart of EN_FILE to match its current "
                                  "structure/content. EN_FILE must end with .adoc, and can be the full "
                                  "relative path (e.g. en/modules/ROOT/pages/foo.adoc) or, like --page NAME, "
@@ -3977,6 +3993,7 @@ def build_parser():
                                  "more than one file requires the full path instead to disambiguate. "
                                  "Heuristic aligner, not a semantic merge -- review its output before "
                                  "trusting it.")
+    sync_action.completer = _complete_page_name
     sync_group.add_argument("-n", "--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
     sync_group.add_argument("--since", metavar="REF",

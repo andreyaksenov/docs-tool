@@ -1335,6 +1335,28 @@ class MainPageRequiresAdocSuffixTests(unittest.TestCase):
         self.assertNotIn("must end with .adoc", str(ctx.exception))
 
 
+class CompletePageNameTests(FixtureTestCase):
+    """--page/--sync's argcomplete tab-completion source: every EN/RU
+    pages/partials .adoc filename across all discovered modules."""
+
+    def test_collects_en_and_ru_filenames_deduplicated(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/foo.adoc", "")
+        self.write("en/modules/ROOT/partials/bar.adoc", "")
+        self.write("ru/modules/ROOT/pages/foo.adoc", "")  # same name as EN -- deduplicated
+        self.write("ru/modules/ROOT/pages/baz.adoc", "")  # RU-only
+
+        names = dt._complete_page_name()
+        self.assertEqual(names, sorted(names))  # sorted for stable completion order
+        self.assertEqual(set(names), {"foo.adoc", "bar.adoc", "baz.adoc"})
+
+    def test_page_action_and_sync_action_both_wired_to_the_completer(self):
+        parser = dt.build_parser()
+        actions_by_flag = {opt: a for a in parser._actions for opt in a.option_strings}
+        self.assertIs(actions_by_flag["--page"].completer, dt._complete_page_name)
+        self.assertIs(actions_by_flag["--sync"].completer, dt._complete_page_name)
+
+
 class RunSyncGitRewordTests(unittest.TestCase):
     """Integration test for the git-backed reworded-paragraph detection in
     run_sync: an EN paragraph reworded (not just extended) since RU was last

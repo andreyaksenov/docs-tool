@@ -60,6 +60,8 @@ Open a new shell (or `source ~/.zshrc`), then:
 
 lists every matching `--check-*` flag (as well as `--all-checks`, `--list-checks`, etc.). If `argcomplete` isn't installed, the script silently skips wiring it up and runs as normal.
 
+`--page` and `--sync` also complete with real filenames — every EN/RU `pages`/`partials` `.adoc` file discovered in the current directory's Antora tree, e.g. `--page resource<TAB>` completes to `--page resource_groups.adoc`. Since discovery reads the actual site, this only works from the repo root (same as everything else).
+
 ## Usage
 
 ```bash
