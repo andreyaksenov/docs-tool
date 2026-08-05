@@ -3772,10 +3772,36 @@ def ru_path_for(en_path: Path) -> Path:
     return Path(s.replace(EN_MARK, RU_MARK, 1))
 
 
+def _resolve_page_stem(stem: str):
+    """Every EN pages/partials .adoc file (across all discovered modules)
+    whose filename stem matches `stem` -- the same stem-matching convention
+    --page's NAME already uses (see _page_allowed). Backs --sync's fallback
+    when its argument isn't an existing path: lets --sync take a bare name
+    like --page does, instead of always requiring the full relative path."""
+    matches = []
+    for _, en_root, _ in module_roots():
+        for subdir in ("pages", "partials"):
+            for f in _iter_files(en_root / subdir, ".adoc"):
+                if f.stem == stem:
+                    matches.append(f)
+    return matches
+
+
 def run_sync(en_file: str, dry_run: bool, since: str = None):
     en_path = Path(en_file)
     if not en_path.is_file():
-        sys.exit(f"error: not a file: {en_path}")
+        # Not an existing path -- try resolving it as a --page-style stem
+        # (bare name, or name.adoc) against the discovered EN pages/partials
+        # instead of immediately failing.
+        stem = en_file[:-len(".adoc")] if en_file.endswith(".adoc") else en_file
+        matches = _resolve_page_stem(stem)
+        if len(matches) == 1:
+            en_path = matches[0]
+        elif len(matches) > 1:
+            listing = "\n".join(f"  {m}" for m in sorted(str(m) for m in matches))
+            sys.exit(f"error: --sync {en_file!r} matches multiple files -- pass a full path to disambiguate:\n{listing}")
+        else:
+            sys.exit(f"error: not a file, and no page/partial matches stem {stem!r}: {en_path}")
 
     ru_path = ru_path_for(en_path)
     en_lines = (_read_text(en_path) or "").splitlines()
@@ -3941,8 +3967,12 @@ def build_parser():
     sync_group = parser.add_argument_group("sync")
     sync_group.add_argument("--sync", metavar="EN_FILE",
                             help="(beta) Align the RU counterpart of EN_FILE to match its current "
-                                 "structure/content. Heuristic aligner, not a semantic merge -- review its "
-                                 "output before trusting it.")
+                                 "structure/content. EN_FILE can be the full relative path (e.g. "
+                                 "en/modules/ROOT/pages/foo.adoc) or, like --page NAME, just the filename "
+                                 "stem or name.adoc -- resolved by searching all discovered modules' "
+                                 "pages/partials, same as --page; ambiguous stems (matching more than one "
+                                 "file) require the full path instead. Heuristic aligner, not a semantic "
+                                 "merge -- review its output before trusting it.")
     sync_group.add_argument("-n", "--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
     sync_group.add_argument("--since", metavar="REF",

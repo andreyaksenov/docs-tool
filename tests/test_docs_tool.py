@@ -1217,6 +1217,78 @@ class RunSyncTests(unittest.TestCase):
         self.assertIn("Inserted", buf.getvalue())
 
 
+class RunSyncStemResolutionTests(unittest.TestCase):
+    """--sync's fallback: when its argument isn't an existing path, resolve
+    it as a --page-style stem (or name.adoc) against discovered EN
+    pages/partials, same lookup --page uses. Needs a real cwd change (unlike
+    RunSyncTests) since module_roots() resolves EN_MODULES_ROOT/RU_MODULES_ROOT
+    relative to the current directory."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_sync_stem_")
+        self._orig_cwd = os.getcwd()
+        os.chdir(self._tmpdir)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def write(self, rel_path: str, content: str) -> Path:
+        p = Path(self._tmpdir) / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def test_bare_stem_resolves_to_single_match(self):
+        self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
+        self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync("foo", dry_run=True)
+        self.assertIn("already matches", buf.getvalue())
+
+    def test_name_with_adoc_suffix_resolves(self):
+        self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
+        self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync("foo.adoc", dry_run=True)
+        self.assertIn("already matches", buf.getvalue())
+
+    def test_ambiguous_stem_across_modules_exits_with_candidate_list(self):
+        self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
+        self.write("en/modules/how-to/pages/foo.adoc", "== Title\n\nText.\n")
+
+        with self.assertRaises(SystemExit) as ctx:
+            dt.run_sync("foo", dry_run=True)
+        message = str(ctx.exception)
+        self.assertIn("matches multiple files", message)
+        self.assertIn("ROOT", message)
+        self.assertIn("how-to", message)
+
+    def test_unresolvable_stem_exits_with_clear_error(self):
+        self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
+
+        with self.assertRaises(SystemExit) as ctx:
+            dt.run_sync("no-such-page", dry_run=True)
+        self.assertIn("no page/partial matches stem", str(ctx.exception))
+
+    def test_full_path_still_takes_precedence_over_stem_search(self):
+        """An existing full path is used as-is, without going through stem
+        resolution at all -- so it works even where a bare stem would be
+        ambiguous."""
+        en_path = self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
+        self.write("en/modules/how-to/pages/foo.adoc", "== Title\n\nText.\n")
+        self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            dt.run_sync(str(en_path), dry_run=True)
+        self.assertIn("already matches", buf.getvalue())
+
+
 class RunSyncGitRewordTests(unittest.TestCase):
     """Integration test for the git-backed reworded-paragraph detection in
     run_sync: an EN paragraph reworded (not just extended) since RU was last

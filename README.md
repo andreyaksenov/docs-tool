@@ -188,8 +188,10 @@ Heuristic aligner, not a semantic merge — review its output before trusting it
 
 ```bash
 ./docs_tool.py --sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc
-./docs_tool.py --sync <path/to/en/file.adoc> -n   # dry run: print the diff instead of writing
+./docs_tool.py --sync analyzedb -n   # same file, by stem -- dry run: print the diff instead of writing
 ```
+
+`--sync`'s argument works the same way `--page NAME` does: the full relative path always works, or just the filename stem (or `name.adoc`) — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses. If a stem matches more than one file (e.g. the same filename in two different modules), pass the full path instead to disambiguate.
 
 Only ever writes the RU counterpart; never touches EN.
 
