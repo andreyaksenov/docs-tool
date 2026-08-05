@@ -32,7 +32,6 @@ than a real AsciiDoc parser and can misfire on legitimate content -- treat
 their output as a review list, not a hard gate.
 """
 import argparse
-import csv
 import difflib
 import os
 import re
@@ -148,7 +147,7 @@ def _load_external_components(specs):
 # {lookup_key: {"ru_display": {ru_translation, ...}, "patterns": [pattern, ...]}}
 # where each `pattern` is a tuple of compiled regexes (see _compile_glossary_pattern)
 # -- an entry is satisfied if the RU line matches every regex in any one
-# pattern. Multiple CSV rows sharing the same EN term (e.g. the two "session"
+# pattern. Multiple glossary rows sharing the same EN term (e.g. the two "session"
 # rows, or an abbreviation given its own row alongside the spelled-out term
 # like "WAL" next to "write-ahead logging") contribute additional
 # alternative patterns/translations under one merged key.
@@ -158,8 +157,8 @@ _GLOSSARY_STEM_TOKEN_RE = re.compile(r'^(.+)<>$')
 
 
 def _compile_glossary_pattern(ru_pattern: str):
-    """Compiles one ru_pattern CSV cell (format documented in
-    greengagedb-glossary.csv's header) into a tuple of regexes, one per
+    """Compiles one ru_pattern field (format documented in a
+    *-glossary.psv file's header) into a tuple of regexes, one per
     whitespace-separated token: a `word<>` token becomes a word-boundary
     stem-prefix match (tolerating any Russian declension/conjugation
     suffix, or none); a bare `word` token becomes a word-boundary exact
@@ -174,45 +173,49 @@ def _compile_glossary_pattern(ru_pattern: str):
 
 
 def _discover_default_glossaries():
-    """Default for --glossary when it isn't passed: every *-glossary.csv
+    """Default for --glossary when it isn't passed: every *-glossary.psv
     file directly under the current directory (the repo root docs_tool.py
     is run from -- same convention EN_MODULES_ROOT/RU_MODULES_ROOT rely on).
     Lets a docs repo that carries its own glossary file run
     --check-pages-terminology without spelling out the path every time.
     Sorted for stable, reproducible output; not recursive, so a glossary
     tucked away in a subdirectory still needs to be passed explicitly."""
-    return sorted(str(p) for p in Path(".").glob("*-glossary.csv"))
+    return sorted(str(p) for p in Path(".").glob("*-glossary.psv"))
 
 
 def _load_glossary(paths):
-    """Parses --glossary PATH CSV file(s) (columns en,ru,ru_pattern,note;
-    format documented in greengagedb-glossary.csv's own header) into
-    {lookup_key: {"ru_display": {...}, "patterns": [...]}}. `en` is used
-    verbatim (lowercased) as the lookup key -- unlike the retired plain-text
-    glossary format, there's no disambiguation note embedded in it to strip;
-    that context now lives in the (match-irrelevant) `note` column instead.
-    Multiple files, or multiple rows within one file, sharing the same `en`
-    are merged: the key accumulates every contributing row's
-    translation/pattern as an alternative, since a sense that can't be told
-    apart automatically (e.g. the two "session" rows) must accept either as
-    correct rather than guessing which one applies."""
+    """Parses --glossary PATH pipe-delimited file(s) (columns
+    en|ru|ru_pattern|note; format documented in greengagedb-glossary.psv's
+    own header) into {lookup_key: {"ru_display": {...}, "patterns": [...]}}.
+    "|" -- not "," -- is the column separator specifically so that ordinary
+    EN/RU prose (which routinely contains commas, but essentially never a
+    literal "|") never needs quoting/escaping the way the format's retired
+    CSV predecessor did. `en` is used verbatim (lowercased) as the lookup
+    key -- there's no disambiguation note embedded in it to strip; that
+    context lives in the (match-irrelevant) `note` column instead. Multiple
+    files, or multiple rows within one file, sharing the same `en` are
+    merged: the key accumulates every contributing row's translation/pattern
+    as an alternative, since a sense that can't be told apart automatically
+    (e.g. the two "session" rows) must accept either as correct rather than
+    guessing which one applies."""
     glossary = {}
     for path_str in paths or []:
         path = Path(path_str)
         text = _read_text(path)
         if text is None:
             sys.exit(f"error: --glossary {path_str}: file not found or unreadable")
-        # "#"-prefixed and blank lines are comments -- stripped before
-        # handing the rest to csv.reader, same convention as the retired
-        # plain-text glossary format used.
         data_lines = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
-        reader = csv.DictReader(data_lines)
-        for row in reader:
-            en_part = (row.get("en") or "").strip()
-            ru = (row.get("ru") or "").strip()
-            ru_pattern = (row.get("ru_pattern") or "").strip()
+        if not data_lines:
+            continue
+        for lineno, line in enumerate(data_lines[1:], 2):  # [0] is the en|ru|ru_pattern|note header
+            fields = line.split("|")
+            if len(fields) != 4:
+                print(f"warning: --glossary {path_str}:{lineno}: expected 4 '|'-separated fields, "
+                      f"got {len(fields)}, skipping: {line!r}", file=sys.stderr)
+                continue
+            en_part, ru, ru_pattern, _note = (f.strip() for f in fields)
             if not en_part or not ru_pattern:
-                print(f"warning: --glossary {path_str}: skipping row with missing en/ru_pattern: {row!r}",
+                print(f"warning: --glossary {path_str}:{lineno}: skipping row with missing en/ru_pattern: {line!r}",
                       file=sys.stderr)
                 continue
             key = en_part.lower()
@@ -3094,13 +3097,13 @@ def check_pages_terminology(verbose=False) -> bool:
     senses apart, so this deliberately doesn't try.
 
     Requires --glossary PATH (repeatable) -- or, if omitted, at least one
-    *-glossary.csv file discoverable in the current directory (see
+    *-glossary.psv file discoverable in the current directory (see
     _discover_default_glossaries, wired up in main()); exits with an error
     if neither is available, since that's a misconfiguration, not "nothing
     to check"."""
     if not GLOSSARY:
         sys.exit("error: --check-pages-terminology requires --glossary PATH "
-                  "(no *-glossary.csv found in the current directory to default to either)")
+                  "(no *-glossary.psv found in the current directory to default to either)")
 
     term_re = _build_glossary_term_re(GLOSSARY)
     ok = True
@@ -3912,7 +3915,9 @@ def build_parser():
                              "structure-parity, no-cyrillic, no-unicode-dashes, "
                              "no-invisible-chars, ru-latin-homoglyphs, table-cell-periods, "
                              "file-path-italics, terminology) to page(s)/partial(s) whose filename stem "
-                             "matches NAME, e.g. --page resource_groups. Repeatable. Pass the "
+                             "matches NAME (a trailing .adoc is stripped if present, so both "
+                             "resource_groups and resource_groups.adoc work) e.g. --page resource_groups. "
+                             "Repeatable. Pass the "
                              "special value UNCOMMITTED instead of a name to scope to whatever "
                              ".adoc files currently have uncommitted changes (staged, unstaged, "
                              "or untracked) per `git status` -- handy in a pre-commit hook. "
@@ -3927,10 +3932,10 @@ def build_parser():
                              "unchecked rather than reported broken.")
     parser.add_argument("--glossary", action="append", metavar="PATH",
                         help="With --check-pages-terminology: an EN-term-to-RU-translation "
-                             "glossary CSV file (columns en,ru,ru_pattern,note -- format "
-                             "documented in a *-glossary.csv file's own header) to check "
+                             "glossary file (pipe-delimited, columns en|ru|ru_pattern|note -- "
+                             "format documented in a *-glossary.psv file's own header) to check "
                              "pages/partials against. Repeatable -- entries from every file "
-                             "passed are merged. If omitted, defaults to every *-glossary.csv "
+                             "passed are merged. If omitted, defaults to every *-glossary.psv "
                              "file found directly under the current directory.")
 
     sync_group = parser.add_argument_group("sync")
