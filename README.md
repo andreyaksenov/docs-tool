@@ -35,32 +35,25 @@ python docs_tool.py --check-<name>
 
 ## Tab completion (optional)
 
-`docs_tool.py` supports shell tab completion for every flag, including all `--check-<name>` options — generated live from the script's own argument parser, so it never drifts out of sync when checks are added or renamed. This is optional; the tool works exactly the same without it.
+`docs_tool.py` supports shell tab completion for every flag. This is optional; the tool works exactly the same without it.
 
 ```bash
 pip install --user argcomplete   # one-time, not required to run the tool itself
 ```
 
-Then add this to `~/.zshrc` (or `~/.bashrc`):
+Add this to `~/.zshrc` (or `~/.bashrc`), then open a new shell (or `source` it):
 
 ```bash
 eval "$(python3 -m argcomplete.scripts.register_python_argcomplete docs_tool.py)"
 ```
 
-Two details that matter here:
-
-- Register the **bare filename** `docs_tool.py`, not `./docs_tool.py`. zsh resolves any path-qualified command (`./docs_tool.py`, `../foo/docs_tool.py`, an absolute path, ...) down to its basename before looking up which completer to run, so a registration under `./docs_tool.py` silently never matches and completion just beeps.
-- The `python3 -m ...` form is used instead of the `register-python-argcomplete` binary because `pip install --user` often installs it to a directory that isn't on `$PATH` (e.g. `~/Library/Python/3.x/bin` on macOS); invoking the module directly sidesteps that.
-
-Open a new shell (or `source ~/.zshrc`), then:
-
 ```bash
 ./docs_tool.py --check-<TAB>
 ```
 
-lists every matching `--check-*` flag (as well as `--all-checks`, `--list-checks`, etc.). If `argcomplete` isn't installed, the script silently skips wiring it up and runs as normal.
+lists every matching `--check-*` flag. `--page` and `--sync` also complete with real filenames and directories from the current site, e.g. `--page reference/gp_toolkit/gp_ao<TAB>`.
 
-`--page` and `--sync` also complete with real filenames — every EN/RU `pages`/`partials` `.adoc` file discovered in the current directory's Antora tree, e.g. `--page resource<TAB>` completes to `--page resource_groups.adoc`. `--page` additionally completes with directories, e.g. `--page reference/sql<TAB>` completes to `--page reference/sql_commands`. Since discovery reads the actual site, this only works from the repo root (same as everything else).
+Known issue on zsh: completing right after typing a trailing `/` yourself can fall back to normal file completion — completing before the `/` (e.g. `reference/gp_tool<TAB>`) works reliably instead.
 
 ## Usage
 
@@ -112,7 +105,7 @@ Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-tr
 ./docs_tool.py --check-pages-translation -v --page resource_groups.adoc
 ```
 
-`NAME` must end with `.adoc` — AsciiDoc/Antora has no separate topic-id distinct from the filename, so unlike some other doc systems there's no shorter identifier to accept; matching is by filename only, not the full path, so the same name in two different modules is scoped together.
+`NAME` must end with `.adoc` — AsciiDoc/Antora has no separate topic-id distinct from the filename, so unlike some other doc systems there's no shorter identifier to accept; matching is by the path relative to `pages`/`partials` (never the module itself), so the same name in two different modules is scoped together. If a bare filename matches more than one file (e.g. the same name under two different directories), qualify it with as much of the trailing directory path as needed to disambiguate, e.g. `--page reference/gp_toolkit/gp_ao.adoc` or just `--page gp_toolkit/gp_ao.adoc`.
 
 A `NAME` that *doesn't* end with `.adoc` scopes a whole directory instead, recursively, e.g. `--page reference/sql_commands` matches every page/partial under any module's `pages/reference/sql_commands/` or `partials/reference/sql_commands/` (and any subdirectory below it) — matched by the path relative to `pages`/`partials`, so again the same directory in different modules is scoped together. File and directory forms can be mixed across repeated `--page` flags:
 
@@ -199,7 +192,7 @@ Heuristic aligner, not a semantic merge — review its output before trusting it
 ./docs_tool.py --sync analyzedb.adoc -n   # same file, by bare filename -- dry run: print the diff instead of writing
 ```
 
-`--sync`'s argument works the same way `--page NAME` does: it must end with `.adoc`, and can be either the full relative path or just the bare filename — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses. If a filename matches more than one file (e.g. the same name in two different modules), pass the full path instead to disambiguate.
+`--sync`'s argument works the same way `--page NAME` does: it must end with `.adoc`, and can be either the full relative path or just the bare filename — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses. If a filename matches more than one file (e.g. the same name under two different directories), qualify it with trailing directory path segments to disambiguate, same as `--page`, or pass the full path.
 
 Only ever writes the RU counterpart; never touches EN.
 
