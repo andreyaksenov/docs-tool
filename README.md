@@ -60,7 +60,7 @@ Open a new shell (or `source ~/.zshrc`), then:
 
 lists every matching `--check-*` flag (as well as `--all-checks`, `--list-checks`, etc.). If `argcomplete` isn't installed, the script silently skips wiring it up and runs as normal.
 
-`--page` and `--sync` also complete with real filenames — every EN/RU `pages`/`partials` `.adoc` file discovered in the current directory's Antora tree, e.g. `--page resource<TAB>` completes to `--page resource_groups.adoc`. Since discovery reads the actual site, this only works from the repo root (same as everything else).
+`--page` and `--sync` also complete with real filenames — every EN/RU `pages`/`partials` `.adoc` file discovered in the current directory's Antora tree, e.g. `--page resource<TAB>` completes to `--page resource_groups.adoc`. `--page` additionally completes with directories, e.g. `--page reference/sql<TAB>` completes to `--page reference/sql_commands`. Since discovery reads the actual site, this only works from the repo root (same as everything else).
 
 ## Usage
 
@@ -113,6 +113,12 @@ Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-tr
 ```
 
 `NAME` must end with `.adoc` — AsciiDoc/Antora has no separate topic-id distinct from the filename, so unlike some other doc systems there's no shorter identifier to accept; matching is by filename only, not the full path, so the same name in two different modules is scoped together.
+
+A `NAME` that *doesn't* end with `.adoc` scopes a whole directory instead, recursively, e.g. `--page reference/sql_commands` matches every page/partial under any module's `pages/reference/sql_commands/` or `partials/reference/sql_commands/` (and any subdirectory below it) — matched by the path relative to `pages`/`partials`, so again the same directory in different modules is scoped together. File and directory forms can be mixed across repeated `--page` flags:
+
+```bash
+./docs_tool.py --check-pages-translation -v --page reference/sql_commands
+```
 
 `--check-tags-orphaned` also honors `--page`, but only to narrow *which files' own `tag::`/`end::` regions get reported on* — the usage scan (which file includes which tag) still covers the whole site regardless, since a tag defined in the filtered-in file can be pulled in from any other page:
 

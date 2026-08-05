@@ -548,7 +548,7 @@ class TagsOrphanedTests(FixtureTestCase):
         self.write("en/modules/ROOT/partials/other.adoc", "tag::other_tag[]\nbody\nend::other_tag[]\n")
         self.write("en/modules/ROOT/pages/user.adoc", "include::partial$kept.adoc[tag=kept_tag]\n")
 
-        dt._PAGE_FILTER = {"kept"}
+        dt._PAGE_FILTER = {"names": {"kept"}, "dirs": set()}
         ok, output = self.run_check(dt.check_tags_orphaned)
         self.assertTrue(ok, output)  # kept_tag used (from user.adoc, filtered out of the report but still scanned)
         self.assertNotIn("other_tag", output)  # other.adoc's own orphaned tag is filtered out of the report
@@ -1007,6 +1007,71 @@ class PagesTranslationTests(FixtureTestCase):
         self.assertIn("SUSPECT", output)
 
 
+class ContentRelpathTests(unittest.TestCase):
+    def test_finds_subpath_after_pages(self):
+        p = Path("en/modules/ROOT/pages/reference/sql_commands/create_role.adoc")
+        self.assertEqual(dt._content_relpath(p), Path("reference/sql_commands/create_role.adoc"))
+
+    def test_finds_subpath_after_partials(self):
+        p = Path("en/modules/ROOT/partials/reference/shared.adoc")
+        self.assertEqual(dt._content_relpath(p), Path("reference/shared.adoc"))
+
+    def test_top_level_page_has_no_leading_directory(self):
+        p = Path("en/modules/ROOT/pages/index.adoc")
+        self.assertEqual(dt._content_relpath(p), Path("index.adoc"))
+
+    def test_none_when_neither_pages_nor_partials_in_path(self):
+        self.assertIsNone(dt._content_relpath(Path("en/modules/ROOT/examples/foo.sql")))
+
+
+class PageAllowedDirectoryFilterTests(unittest.TestCase):
+    """_page_allowed's directory-matching half of --page: recursive,
+    content-relative, module-agnostic."""
+
+    def setUp(self):
+        self._orig_page_filter = dt._PAGE_FILTER
+
+    def tearDown(self):
+        dt._PAGE_FILTER = self._orig_page_filter
+
+    def test_direct_child_matches(self):
+        dt._PAGE_FILTER = {"names": set(), "dirs": {("reference", "sql_commands")}}
+        p = Path("en/modules/ROOT/pages/reference/sql_commands/create_role.adoc")
+        self.assertTrue(dt._page_allowed(p))
+
+    def test_nested_grandchild_also_matches_recursively(self):
+        dt._PAGE_FILTER = {"names": set(), "dirs": {("reference",)}}
+        p = Path("en/modules/ROOT/pages/reference/sql_commands/create_role.adoc")
+        self.assertTrue(dt._page_allowed(p))
+
+    def test_sibling_directory_does_not_match(self):
+        dt._PAGE_FILTER = {"names": set(), "dirs": {("reference", "sql_commands")}}
+        p = Path("en/modules/ROOT/pages/reference/utils/gpstate.adoc")
+        self.assertFalse(dt._page_allowed(p))
+
+    def test_segment_prefix_does_not_falsely_match(self):
+        """"reference/sql" must not match "reference/sql_commands/..." --
+        matching is by whole path segment, not a raw string prefix."""
+        dt._PAGE_FILTER = {"names": set(), "dirs": {("reference", "sql")}}
+        p = Path("en/modules/ROOT/pages/reference/sql_commands/create_role.adoc")
+        self.assertFalse(dt._page_allowed(p))
+
+    def test_matches_regardless_of_module_or_language(self):
+        dt._PAGE_FILTER = {"names": set(), "dirs": {("reference", "sql_commands")}}
+        for root in (
+            "en/modules/ROOT/pages/reference/sql_commands/create_role.adoc",
+            "ru/modules/ROOT/pages/reference/sql_commands/create_role.adoc",
+            "en/modules/how-to/pages/reference/sql_commands/create_role.adoc",
+        ):
+            self.assertTrue(dt._page_allowed(Path(root)), root)
+
+    def test_file_filter_and_directory_filter_both_apply(self):
+        dt._PAGE_FILTER = {"names": {"index"}, "dirs": {("reference",)}}
+        self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/index.adoc")))
+        self.assertTrue(dt._page_allowed(Path("en/modules/ROOT/pages/reference/gpstate.adoc")))
+        self.assertFalse(dt._page_allowed(Path("en/modules/ROOT/pages/unrelated.adoc")))
+
+
 class PagesTerminologyTests(FixtureTestCase):
     def _set_glossary(self, *rows: str):
         """Each row is an "en|ru|ru_pattern" pipe-delimited line (no note, no trailing newline)."""
@@ -1069,7 +1134,19 @@ class PagesTerminologyTests(FixtureTestCase):
         self.write("ru/modules/ROOT/pages/keep.adoc", "Подключитесь к серверу.\n")
         self.write("en/modules/ROOT/pages/skip.adoc", "Connect to the host.\n")
         self.write("ru/modules/ROOT/pages/skip.adoc", "Подключитесь к серверу.\n")
-        dt._PAGE_FILTER = {"keep"}
+        dt._PAGE_FILTER = {"names": {"keep"}, "dirs": set()}
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertIn("keep.adoc", output)
+        self.assertNotIn("skip.adoc", output)
+
+    def test_page_filter_scopes_check_by_directory(self):
+        self._set_glossary("host|хост|хост<>")
+        self.write("en/modules/ROOT/pages/reference/sql_commands/keep.adoc", "Connect to the host.\n")
+        self.write("ru/modules/ROOT/pages/reference/sql_commands/keep.adoc", "Подключитесь к серверу.\n")
+        self.write("en/modules/ROOT/pages/reference/utils/skip.adoc", "Connect to the host.\n")
+        self.write("ru/modules/ROOT/pages/reference/utils/skip.adoc", "Подключитесь к серверу.\n")
+        dt._PAGE_FILTER = {"names": set(), "dirs": {("reference", "sql_commands")}}
         ok, output = self.run_check(dt.check_pages_terminology)
         self.assertFalse(ok)
         self.assertIn("keep.adoc", output)
@@ -1290,40 +1367,50 @@ class RunSyncStemResolutionTests(unittest.TestCase):
         self.assertIn("already matches", buf.getvalue())
 
 
-class MainPageRequiresAdocSuffixTests(unittest.TestCase):
-    """CLI-level validation in main(): --page NAME must end with .adoc (or
-    be UNCOMMITTED) -- AsciiDoc/Antora has no separate topic-id distinct
-    from the filename, so a bare stem is rejected rather than silently
-    accepted. This check happens before any filesystem/module scanning, so
-    no fixture tree is needed -- just isolate real argv/cwd."""
+class MainPageValueFormTests(unittest.TestCase):
+    """CLI-level routing in main(): a --page NAME ending in .adoc is a file
+    filter, one that doesn't is a directory filter (AsciiDoc/Antora has no
+    separate topic-id, so there's no ambiguity to worry about), and
+    UNCOMMITTED is still the special sentinel. This routing happens before
+    any filesystem/module scanning, so no fixture tree is needed -- just
+    isolate real argv/cwd and the _PAGE_FILTER global."""
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_main_page_")
         self._orig_cwd = os.getcwd()
         os.chdir(self._tmpdir)
         self._orig_argv = sys.argv
+        self._orig_page_filter = dt._PAGE_FILTER
 
     def tearDown(self):
         sys.argv = self._orig_argv
+        dt._PAGE_FILTER = self._orig_page_filter
         os.chdir(self._orig_cwd)
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
-    def test_bare_stem_is_rejected(self):
-        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups"]
-        with self.assertRaises(SystemExit) as ctx:
-            dt.main()
-        self.assertIn("must end with .adoc", str(ctx.exception))
-
-    def test_name_with_adoc_suffix_is_not_rejected(self):
-        """Passes validation and proceeds to actually run the check (against
-        an empty tree, so it just finds nothing) -- proving the .adoc-suffixed
-        form specifically does NOT hit the "must end with .adoc" exit path."""
+    def test_name_with_adoc_suffix_becomes_a_file_filter(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups.adoc"]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            with self.assertRaises(SystemExit) as ctx:
+            with self.assertRaises(SystemExit):
                 dt.main()
-        self.assertNotIn("must end with .adoc", str(ctx.exception))
+        self.assertEqual(dt._PAGE_FILTER, {"names": {"resource_groups"}, "dirs": set()})
+
+    def test_bare_name_becomes_a_directory_filter(self):
+        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands"]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit):
+                dt.main()
+        self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
+
+    def test_trailing_slash_on_directory_is_ignored(self):
+        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands/"]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit):
+                dt.main()
+        self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
 
     def test_uncommitted_sentinel_still_accepted(self):
         subprocess.run(["git", "init", "-q"], check=True)
@@ -1332,7 +1419,7 @@ class MainPageRequiresAdocSuffixTests(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             with self.assertRaises(SystemExit) as ctx:
                 dt.main()
-        self.assertNotIn("must end with .adoc", str(ctx.exception))
+        self.assertIn("no uncommitted", str(buf.getvalue()) + str(ctx.exception))
 
 
 class CompletePageNameTests(FixtureTestCase):
@@ -1350,11 +1437,21 @@ class CompletePageNameTests(FixtureTestCase):
         self.assertEqual(names, sorted(names))  # sorted for stable completion order
         self.assertEqual(set(names), {"foo.adoc", "bar.adoc", "baz.adoc"})
 
-    def test_page_action_and_sync_action_both_wired_to_the_completer(self):
+    def test_page_action_and_sync_action_wired_to_the_right_completer(self):
+        """--page also accepts a directory (see _content_relpath), --sync
+        doesn't -- each gets the completer matching what it actually accepts."""
         parser = dt.build_parser()
         actions_by_flag = {opt: a for a in parser._actions for opt in a.option_strings}
-        self.assertIs(actions_by_flag["--page"].completer, dt._complete_page_name)
+        self.assertIs(actions_by_flag["--page"].completer, dt._complete_page_or_dir_name)
         self.assertIs(actions_by_flag["--sync"].completer, dt._complete_page_name)
+
+    def test_dir_completer_includes_every_nesting_level(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/reference/sql_commands/create_role.adoc", "")
+
+        names, dirs = dt._discover_page_completions()
+        self.assertIn("create_role.adoc", names)
+        self.assertEqual(dirs, {"reference", "reference/sql_commands"})
 
 
 class RunSyncGitRewordTests(unittest.TestCase):

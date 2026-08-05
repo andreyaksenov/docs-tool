@@ -261,17 +261,46 @@ def _iter_files(root: Path, suffix: str = None):
             yield p
 
 
-# Optional --page filter (set of file stems, e.g. {"resource_groups"}), or
-# None when not requested. Only applied at the per-file "report" loops of
-# checks that compare an en/ru file pair directly -- corpus-building loops
-# (broken-refs' partial-includer map, orphaned pages/examples/images) scan
-# the whole site regardless, since narrowing those would just make them
-# wrong rather than faster.
+# Optional --page filter, or None when not requested:
+# {"names": {file stem, ...}, "dirs": {dir-parts tuple, ...}}
+# "names" matches a file by exact stem (from a NAME ending in .adoc);
+# "dirs" matches every file under that content-relative directory,
+# recursively (from a NAME not ending in .adoc -- see main()). Only
+# applied at the per-file "report" loops of checks that compare an en/ru
+# file pair directly -- corpus-building loops (broken-refs' partial-includer
+# map, orphaned pages/examples/images) scan the whole site regardless, since
+# narrowing those would just make them wrong rather than faster.
 _PAGE_FILTER = None
 
 
+def _content_relpath(path: Path):
+    """`path` relative to the nearest ancestor `pages/` or `partials/`
+    directory, e.g. Path("reference/sql_commands/create_role.adoc") for
+    .../en/modules/ROOT/pages/reference/sql_commands/create_role.adoc --
+    the content-relative path a directory --page filter is matched
+    against, so the same subtree is scoped the same way regardless of
+    which module or language it's found under. None if `path` isn't under
+    either (not expected in practice, since this is only ever called on
+    files this tool itself discovered under pages/ or partials/)."""
+    parts = path.parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] in ("pages", "partials"):
+            return Path(*parts[i + 1:])
+    return None
+
+
 def _page_allowed(path: Path) -> bool:
-    return _PAGE_FILTER is None or path.stem in _PAGE_FILTER
+    if _PAGE_FILTER is None:
+        return True
+    if path.stem in _PAGE_FILTER["names"]:
+        return True
+    if not _PAGE_FILTER["dirs"]:
+        return False
+    relpath = _content_relpath(path)
+    if relpath is None:
+        return False
+    dir_parts = relpath.parts[:-1]
+    return any(dir_parts[:len(d)] == d for d in _PAGE_FILTER["dirs"])
 
 
 def _git_uncommitted_adoc_stems():
@@ -3923,19 +3952,42 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
 # CLI
 # --------------------------------------------------------------------------
 
-def _complete_page_name(**kwargs):
-    """argcomplete completer for --page/--sync: every EN or RU pages/partials
-    .adoc filename (bare, no path -- matching what NAME actually accepts)
-    across all discovered modules, deduplicated. A no-op unless argcomplete
-    is installed and active (see Tab completion in the README); harmless to
-    always attach."""
+def _discover_page_completions():
+    """(names, dirs) -- every EN/RU pages/partials .adoc filename, and
+    every content-relative directory (see _content_relpath) at every
+    nesting level, across all discovered modules. Shared source for both
+    --page (accepts files and directories) and --sync (files only) tab
+    completion. A no-op unless argcomplete is installed and active (see
+    Tab completion in the README); harmless to always attach."""
     names = set()
+    dirs = set()
     for _, en_root, ru_root in module_roots():
         for root in (en_root, ru_root):
             for subdir in ("pages", "partials"):
                 for f in _iter_files(root / subdir, ".adoc"):
                     names.add(f.name)
+                    rel = _content_relpath(f)
+                    if rel:
+                        parts = rel.parts[:-1]
+                        for i in range(1, len(parts) + 1):
+                            dirs.add("/".join(parts[:i]))
+    return names, dirs
+
+
+def _complete_page_name(**kwargs):
+    """argcomplete completer for --sync: every EN/RU pages/partials .adoc
+    filename (bare, no path -- matching what EN_FILE accepts), since
+    --sync's single-file target can't be a directory."""
+    names, _ = _discover_page_completions()
     return sorted(names)
+
+
+def _complete_page_or_dir_name(**kwargs):
+    """argcomplete completer for --page: filenames plus every
+    content-relative directory, since --page can also scope a whole
+    subtree (unlike --sync's single-file-only target)."""
+    names, dirs = _discover_page_completions()
+    return sorted(names | dirs)
 
 
 def build_parser():
@@ -3961,14 +4013,18 @@ def build_parser():
                              "file-path-italics, terminology) to page(s)/partial(s) whose filename "
                              "matches NAME, e.g. --page resource_groups.adoc -- NAME must end with .adoc "
                              "(AsciiDoc/Antora has no separate topic-id, the filename is the identifier). "
-                             "Repeatable. Pass the "
+                             "Alternatively, a NAME not ending in .adoc scopes every page/partial under "
+                             "that content-relative directory instead, recursively, in any module, e.g. "
+                             "--page reference/sql_commands matches every file under any module's "
+                             "pages/reference/sql_commands/ or partials/reference/sql_commands/. "
+                             "Repeatable, and file/directory forms can be mixed. Pass the "
                              "special value UNCOMMITTED instead of a name to scope to whatever "
                              ".adoc files currently have uncommitted changes (staged, unstaged, "
                              "or untracked) per `git status` -- handy in a pre-commit hook. "
                              "Whole-site checks (broken-refs, orphaned, nav/structure parity of "
                              "nav.adoc) are unaffected and always scan everything. Optional -- "
                              "omit to check the whole site as before.")
-    page_action.completer = _complete_page_name
+    page_action.completer = _complete_page_or_dir_name
     parser.add_argument("--external-root", action="append", metavar="NAME=PATH",
                         help="With --check-pages-broken-refs: resolve xref:/include:: targets "
                              "against another Antora component's repo checked out locally, e.g. "
@@ -4036,19 +4092,19 @@ def main():
         return
 
     if args.page:
-        stems = set()
+        names = set()
+        dirs = set()
         for name in args.page:
             if name == "UNCOMMITTED":
-                stems |= _git_uncommitted_adoc_stems()
+                names |= _git_uncommitted_adoc_stems()
             elif name.endswith(".adoc"):
-                stems.add(name[:-len(".adoc")])
+                names.add(name[:-len(".adoc")])
             else:
-                sys.exit(f"error: --page {name!r} must end with .adoc (or be UNCOMMITTED) -- "
-                          f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
-        if not stems:
+                dirs.add(tuple(p for p in name.split("/") if p))
+        if not names and not dirs:
             print("OK: no uncommitted .adoc changes to check.")
             sys.exit(0)
-        _PAGE_FILTER = stems
+        _PAGE_FILTER = {"names": names, "dirs": dirs}
 
     selected = list(CHECKS) if args.all_checks else [
         name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
