@@ -104,18 +104,18 @@ Exits `0` if every selected check passed, `1` if any check found something.
 ### Scoping to specific pages with `--page`
 
 By default, every check scans the whole site.
-Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-terminology` — to just the page(s)/partial(s) whose filename stem matches `NAME`, e.g.:
+Pass `--page NAME` (repeatable) to limit the per-file EN/RU checks — `pages-translation`, `pages-line-parity`, `pages-structure-parity`, `pages-no-cyrillic`, `pages-no-unicode-dashes`, `pages-no-invisible-chars`, `pages-ru-latin-homoglyphs`, `pages-stray-backticks`, `pages-unbalanced-delimiters`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-terminology` — to just the page(s)/partial(s) whose filename matches `NAME`, e.g.:
 
 ```bash
-./docs_tool.py --check-pages-translation -v --page resource_groups
+./docs_tool.py --check-pages-translation -v --page resource_groups.adoc
 ```
 
-`NAME` matches by filename stem, so either `resource_groups` or `resource_groups.adoc` works the same way — a trailing `.adoc` is stripped if present, which is handy for pasting a filename straight from a listing or an editor tab without trimming it first.
+`NAME` must end with `.adoc` — AsciiDoc/Antora has no separate topic-id distinct from the filename, so unlike some other doc systems there's no shorter identifier to accept; matching is by filename only, not the full path, so the same name in two different modules is scoped together.
 
 `--check-tags-orphaned` also honors `--page`, but only to narrow *which files' own `tag::`/`end::` regions get reported on* — the usage scan (which file includes which tag) still covers the whole site regardless, since a tag defined in the filtered-in file can be pulled in from any other page:
 
 ```bash
-./docs_tool.py --check-tags-orphaned --page external_data_formats
+./docs_tool.py --check-tags-orphaned --page external_data_formats.adoc
 ```
 
 Whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) build a site-wide corpus (nav links, partial includers) before reporting, so `--page` doesn't narrow them at all — they always scan and report on everything regardless.
@@ -188,10 +188,10 @@ Heuristic aligner, not a semantic merge — review its output before trusting it
 
 ```bash
 ./docs_tool.py --sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc
-./docs_tool.py --sync analyzedb -n   # same file, by stem -- dry run: print the diff instead of writing
+./docs_tool.py --sync analyzedb.adoc -n   # same file, by bare filename -- dry run: print the diff instead of writing
 ```
 
-`--sync`'s argument works the same way `--page NAME` does: the full relative path always works, or just the filename stem (or `name.adoc`) — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses. If a stem matches more than one file (e.g. the same filename in two different modules), pass the full path instead to disambiguate.
+`--sync`'s argument works the same way `--page NAME` does: it must end with `.adoc`, and can be either the full relative path or just the bare filename — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses. If a filename matches more than one file (e.g. the same name in two different modules), pass the full path instead to disambiguate.
 
 Only ever writes the RU counterpart; never touches EN.
 

@@ -3776,8 +3776,9 @@ def _resolve_page_stem(stem: str):
     """Every EN pages/partials .adoc file (across all discovered modules)
     whose filename stem matches `stem` -- the same stem-matching convention
     --page's NAME already uses (see _page_allowed). Backs --sync's fallback
-    when its argument isn't an existing path: lets --sync take a bare name
-    like --page does, instead of always requiring the full relative path."""
+    when its argument (already validated to end in .adoc) isn't an existing
+    path: lets --sync take a bare filename like "analyzedb.adoc" instead of
+    always requiring the full relative path."""
     matches = []
     for _, en_root, _ in module_roots():
         for subdir in ("pages", "partials"):
@@ -3788,20 +3789,22 @@ def _resolve_page_stem(stem: str):
 
 
 def run_sync(en_file: str, dry_run: bool, since: str = None):
+    if not en_file.endswith(".adoc"):
+        sys.exit(f"error: --sync {en_file!r} must end with .adoc -- "
+                  f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
     en_path = Path(en_file)
     if not en_path.is_file():
-        # Not an existing path -- try resolving it as a --page-style stem
-        # (bare name, or name.adoc) against the discovered EN pages/partials
-        # instead of immediately failing.
-        stem = en_file[:-len(".adoc")] if en_file.endswith(".adoc") else en_file
-        matches = _resolve_page_stem(stem)
+        # Not an existing path -- try resolving it as a --page-style bare
+        # filename (e.g. "analyzedb.adoc") against the discovered EN
+        # pages/partials instead of immediately failing.
+        matches = _resolve_page_stem(en_path.stem)
         if len(matches) == 1:
             en_path = matches[0]
         elif len(matches) > 1:
             listing = "\n".join(f"  {m}" for m in sorted(str(m) for m in matches))
             sys.exit(f"error: --sync {en_file!r} matches multiple files -- pass a full path to disambiguate:\n{listing}")
         else:
-            sys.exit(f"error: not a file, and no page/partial matches stem {stem!r}: {en_path}")
+            sys.exit(f"error: not a file, and no page/partial named {en_file!r}: {en_path}")
 
     ru_path = ru_path_for(en_path)
     en_lines = (_read_text(en_path) or "").splitlines()
@@ -3940,9 +3943,9 @@ def build_parser():
                         help="Limit the per-file en/ru checks (translation, line-parity, "
                              "structure-parity, no-cyrillic, no-unicode-dashes, "
                              "no-invisible-chars, ru-latin-homoglyphs, table-cell-periods, "
-                             "file-path-italics, terminology) to page(s)/partial(s) whose filename stem "
-                             "matches NAME (a trailing .adoc is stripped if present, so both "
-                             "resource_groups and resource_groups.adoc work) e.g. --page resource_groups. "
+                             "file-path-italics, terminology) to page(s)/partial(s) whose filename "
+                             "matches NAME, e.g. --page resource_groups.adoc -- NAME must end with .adoc "
+                             "(AsciiDoc/Antora has no separate topic-id, the filename is the identifier). "
                              "Repeatable. Pass the "
                              "special value UNCOMMITTED instead of a name to scope to whatever "
                              ".adoc files currently have uncommitted changes (staged, unstaged, "
@@ -3967,12 +3970,13 @@ def build_parser():
     sync_group = parser.add_argument_group("sync")
     sync_group.add_argument("--sync", metavar="EN_FILE",
                             help="(beta) Align the RU counterpart of EN_FILE to match its current "
-                                 "structure/content. EN_FILE can be the full relative path (e.g. "
-                                 "en/modules/ROOT/pages/foo.adoc) or, like --page NAME, just the filename "
-                                 "stem or name.adoc -- resolved by searching all discovered modules' "
-                                 "pages/partials, same as --page; ambiguous stems (matching more than one "
-                                 "file) require the full path instead. Heuristic aligner, not a semantic "
-                                 "merge -- review its output before trusting it.")
+                                 "structure/content. EN_FILE must end with .adoc, and can be the full "
+                                 "relative path (e.g. en/modules/ROOT/pages/foo.adoc) or, like --page NAME, "
+                                 "just the bare filename (e.g. foo.adoc) -- resolved by searching all "
+                                 "discovered modules' pages/partials, same as --page; a filename matching "
+                                 "more than one file requires the full path instead to disambiguate. "
+                                 "Heuristic aligner, not a semantic merge -- review its output before "
+                                 "trusting it.")
     sync_group.add_argument("-n", "--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
     sync_group.add_argument("--since", metavar="REF",
@@ -4019,8 +4023,11 @@ def main():
         for name in args.page:
             if name == "UNCOMMITTED":
                 stems |= _git_uncommitted_adoc_stems()
+            elif name.endswith(".adoc"):
+                stems.add(name[:-len(".adoc")])
             else:
-                stems.add(name[:-len(".adoc")] if name.endswith(".adoc") else name)
+                sys.exit(f"error: --page {name!r} must end with .adoc (or be UNCOMMITTED) -- "
+                          f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
         if not stems:
             print("OK: no uncommitted .adoc changes to check.")
             sys.exit(0)

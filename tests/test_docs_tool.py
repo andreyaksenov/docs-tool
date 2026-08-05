@@ -1219,10 +1219,10 @@ class RunSyncTests(unittest.TestCase):
 
 class RunSyncStemResolutionTests(unittest.TestCase):
     """--sync's fallback: when its argument isn't an existing path, resolve
-    it as a --page-style stem (or name.adoc) against discovered EN
-    pages/partials, same lookup --page uses. Needs a real cwd change (unlike
-    RunSyncTests) since module_roots() resolves EN_MODULES_ROOT/RU_MODULES_ROOT
-    relative to the current directory."""
+    it as a bare filename (must end in .adoc, same as --page NAME) against
+    discovered EN pages/partials, same lookup --page uses. Needs a real cwd
+    change (unlike RunSyncTests) since module_roots() resolves
+    EN_MODULES_ROOT/RU_MODULES_ROOT relative to the current directory."""
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_sync_stem_")
@@ -1239,16 +1239,7 @@ class RunSyncStemResolutionTests(unittest.TestCase):
         p.write_text(content, encoding="utf-8")
         return p
 
-    def test_bare_stem_resolves_to_single_match(self):
-        self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
-        self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
-
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            dt.run_sync("foo", dry_run=True)
-        self.assertIn("already matches", buf.getvalue())
-
-    def test_name_with_adoc_suffix_resolves(self):
+    def test_bare_filename_with_adoc_suffix_resolves(self):
         self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
         self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
 
@@ -1257,28 +1248,38 @@ class RunSyncStemResolutionTests(unittest.TestCase):
             dt.run_sync("foo.adoc", dry_run=True)
         self.assertIn("already matches", buf.getvalue())
 
-    def test_ambiguous_stem_across_modules_exits_with_candidate_list(self):
+    def test_name_without_adoc_suffix_is_rejected(self):
+        """AsciiDoc/Antora has no separate topic-id -- the filename is the
+        identifier, so a bare stem (no .adoc) must be rejected outright,
+        not silently treated as a stem to search for."""
+        self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
+
+        with self.assertRaises(SystemExit) as ctx:
+            dt.run_sync("foo", dry_run=True)
+        self.assertIn("must end with .adoc", str(ctx.exception))
+
+    def test_ambiguous_filename_across_modules_exits_with_candidate_list(self):
         self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
         self.write("en/modules/how-to/pages/foo.adoc", "== Title\n\nText.\n")
 
         with self.assertRaises(SystemExit) as ctx:
-            dt.run_sync("foo", dry_run=True)
+            dt.run_sync("foo.adoc", dry_run=True)
         message = str(ctx.exception)
         self.assertIn("matches multiple files", message)
         self.assertIn("ROOT", message)
         self.assertIn("how-to", message)
 
-    def test_unresolvable_stem_exits_with_clear_error(self):
+    def test_unresolvable_filename_exits_with_clear_error(self):
         self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
 
         with self.assertRaises(SystemExit) as ctx:
-            dt.run_sync("no-such-page", dry_run=True)
-        self.assertIn("no page/partial matches stem", str(ctx.exception))
+            dt.run_sync("no-such-page.adoc", dry_run=True)
+        self.assertIn("no page/partial named", str(ctx.exception))
 
-    def test_full_path_still_takes_precedence_over_stem_search(self):
-        """An existing full path is used as-is, without going through stem
-        resolution at all -- so it works even where a bare stem would be
-        ambiguous."""
+    def test_full_path_still_takes_precedence_over_filename_search(self):
+        """An existing full path is used as-is, without going through
+        filename resolution at all -- so it works even where a bare
+        filename would be ambiguous."""
         en_path = self.write("en/modules/ROOT/pages/foo.adoc", "== Title\n\nText.\n")
         self.write("en/modules/how-to/pages/foo.adoc", "== Title\n\nText.\n")
         self.write("ru/modules/ROOT/pages/foo.adoc", "== Заголовок\n\nТекст.\n")
@@ -1287,6 +1288,51 @@ class RunSyncStemResolutionTests(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             dt.run_sync(str(en_path), dry_run=True)
         self.assertIn("already matches", buf.getvalue())
+
+
+class MainPageRequiresAdocSuffixTests(unittest.TestCase):
+    """CLI-level validation in main(): --page NAME must end with .adoc (or
+    be UNCOMMITTED) -- AsciiDoc/Antora has no separate topic-id distinct
+    from the filename, so a bare stem is rejected rather than silently
+    accepted. This check happens before any filesystem/module scanning, so
+    no fixture tree is needed -- just isolate real argv/cwd."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_main_page_")
+        self._orig_cwd = os.getcwd()
+        os.chdir(self._tmpdir)
+        self._orig_argv = sys.argv
+
+    def tearDown(self):
+        sys.argv = self._orig_argv
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_bare_stem_is_rejected(self):
+        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups"]
+        with self.assertRaises(SystemExit) as ctx:
+            dt.main()
+        self.assertIn("must end with .adoc", str(ctx.exception))
+
+    def test_name_with_adoc_suffix_is_not_rejected(self):
+        """Passes validation and proceeds to actually run the check (against
+        an empty tree, so it just finds nothing) -- proving the .adoc-suffixed
+        form specifically does NOT hit the "must end with .adoc" exit path."""
+        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups.adoc"]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+        self.assertNotIn("must end with .adoc", str(ctx.exception))
+
+    def test_uncommitted_sentinel_still_accepted(self):
+        subprocess.run(["git", "init", "-q"], check=True)
+        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "UNCOMMITTED"]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+        self.assertNotIn("must end with .adoc", str(ctx.exception))
 
 
 class RunSyncGitRewordTests(unittest.TestCase):
