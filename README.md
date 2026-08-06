@@ -37,15 +37,31 @@ python docs_tool.py --check-<name>
 
 `docs_tool.py` supports shell tab completion for every flag. This is optional; the tool works exactly the same without it.
 
-```bash
-pip install --user argcomplete   # one-time, not required to run the tool itself
-```
+- macOS (zsh) and most Linux distros with `pip` available:
 
-Add this to `~/.zshrc` (or `~/.bashrc`), then open a new shell (or `source` it):
+  ```bash
+  pip install --user argcomplete   # one-time, not required to run the tool itself
+  ```
 
-```bash
-eval "$(python3 -m argcomplete.scripts.register_python_argcomplete docs_tool.py)"
-```
+  Add this to `~/.zshrc` (or `~/.bashrc`), then open a new shell (or `source` it):
+
+  ```bash
+  eval "$(python3 -m argcomplete.scripts.register_python_argcomplete docs_tool.py)"
+  ```
+
+- Ubuntu/Debian (including WSL) ship a system package instead, since `pip install` is blocked outside a virtualenv by default:
+
+  ```bash
+  sudo apt install python3-argcomplete   # one-time, not required to run the tool itself
+  ```
+
+  Add this to `~/.bashrc`, then open a new shell (or `source` it):
+
+  ```bash
+  eval "$(register-python-argcomplete docs_tool.py)"
+  ```
+
+Either way:
 
 ```bash
 ./docs_tool.py --check-<TAB>
