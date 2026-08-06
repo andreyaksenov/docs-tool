@@ -37,7 +37,9 @@ option|параметр|параметр<>|
 endpoint security software|защитное программное обеспечение|защитн<> программн<> обеспечени<>|
 meta-command|метакоманда|метакоманд<>|
 backend|бэкенд|бэкенд<>|
+frontend/backend protocol|клиент-серверный протокол|клиент-серверн<> протокол<>|
 backup|бэкап|бэкап<>|
+backup|резервное копирование|резервн<> копирован<>|sense: backup as a process/mode (e.g. system backup mode, hot backup) rather than the artifact itself
 bare metal|bare metal|bare metal|do-not-translate
 cache|кеш|кеш<>|
 endpoint|эндпойнт|эндпойнт<>|
@@ -56,7 +58,8 @@ TCP port|TCP-порт|TCP-порт<>|
 submodule|подмодуль|подмодул<>|
 directory|каталог|каталог<>|
 Unix domain socket|сокет домена Unix|сокет<> домен<> Unix|
-connection|подключение|подключени<>|
+connection|подключение|подключени<>|sense: the client's act of connecting / a connection slot (e.g. max concurrent connections, TCP port used to connect)
+connection|соединение|соединени<>|sense: the link/channel itself (e.g. SSL connection, connection string, replication connection)
 CIDR notation|CIDR-нотация|CIDR-нотаци<>|
 plain text|обычный текст|обычн<> текст<>|
 Key distribution center|Key distribution center|Key distribution center|do-not-translate
@@ -83,7 +86,7 @@ partitioning|партиционирование|партиционировани
 unique constraint|ограничение уникальности|ограничени<> уникальност<>|
 not-null constraint|ограничение `NOT NULL`|ограничени<> NOT NULL|
 primary key constraint|ограничение первичного ключа|ограничени<> первичн<> ключ<>|
-check constraint|ограничение-проверка|ограничение-проверк<>|
+check constraint|ограничение-проверка|ограничени<> проверк<>|
 foreign key constraint|ограничение внешнего ключа|ограничени<> внешн<> ключ<>|
 relation|отношение|отношени<>|
 heap table|heap-таблица|heap-таблиц<>|
@@ -101,7 +104,7 @@ indexes on expressions|индексы по выражениям|индекс<> �
 multicolumn index|составной индекс|составн<> индекс<>|
 cardinality|кардинальность|кардинальност<>|
 an index on the column|индекс по столбцу|индекс<> столбц<>|
-join|соединение|соединени<>|
+join|соединение|соедин<>|
 product|товар|товар<>|
 breadth-first order|порядок "сначала в ширину"|порядок<> ширин<>|
 depth-first order|порядок "сначала в глубину"|порядок<> глубин<>|
@@ -120,9 +123,11 @@ parallel retrieve cursor|параллельный курсор|параллел�
 endpoint|конечная точка|конечн<> точк<>|
 WAL sender|процесс отправки WAL|процесс<> отправк<> WAL|
 write-ahead logging|журнал предзаписи|журнал<> предзапис<>|
+write-ahead logging|WAL|WAL|usage: acronym typically kept as-is in running prose instead of spelling out журнал предзаписи
 WAL|WAL|WAL|usage: kept as-is in prose, not spelled out
 content ID|идентификатор контента|идентификатор<> контент<>|
 enum type|тип-перечисление|тип-перечислени<>|
+enum type|тип перечисления|тип<> перечислени<>|sense: genitive construction used in flowing prose (vs the hyphenated тип-перечисление calque used in compact type-code bullet lists)
 web table|веб-таблица|веб-таблиц<>|
 foreign data wrapper|обертка сторонних данных|обертк<> сторонн<> данн<>|
 foreign server|сторонний сервер|сторонн<> сервер<>|
