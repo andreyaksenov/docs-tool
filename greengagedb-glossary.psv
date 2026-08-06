@@ -94,6 +94,8 @@ TOAST table|TOAST-таблица|TOAST-таблиц<>|
 append-optimized table|оптимизированная для добавления таблица|оптимизирован<> добавлен<> таблиц<>|
 compression|сжатие|сжати<>|
 partition|партиция|партици<>|
+partition|раздел|раздел<>|sense: window partition (the row subset addressed by `PARTITION BY` / `OVER`), as opposed to a table partition (see: партиция)
+window frame|рамка окна|рамк<>|only the "рамка" stem is required; "окна" is dropped in some concise mentions once established in context (see window_functions.adoc)
 subpartition|сабпартиция|сабпартици<>|
 root partitioned table|родительская партиционированная таблица|родительск<> партиционирован<> таблиц<>|
 staging table|staging-таблица|staging-таблиц<>|
@@ -105,6 +107,7 @@ multicolumn index|составной индекс|составн<> индекс<
 cardinality|кардинальность|кардинальност<>|
 an index on the column|индекс по столбцу|индекс<> столбц<>|
 join|соединение|соедин<>|
+self-join|самосоединение|самосоединени<>|compound noun doesn't share a word boundary with the bare "join" stem, needs its own row (established RU term, see select_join.adoc)
 product|товар|товар<>|
 breadth-first order|порядок "сначала в ширину"|порядок<> ширин<>|
 depth-first order|порядок "сначала в глубину"|порядок<> глубин<>|
