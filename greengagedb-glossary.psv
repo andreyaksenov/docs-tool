@@ -120,6 +120,8 @@ resource queue|ресурсная очередь|ресурсн<> очеред<>
 queued transaction|ожидающая в очереди транзакция|ожидающ<> очеред<> транзакци<>|
 workfile|spill-файл|spill-файл<>|
 parallel retrieve cursor|параллельный курсор|параллельн<> курсор<>|
+retrieve session|сессия извлечения|сесси<> извлечени<>|pinned instead of the generic session dual-sense: this is a login/auth session (sense 1), not a bounded maintenance operation (sense 2)
+retrieve connection|сессия извлечения|сесси<> извлечени<>|EN distinguishes retrieve connection from retrieve session, but this docs set deliberately translates both as "сессия извлечения" (see retrieve session)
 endpoint|конечная точка|конечн<> точк<>|
 WAL sender|процесс отправки WAL|процесс<> отправк<> WAL|
 write-ahead logging|журнал предзаписи|журнал<> предзапис<>|
