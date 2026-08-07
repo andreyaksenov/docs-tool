@@ -81,34 +81,35 @@ Known issue on zsh: completing right after typing a trailing `/` yourself can fa
 ./docs_tool.py --list-modules
 ```
 
-`<name>` is one of:
-
-```
-examples-no-cyrillic
-examples-orphaned
-examples-parity
-images-orphaned
-nav-structure-parity
-pages-broken-refs
-pages-file-path-italics (beta)
-pages-line-parity
-pages-no-cyrillic
-pages-no-invisible-chars
-pages-no-unicode-dashes
-pages-no-yo
-pages-orphaned
-pages-ru-latin-homoglyphs (beta)
-pages-stray-backticks
-pages-structure-parity (beta)
-pages-table-cell-periods (beta)
-pages-terminology (beta)
-pages-translation (beta)
-pages-unbalanced-delimiters
-tags-orphaned
-```
-
 (Or `python3 docs_tool.py ...`, per the note above.)
-`(beta)` checks are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — see their entries under [Checks](#checks) for details, and treat their output as a review list, not a hard gate.
+
+The full set of `--check-*` flags:
+
+```
+--check-examples-no-cyrillic
+--check-examples-orphaned
+--check-examples-parity
+--check-images-orphaned
+--check-nav-structure-parity
+--check-pages-broken-refs
+--check-pages-file-path-italics (beta)
+--check-pages-line-parity
+--check-pages-no-cyrillic
+--check-pages-no-invisible-chars
+--check-pages-no-unicode-dashes
+--check-pages-no-yo
+--check-pages-orphaned
+--check-pages-ru-latin-homoglyphs (beta)
+--check-pages-stray-backticks
+--check-pages-structure-parity (beta)
+--check-pages-table-cell-periods (beta)
+--check-pages-terminology (beta)
+--check-pages-translation (beta)
+--check-pages-unbalanced-delimiters
+--check-tags-orphaned
+```
+
+`(beta)` checks are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — see their entries under [Checks](#checks) for details and treat their output as a review list, not a hard gate.
 
 Multiple `--check-*` flags can be combined in one run.
 Exits `0` if every selected check passed, `1` if any check found something.
