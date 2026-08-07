@@ -1058,6 +1058,38 @@ class PagesTranslationTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("SUSPECT", output)
 
+    def test_description_attribute_untranslated_is_flagged(self):
+        """:description:/:page-htmltitle: are ":"-prefixed structural
+        attribute lines that _is_skip_line treats as non-prose, but their
+        values render as real page <meta description>/<title> text and
+        must still be checked for copy-pasted English."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":description: This page explains the new caching behavior.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":description: This page explains the new caching behavior.\n")
+        ok, output = self.run_check(dt.check_pages_translation)
+        self.assertFalse(ok)
+        self.assertIn("UNTRANSLATED", output)
+
+    def test_description_attribute_translated_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":description: This page explains the new caching behavior.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":description: На этой странице описано новое поведение кэширования.\n")
+        ok, output = self.run_check(dt.check_pages_translation)
+        self.assertTrue(ok, output)
+
+    def test_other_attribute_lines_still_not_scanned(self):
+        """Non-prose attribute lines outside the description/title
+        carve-out must stay excluded, even when copied verbatim and long
+        enough to pass the word-count threshold."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":page-partial: This attribute is not real page prose.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":page-partial: This attribute is not real page prose.\n")
+        ok, output = self.run_check(dt.check_pages_translation)
+        self.assertTrue(ok, output)
+
 
 class ContentRelpathTests(unittest.TestCase):
     def test_finds_subpath_after_pages(self):
@@ -1311,6 +1343,39 @@ class PagesTerminologyTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("keep.adoc", output)
         self.assertNotIn("skip.adoc", output)
+
+    def test_description_attribute_mismatch_is_flagged(self):
+        """:description:/:page-htmltitle: values render as real page
+        <meta description>/<title> prose despite being ":"-prefixed
+        structural attribute lines that _is_skip_line otherwise treats as
+        non-prose -- a glossary violation inside them must still be caught."""
+        self._set_glossary("host|хост|хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":description: Learn how to connect to the host.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":description: Узнайте, как подключиться к серверу.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertIn("MISMATCH", output)
+        self.assertIn("'host'", output)
+
+    def test_description_attribute_correct_translation_passes(self):
+        self._set_glossary("host|хост|хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":description: Learn how to connect to the host.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":description: Узнайте, как подключиться к хосту.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_other_attribute_lines_still_not_scanned(self):
+        self._set_glossary("host|хост|хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":page-partial: Connect to the host over SSH.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":page-partial: Connect to the server over SSH.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
 
 
 class PagesStructureParityTests(FixtureTestCase):

@@ -2433,6 +2433,15 @@ def _is_skip_line(line: str) -> bool:
     return False
 
 
+# :description:/:page-htmltitle: are the two ":"-prefixed attribute lines
+# whose values render as real visible prose (the page's <meta description>
+# and <title>) rather than structural directives -- every _is_skip_line
+# caller that walks prose (translation, terminology, homoglyphs, file-path
+# italics) needs to carve these two out and check their values instead of
+# skipping the line outright.
+_PROSE_ATTR_RE = re.compile(r'^:(description|page-htmltitle):\s*(.*)$')
+
+
 def _strip_noise(line: str) -> str:
     s = _STRIP_CODE_SPAN_RE.sub("", line)
     s = _STRIP_DOUBLE_ANGLE_RE.sub("", s)
@@ -2496,23 +2505,31 @@ def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_h
         elif in_cell:
             continue
 
-        if _is_skip_line(en_line):
+        attr_m = _PROSE_ATTR_RE.match(en_line)
+        if attr_m:
+            en_text = attr_m.group(2)
+            ru_attr_m = _PROSE_ATTR_RE.match(ru_line)
+            ru_text = ru_attr_m.group(2) if ru_attr_m else ru_line
+        elif _is_skip_line(en_line):
+            continue
+        else:
+            en_text = en_line
+            ru_text = ru_line
+
+        if len(en_text.split()) < 3:
             continue
 
-        if len(en_line.split()) < 3:
-            continue
-
-        if en_line == ru_line:
+        if en_text == ru_text:
             ensure_header()
             finding_count += 1
-            print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_line}")
-        elif strict and not _HEADING_RE.match(en_line):
-            candidate = _strip_noise(ru_line).lower()
+            print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_text}")
+        elif strict and not _HEADING_RE.match(en_text):
+            candidate = _strip_noise(ru_text).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
             if _STOPWORDS_RE.search(candidate):
                 ensure_header()
                 finding_count += 1
-                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_line}")
+                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_text}")
 
     return finding_count
 
@@ -3132,25 +3149,33 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, ver
         elif in_cell:
             continue
 
-        if _is_skip_line(en_line):
+        attr_m = _PROSE_ATTR_RE.match(en_line)
+        if attr_m:
+            en_text = attr_m.group(2)
+            ru_attr_m = _PROSE_ATTR_RE.match(ru_line)
+            ru_text = ru_attr_m.group(2) if ru_attr_m else ru_line
+        elif _is_skip_line(en_line):
             continue
+        else:
+            en_text = en_line
+            ru_text = ru_line
 
-        masked_en = _mask_code_and_links(en_line)
+        masked_en = _mask_code_and_links(en_text)
         matched_keys = {m.group(0).lower() for m in term_re.finditer(masked_en)}
         if not matched_keys:
             continue
 
         for key in sorted(matched_keys):
             entry = glossary[key]
-            if _glossary_entry_satisfied(entry, ru_line):
+            if _glossary_entry_satisfied(entry, ru_text):
                 continue
             ensure_header()
             finding_count += 1
             forms = ", ".join(f"'{f}'" for f in sorted(entry["ru_display"]))
             print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- expected one of [{forms}], not found")
             if verbose:
-                print(f"    EN: {en_line}")
-                print(f"    RU: {ru_line}")
+                print(f"    EN: {en_text}")
+                print(f"    RU: {ru_text}")
 
     return finding_count
 
@@ -3271,9 +3296,6 @@ def _mask_code_and_links(line: str) -> str:
     return s
 
 
-_HOMOGLYPH_PROSE_ATTR_RE = re.compile(r'^:(description|page-htmltitle):\s*(.*)$')
-
-
 def _find_homoglyph_hits(masked: str):
     """Shared scan step: run the mixed-script-word and standalone-letter
     homoglyph patterns against an already-masked line/value, returning a
@@ -3343,7 +3365,7 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
             # description>/<title> -- scan just their values here (offset
             # by the prefix length) so a homoglyph typo there isn't missed.
             for i, line in enumerate(lines, 1):
-                attr_m = _HOMOGLYPH_PROSE_ATTR_RE.match(line)
+                attr_m = _PROSE_ATTR_RE.match(line)
                 if not attr_m:
                     continue
                 value = attr_m.group(2)
