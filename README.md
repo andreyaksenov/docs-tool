@@ -19,8 +19,6 @@ curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool
 ```
 
 Run it with an explicit path (`./docs_tool.py ...` or `python3 docs_tool.py ...`) from the repo root.
-A bare `docs_tool.py` won't be found by your shell even after `chmod +x`, since the current directory isn't on `$PATH`.
-That's normal shell behavior, not a broken install.
 
 ### Windows
 
@@ -31,7 +29,6 @@ Invoke-WebRequest -Uri https://raw.githubusercontent.com/andreyaksenov/docs-tool
 python docs_tool.py --check-<name>
 ```
 
-`curl` also ships with modern Windows 10/11, so the `curl -O ...` command above works as-is in PowerShell or cmd too.
 `--sync` shells out to `git` to detect reworded lines, so make sure Git for Windows (or any git on `PATH`) is installed.
 
 ## Tab completion (optional)
@@ -71,8 +68,6 @@ Either way:
 
 lists every matching `--check-*` flag.
 `--page` and `--sync` also complete with real filenames and directories from the current site, e.g. `--page reference/gp_toolkit/gp_ao<TAB>`.
-
-Known issue on zsh: completing right after typing a trailing `/` yourself can fall back to normal file completion — completing before the `/` (e.g. `reference/gp_tool<TAB>`) works reliably instead.
 
 ## Usage
 
@@ -236,8 +231,6 @@ What follows here is just what each check does and how to run it.
   Requires `--glossary PATH` (repeatable; a pipe-delimited file with `en|ru|ru_pattern|note` columns, format documented in a `*-glossary.psv` file's own header — `|` rather than `,` specifically so ordinary prose, which routinely contains commas, never needs quoting/escaping).
   If `--glossary` is omitted, it defaults to every `*-glossary.psv` file found directly under the current directory — so a docs repo carrying its own glossary (e.g. `greengagedb-glossary.psv`) doesn't need the path spelled out on every run; a note is printed to stderr when this default kicks in.
   Flags an EN glossary term whose aligned RU line doesn't match any of its `ru_pattern` alternatives — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for.
-  Each pattern is hand-authored, not guessed: a `word<>` token requires that stem plus any suffix (tolerating declension/conjugation), a bare `word` token requires that exact word (used for do-not-translate terms and invariant tokens like SQL keywords).
-  See `check_pages_terminology`'s docstring in `docs_tool.py` for the full matching rationale.
 
 - `--check-pages-translation` (beta)  
   `-v` also flags RU lines containing common English stopwords.
@@ -337,7 +330,7 @@ chmod +x .git/hooks/pre-commit
 Only `--check-pages-no-cyrillic`, `--check-pages-no-invisible-chars`, `--check-pages-no-unicode-dashes`, `--check-pages-no-yo`, `--check-pages-stray-backticks`, and `--check-pages-unbalanced-delimiters` actually block the commit; the rest just print their findings.
 The `(beta)` checks in the warn-only block (`pages-ru-latin-homoglyphs`, `pages-table-cell-periods`, `pages-file-path-italics`, `pages-translation`, `pages-structure-parity`) stay warn-only deliberately: each has a documented, non-zero false-positive rate, so hard-blocking on them would occasionally stop a legitimate commit over a heuristic miss.
 Move one into the blocking block once it's run clean for a while in practice.
-`pages-terminology` isn't included at all, deliberately: it requires `--glossary PATH` (or an auto-discovered `*-glossary.psv`), which most repos using this tool don't have, and since every `--check-*` flag in one `docs_tool.py` invocation shares a single process, that check's `sys.exit()` when no glossary is available would abort every other check bundled in the same call, not just itself.
+`pages-terminology` isn't included at all, deliberately: it requires `--glossary PATH` (or an auto-discovered `*-glossary.psv`), which most repos using this tool don't have.
 A repo that does carry a glossary can add `--check-pages-terminology` to its own copy of this hook.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run.
 `tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
@@ -348,5 +341,5 @@ A repo that does carry a glossary can add `--check-pages-terminology` to its own
 python3 -m unittest discover -s tests
 ```
 
-`tests/test_docs_tool.py` (stdlib `unittest`, no extra dependencies) covers the trickier pure-parsing functions directly, plus fixture-based integration tests that build a throwaway Antora tree per test and run a `check_*()` function against it — including regression tests for bugs found along the way (a basename shared by two different modules' `images/`, `inlineSVG:` not being recognized as usage, a self-qualified `image::ADCM:ROOT:...[]` reference being treated as an unregistered external component instead of this repo's own content).
+`tests/test_docs_tool.py` (stdlib `unittest`, no extra dependencies) covers the trickier pure-parsing functions directly, plus fixture-based integration tests that build a throwaway Antora tree per test and run a `check_*()` function against it.
 Does not touch this repo's real `en/`/`ru/` content.
