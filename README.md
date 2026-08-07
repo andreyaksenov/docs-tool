@@ -2,12 +2,16 @@
 
 A single Python utility for checking that the `en/` and `ru/` documentation trees stay in sync, and for syncing a RU page's structure after an EN edit.
 Run it from the root of the Antora docs repo you want to check.
-Requires Python 3.7+ (no third-party dependencies) — nothing to install.
-(Tab completion is opt-in and needs the `argcomplete` package — see [Tab completion](#tab-completion-optional).)
 
 Works on both single-module Antora sites (just `en/modules/ROOT`) and multi-module ones (`en/modules/ROOT`, `en/modules/how-to`, ...).
 Every module under `en/modules/` and `ru/modules/` is auto-discovered, and every check scans all of them automatically.
 Run `./docs_tool.py --list-modules` to see what was found.
+
+## Prerequisites
+
+- Python 3.7+ — no third-party dependencies, nothing else to install.
+- `git` on `PATH` — only needed for `--sync`, which shells out to it to detect reworded lines.
+- `argcomplete` (optional) — only for [tab completion](#tab-completion-optional); the tool works exactly the same without it.
 
 ## Get it
 
@@ -18,18 +22,22 @@ Copy it into any Antora docs repo without cloning this repo:
 curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool.py && chmod +x docs_tool.py
 ```
 
-Run it with an explicit path (`./docs_tool.py ...` or `python3 docs_tool.py ...`) from the repo root.
+Run it with an explicit path from the repo root:
+
+```bash
+./docs_tool.py --check-<name>
+# or
+python3 docs_tool.py --check-<name>
+```
 
 ### Windows
 
-Windows doesn't have an executable bit, so skip the `chmod` step and run the file with `python` (or the `py` launcher) instead of `./docs_tool.py`:
+Windows doesn't have an executable bit, so skip the `chmod` step and run the file with `python` (the Windows installer doesn't provide a `python3` command) or the `py` launcher instead of `./docs_tool.py`:
 
 ```powershell
 Invoke-WebRequest -Uri https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool.py -OutFile docs_tool.py
 python docs_tool.py --check-<name>
 ```
-
-`--sync` shells out to `git` to detect reworded lines, so make sure Git for Windows (or any git on `PATH`) is installed.
 
 ## Tab completion (optional)
 
@@ -78,8 +86,6 @@ lists every matching `--check-*` flag.
 ./docs_tool.py --list-checks
 ./docs_tool.py --list-modules
 ```
-
-(Or `python3 docs_tool.py ...`, per the note above.)
 
 The full set of `--check-*` flags:
 
