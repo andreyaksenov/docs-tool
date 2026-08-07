@@ -3271,6 +3271,32 @@ def _mask_code_and_links(line: str) -> str:
     return s
 
 
+_HOMOGLYPH_PROSE_ATTR_RE = re.compile(r'^:(description|page-htmltitle):\s*(.*)$')
+
+
+def _find_homoglyph_hits(masked: str):
+    """Shared scan step: run the mixed-script-word and standalone-letter
+    homoglyph patterns against an already-masked line/value, returning a
+    list of (col, tok) hits. Factored out so the same logic applies both
+    to ordinary prose lines and to the :description:/:page-htmltitle:
+    attribute values (see check_pages_ru_latin_homoglyphs), which carry
+    real rendered Russian prose despite being skipped by
+    _iter_prose_lines as structural attribute lines."""
+    found = []
+    for m in _HOMOGLYPH_WORD_TOKEN_RE.finditer(masked):
+        tok = m.group(0)
+        if len(tok) > 1 and CYRILLIC_RE.search(tok) and _LATIN_LETTER_RE.search(tok):
+            found.append((m.start() + 1, tok))
+    for m in _HOMOGLYPH_STANDALONE_LETTER_RE.finditer(masked):
+        start, end = m.start(1), m.end(1)
+        if start > 0 and end < len(masked) and masked[start - 1] == '(' and masked[end] == ')':
+            continue
+        if start == 0 and re.match(r'\s*\|', masked[end:]):
+            continue
+        found.append((start + 1, m.group(1)))
+    return found
+
+
 def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
     """New check (not a port of an existing shell script): flags Latin
     letters that look like they were meant to be Cyrillic in ru/ prose --
@@ -3309,33 +3335,22 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
             hits = []
             for i, line in _iter_prose_lines(lines):
                 masked = _mask_code_and_links(line)
-                for m in _HOMOGLYPH_WORD_TOKEN_RE.finditer(masked):
-                    tok = m.group(0)
-                    if len(tok) > 1 and CYRILLIC_RE.search(tok) and _LATIN_LETTER_RE.search(tok):
-                        hits.append((i, m.start() + 1, tok, line))
-                for m in _HOMOGLYPH_STANDALONE_LETTER_RE.finditer(masked):
-                    start, end = m.start(1), m.end(1)
-                    # A single-letter code that IS the entire content of a
-                    # parenthetical (e.g. Postgres catalog docs' own
-                    # "DEPENDENCY_AUTO (a)"/"SHARED_DEPENDENCY_OWNER (o)"
-                    # convention for showing an enum's underlying char
-                    # code) is never a typo -- checked as a matched pair,
-                    # not just "preceded by (", so a genuine "(с чем-то)"
-                    # phrase (letter followed by more text, not ")") still
-                    # gets flagged.
-                    if start > 0 and end < len(masked) and masked[start - 1] == '(' and masked[end] == ')':
-                        continue
-                    # A single-letter code at the very start of the line
-                    # immediately followed by " | " is a description-list
-                    # term enumerating a CLI flag's short codes (e.g.
-                    # pg_dump.adoc's own "p | plain:::"/"c | custom:::"/
-                    # "d | directory:::"/"t | tar:::" for `-F`/`--format`),
-                    # not a typo -- restricted to start==0 so this can't
-                    # accidentally swallow a genuine mid-sentence typo that
-                    # happens to precede an unrelated "|" elsewhere.
-                    if start == 0 and re.match(r'\s*\|', masked[end:]):
-                        continue
-                    hits.append((i, start + 1, m.group(1), line))
+                for col, tok in _find_homoglyph_hits(masked):
+                    hits.append((i, col, tok, line))
+            # _iter_prose_lines skips all ":"-prefixed attribute lines as
+            # structural, but :description:/:page-htmltitle: carry real
+            # Russian prose that renders into the page's <meta
+            # description>/<title> -- scan just their values here (offset
+            # by the prefix length) so a homoglyph typo there isn't missed.
+            for i, line in enumerate(lines, 1):
+                attr_m = _HOMOGLYPH_PROSE_ATTR_RE.match(line)
+                if not attr_m:
+                    continue
+                value = attr_m.group(2)
+                offset = attr_m.start(2)
+                masked = _mask_code_and_links(value)
+                for col, tok in _find_homoglyph_hits(masked):
+                    hits.append((i, offset + col, tok, line))
             if hits:
                 ok = False
                 total_hits += len(hits)

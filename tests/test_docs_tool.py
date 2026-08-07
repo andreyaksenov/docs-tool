@@ -847,6 +847,29 @@ class PagesRuLatinHomoglyphsTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
         self.assertTrue(ok, output)
 
+    def test_description_attribute_value_is_flagged(self):
+        """:description:/:page-htmltitle: are ":"-prefixed structural
+        attribute lines that _iter_prose_lines skips wholesale, but their
+        values render as real Russian prose (<meta description>/<title>)
+        and must still be scanned for homoglyph typos."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":description: Работа c example базой данных.\n"
+                    "\n"
+                    "Текст страницы.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertFalse(ok)
+        self.assertIn("'c'", output)
+
+    def test_other_attribute_lines_still_not_scanned(self):
+        """Non-prose attribute lines (e.g. :page-author:) must stay out of
+        scope -- only :description:/:page-htmltitle: values are scanned."""
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":page-author: c example\n"
+                    "\n"
+                    "Текст страницы.\n")
+        ok, output = self.run_check(dt.check_pages_ru_latin_homoglyphs)
+        self.assertTrue(ok, output)
+
 
 class PagesFilePathItalicsTests(FixtureTestCase):
     def test_extension_whitelist_match_is_flagged(self):
