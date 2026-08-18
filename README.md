@@ -190,7 +190,13 @@ What follows here is just what each check does and how to run it.
 - `--check-pages-broken-refs`  
   Every `xref:`, `include::`, `image:`/`image::`, `injectSvg:`/`injectSvg::`, `inlineSVG:`/`inlineSVG::`, and `link:`/`link::` reference in `pages/`/`partials/` must resolve to a real file or anchor.
   Cross-module references resolve against sibling modules automatically.
-  A reference into a component outside this repo (e.g. a separate ADCM docs repo) is left unchecked unless you pass `--external-root NAME=PATH` (repeatable, e.g. `--external-root ADCM=../docs-adcm`) to resolve against a local checkout of it.
+  A reference into a component outside this repo (e.g. a separate ADCM docs repo) is left unchecked unless you pass `--external-root NAME=PATH` (repeatable) to resolve against a local checkout of it:
+
+  ```bash
+  ./docs_tool.py --check-pages-broken-refs --external-root ADCM=../docs-adcm
+  ```
+
+  Run from docs-adb, this is what actually resolves `xref:ADCM:ROOT:some-page.adoc[]`/`include::ADCM:ROOT:partial$...[]`-style references written in docs-adb's own content that point at ADCM's repo — without it they're silently left unchecked, not reported broken, since the tool can't tell a genuine typo apart from a real cross-repo reference it just hasn't been shown the target for.
 
 - `--check-pages-file-path-italics` (beta)  
   `-v` also prints the full line for each hit.
@@ -251,7 +257,15 @@ What follows here is just what each check does and how to run it.
   Every `partials/` file with no `tag::`/`end::` regions of its own (i.e. meant to be pulled in whole) must actually be pulled in somewhere via a plain/wildcarded `include::...[]` — same idea as `--check-examples-orphaned`, but for `partials/`.
   A partial that does have tag regions is judged tag-by-tag by `--check-tags-orphaned` instead.
   `--page NAME` narrows which files get reported on, but the usage scan always covers the whole site (see [above](#scoping-to-specific-pages-with---page)).
-  Like `--check-tags-orphaned`, pass `--external-root NAME=PATH` to recognize a partial that's only ever consumed from a sibling Antora component's repo.
+  Like `--check-tags-orphaned`, pass `--external-root NAME=PATH` to recognize a partial that's only ever consumed from a sibling Antora component's repo — e.g. run from docs-adcm, whose own `et`/`monitoring` partials render only inside docs-adb/docs-adh/docs-adpg/docs-adqm's install docs via `include::ADCM:ROOT:partial$et/et-add-components.adoc[]`, not from anything in docs-adcm itself:
+
+  ```bash
+  ./docs_tool.py --check-partials-orphaned \
+    --external-root ADB=../docs-adb --external-root ADH=../docs-adh \
+    --external-root ADPG=../docs-adpg --external-root ADQM=../docs-adqm
+  ```
+
+  Without registering the consuming repos, the tool has no way to see those includes (they live in the *other* repos' own files) and reports the partials orphaned even though they render fine on the real site.
 
 The `(beta)` checks above are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — treat their output as a review list, not a hard gate.
 
@@ -260,7 +274,13 @@ The `(beta)` checks above are heuristic rather than a real AsciiDoc parser and c
 - `--check-tags-orphaned`  
   Finds `tag::NAME[]`/`end::NAME[]` regions (in `examples/`, `pages/`, or `partials/`) never actually pulled in by any `include::...[tag=NAME]`/`[tags=NAME;...]` elsewhere in the site, whether directly, via nesting inside another used region, or via a whole-file include.
   `--page NAME` narrows which files' own tag regions get reported on, but the usage scan always covers the whole site (see [above](#scoping-to-specific-pages-with---page)).
-  Like `--check-pages-broken-refs`, pass `--external-root NAME=PATH` to recognize a tag that's only ever consumed from a sibling Antora component's repo.
+  Like `--check-pages-broken-refs`, pass `--external-root NAME=PATH` to recognize a tag that's only ever consumed from a sibling Antora component's repo:
+
+  ```bash
+  ./docs_tool.py --check-tags-orphaned \
+    --external-root ADB=../docs-adb --external-root ADH=../docs-adh \
+    --external-root ADPG=../docs-adpg --external-root ADQM=../docs-adqm
+  ```
 
 ## Sync a RU page after an EN edit (beta)
 
