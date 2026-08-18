@@ -161,21 +161,42 @@ What follows here is just what each check does and how to run it.
 
 ### Examples
 
+Whole-site checks: `--page` doesn't narrow them (see [above](#scoping-to-specific-pages-with---page)), and none of them consult `--external-root`.
+
 - `--check-examples-no-cyrillic`  
   Same check as `--check-pages-no-cyrillic`, scoped to each module's `examples/` (all file types).
 
+  ```bash
+  ./docs_tool.py --check-examples-no-cyrillic
+  ```
+
 - `--check-examples-orphaned`  
   Every file under `examples/` must be pulled in by an `include::example$<path>[]` somewhere in `pages/` or `partials/`.
+
+  ```bash
+  ./docs_tool.py --check-examples-orphaned
+  ```
 
 - `--check-examples-parity`  
   `-v` shows a diff for mismatched non-`.sql` files.
   Each module's EN and RU `examples/` must have the same files; non-`.sql` files must match byte-for-byte, `.sql` files once comment-only lines are blanked out (comments are legitimately translated).
 
+  ```bash
+  ./docs_tool.py --check-examples-parity -v
+  ```
+
 ### Images
+
+Whole-site check: `--page` doesn't narrow it (see [above](#scoping-to-specific-pages-with---page)).
+It does resolve a self-qualified `image::<OwnComponent>:...[]` reference against a registered `--external-root`, but that never changes which of *this* repo's own images end up reported orphaned (verified empirically — identical output with and without it across every repo pair tested), so no `--external-root` example is given here.
 
 - `--check-images-orphaned`  
   Every file under `images/` must be the actual resolved target of an `image:`/`image::`/`injectSvg:`/`injectSvg::`/`inlineSVG:`/`inlineSVG::` macro somewhere in that language, site-wide (not just its own module).
   Ends with a total count and combined file size, as a rough cleanup gauge.
+
+  ```bash
+  ./docs_tool.py --check-images-orphaned
+  ```
 
 ### Nav
 
@@ -184,60 +205,122 @@ What follows here is just what each check does and how to run it.
   Compares each module's `nav.adoc` structure (list depth, `xref:`/`include::` targets) between EN and RU, plus any included `partial$...adoc` files.
   Translated labels are ignored.
   Modules without their own `nav.adoc` are skipped.
+  Whole-site check: `--page` doesn't narrow it, and it doesn't consult `--external-root`.
+
+  ```bash
+  ./docs_tool.py --check-nav-structure-parity -v
+  ```
 
 ### Pages
 
 - `--check-pages-broken-refs`  
   Every `xref:`, `include::`, `image:`/`image::`, `injectSvg:`/`injectSvg::`, `inlineSVG:`/`inlineSVG::`, and `link:`/`link::` reference in `pages/`/`partials/` must resolve to a real file or anchor.
   Cross-module references resolve against sibling modules automatically.
+  Whole-site check: `--page` doesn't narrow it.
   A reference into a component outside this repo (e.g. a separate ADCM docs repo) is left unchecked unless you pass `--external-root NAME=PATH` (repeatable) to resolve against a local checkout of it:
 
   ```bash
+  ./docs_tool.py --check-pages-broken-refs
   ./docs_tool.py --check-pages-broken-refs --external-root ADCM=../docs-adcm
   ```
 
-  Run from docs-adb, this is what actually resolves `xref:ADCM:ROOT:some-page.adoc[]`/`include::ADCM:ROOT:partial$...[]`-style references written in docs-adb's own content that point at ADCM's repo — without it they're silently left unchecked, not reported broken, since the tool can't tell a genuine typo apart from a real cross-repo reference it just hasn't been shown the target for.
+  Run from docs-adb, the second form is what actually resolves `xref:ADCM:ROOT:some-page.adoc[]`/`include::ADCM:ROOT:partial$...[]`-style references written in docs-adb's own content that point at ADCM's repo — without it they're silently left unchecked, not reported broken, since the tool can't tell a genuine typo apart from a real cross-repo reference it just hasn't been shown the target for.
 
 - `--check-pages-file-path-italics` (beta)  
   `-v` also prints the full line for each hit.
   Flags file/directory names mentioned in plain prose without the italics (`_..._`) house style requires: known config/archive file extensions, well-known absolute-path prefixes, bare directory basenames, underscore/slash-containing words, and common dotfiles, all checked in the relevant `a`/`an`/`the ... file/folder/...` grammatical slot.
   Deliberately narrow to keep false positives low.
 
+  ```bash
+  ./docs_tool.py --check-pages-file-path-italics -v
+  ./docs_tool.py --check-pages-file-path-italics -v --page resource_groups.adoc
+  ```
+
 - `--check-pages-line-parity`  
   Every EN `pages/`/`partials/` `.adoc` file must have a RU counterpart with the same line count, and vice versa.
 
+  ```bash
+  ./docs_tool.py --check-pages-line-parity
+  ./docs_tool.py --check-pages-line-parity --page resource_groups.adoc
+  ```
+
 - `--check-pages-no-cyrillic`  
   No `pages/`/`partials/` `.adoc` file under `en/modules/` may contain Cyrillic characters (catches RU text left in an EN file).
+
+  ```bash
+  ./docs_tool.py --check-pages-no-cyrillic
+  ./docs_tool.py --check-pages-no-cyrillic --page resource_groups.adoc
+  ```
 
 - `--check-pages-no-invisible-chars`  
   `-v` also prints each hit line with the invisible character swapped for a visible `⟦U+XXXX⟧` marker.
   No `pages/`/`partials/` `.adoc` file may contain zero-width or other invisible/formatting Unicode characters.
 
+  ```bash
+  ./docs_tool.py --check-pages-no-invisible-chars -v
+  ./docs_tool.py --check-pages-no-invisible-chars -v --page resource_groups.adoc
+  ```
+
 - `--check-pages-no-unicode-dashes`  
   No `pages/`/`partials/` `.adoc` file may contain a literal en dash (`–`) or em dash (`—`); house style uses `--` instead.
+
+  ```bash
+  ./docs_tool.py --check-pages-no-unicode-dashes
+  ./docs_tool.py --check-pages-no-unicode-dashes --page resource_groups.adoc
+  ```
 
 - `--check-pages-no-yo`  
   No `ru/` `pages/`/`partials/` `.adoc` file may contain `ё`/`Ё`; house style spells it out as `е` instead.
   The `:page-author:` attribute is exempt, since a real person's name can legitimately contain `ё`.
 
+  ```bash
+  ./docs_tool.py --check-pages-no-yo
+  ./docs_tool.py --check-pages-no-yo --page resource_groups.adoc
+  ```
+
 - `--check-pages-orphaned`  
   Every `pages/*.adoc` file must be reachable from some module's `nav.adoc` (including nav's own `include::partial$...[]` sections and cross-module links).
   The site's `start_page` is exempt.
+  Whole-site check: `--page` doesn't narrow it, and it doesn't consult `--external-root`.
+
+  ```bash
+  ./docs_tool.py --check-pages-orphaned
+  ```
 
 - `--check-pages-ru-latin-homoglyphs` (beta)  
   `-v` also prints the full line for each hit.
   Flags Latin letters in `ru/` prose that look like they were meant to be Cyrillic: a word mixing both scripts, or a standalone Latin letter matching one of four Cyrillic/Latin homoglyph pairs that double as real one-letter Russian words (`а`/`о`/`с`/`у`).
   Found dozens of real typos across every repo tested during development.
 
+  ```bash
+  ./docs_tool.py --check-pages-ru-latin-homoglyphs -v
+  ./docs_tool.py --check-pages-ru-latin-homoglyphs -v --page resource_groups.adoc
+  ```
+
 - `--check-pages-stray-backticks`  
   No `pages/`/`partials/` `.adoc` line may have an odd number of backticks (almost always a missing or stray `` ` `` around an inline monospace span).
+
+  ```bash
+  ./docs_tool.py --check-pages-stray-backticks
+  ./docs_tool.py --check-pages-stray-backticks --page resource_groups.adoc
+  ```
 
 - `--check-pages-structure-parity` (beta)  
   Reports the first differing line by default; `-v` shows the full diff with file:line references.
   Deeper structural comparison of each EN/RU `.adoc` pair (heading levels, block titles, delimited blocks, block attributes, `include::` directives), catching drift even when line counts match.
 
+  ```bash
+  ./docs_tool.py --check-pages-structure-parity -v
+  ./docs_tool.py --check-pages-structure-parity -v --page resource_groups.adoc
+  ```
+
 - `--check-pages-table-cell-periods` (beta)  
   The last sentence in a table cell shouldn't end with a period, per house style, with exceptions for cells ending in a list, an admonition, or a known abbreviation.
+
+  ```bash
+  ./docs_tool.py --check-pages-table-cell-periods
+  ./docs_tool.py --check-pages-table-cell-periods --page resource_groups.adoc
+  ```
 
 - `--check-pages-terminology` (beta)  
   `-v` also prints the full EN/RU line pair for each hit.
@@ -245,13 +328,29 @@ What follows here is just what each check does and how to run it.
   If `--glossary` is omitted, it defaults to every `*-glossary.psv` file found directly under the current directory — so a docs repo carrying its own glossary (e.g. `greengagedb-glossary.psv`) doesn't need the path spelled out on every run; a note is printed to stderr when this default kicks in.
   Flags an EN glossary term whose aligned RU line doesn't match any of its `ru_pattern` alternatives — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for.
 
+  ```bash
+  ./docs_tool.py --check-pages-terminology -v --glossary greengagedb-glossary.psv
+  ./docs_tool.py --check-pages-terminology -v --glossary greengagedb-glossary.psv --page resource_groups.adoc
+  ```
+
 - `--check-pages-translation` (beta)  
   `-v` also flags RU lines containing common English stopwords.
   Flags `pages/`/`partials/` lines that look untranslated: RU byte-identical to its EN counterpart, skipping code, attributes, comments, table cells, and keyword-only lines.
 
+  ```bash
+  ./docs_tool.py --check-pages-translation -v
+  ./docs_tool.py --check-pages-translation -v --page resource_groups.adoc
+  ```
+
 - `--check-pages-unbalanced-delimiters`  
   Every AsciiDoc block delimiter (open `--`, listing `----`, literal `....`, example `====`, sidebar `****`, quote `____`, passthrough `++++`, table `|===`, comment `////`) must be properly closed once a page's full include chain is flattened into the single document Asciidoctor actually renders.
   An unclosed one is almost always a forgotten closing delimiter, which silently swallows everything after it once rendered.
+  It also resolves a page's includes against a registered `--external-root`, but that never changed which delimiters ended up reported unclosed in testing (identical output with and without it across every repo pair tried), so no `--external-root` example is given here.
+
+  ```bash
+  ./docs_tool.py --check-pages-unbalanced-delimiters
+  ./docs_tool.py --check-pages-unbalanced-delimiters --page resource_groups.adoc
+  ```
 
 - `--check-partials-orphaned`  
   Every `partials/` file with no `tag::`/`end::` regions of its own (i.e. meant to be pulled in whole) must actually be pulled in somewhere via a plain/wildcarded `include::...[]` — same idea as `--check-examples-orphaned`, but for `partials/`.
@@ -260,6 +359,8 @@ What follows here is just what each check does and how to run it.
   Like `--check-tags-orphaned`, pass `--external-root NAME=PATH` to recognize a partial that's only ever consumed from a sibling Antora component's repo — e.g. run from docs-adcm, whose own `et`/`monitoring` partials render only inside docs-adb/docs-adh/docs-adpg/docs-adqm's install docs via `include::ADCM:ROOT:partial$et/et-add-components.adoc[]`, not from anything in docs-adcm itself:
 
   ```bash
+  ./docs_tool.py --check-partials-orphaned
+  ./docs_tool.py --check-partials-orphaned --page et
   ./docs_tool.py --check-partials-orphaned \
     --external-root ADB=../docs-adb --external-root ADH=../docs-adh \
     --external-root ADPG=../docs-adpg --external-root ADQM=../docs-adqm
@@ -277,6 +378,8 @@ The `(beta)` checks above are heuristic rather than a real AsciiDoc parser and c
   Like `--check-pages-broken-refs`, pass `--external-root NAME=PATH` to recognize a tag that's only ever consumed from a sibling Antora component's repo:
 
   ```bash
+  ./docs_tool.py --check-tags-orphaned
+  ./docs_tool.py --check-tags-orphaned --page external_data_formats.adoc
   ./docs_tool.py --check-tags-orphaned \
     --external-root ADB=../docs-adb --external-root ADH=../docs-adh \
     --external-root ADPG=../docs-adpg --external-root ADQM=../docs-adqm
