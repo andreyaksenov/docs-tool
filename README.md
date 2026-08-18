@@ -251,6 +251,7 @@ What follows here is just what each check does and how to run it.
   Every `partials/` file with no `tag::`/`end::` regions of its own (i.e. meant to be pulled in whole) must actually be pulled in somewhere via a plain/wildcarded `include::...[]` — same idea as `--check-examples-orphaned`, but for `partials/`.
   A partial that does have tag regions is judged tag-by-tag by `--check-tags-orphaned` instead.
   `--page NAME` narrows which files get reported on, but the usage scan always covers the whole site (see [above](#scoping-to-specific-pages-with---page)).
+  Like `--check-tags-orphaned`, pass `--external-root NAME=PATH` to recognize a partial that's only ever consumed from a sibling Antora component's repo.
 
 The `(beta)` checks above are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — treat their output as a review list, not a hard gate.
 
