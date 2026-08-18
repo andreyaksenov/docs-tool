@@ -1408,7 +1408,13 @@ def _collect_tag_usage(lang_module_roots, lang):
     in `compression_codecs`, negated only in the includes that also list
     `format_null`/`compression_codecs` explicitly alongside `!..._no_compression`,
     but rendered plainly wherever `tag=compression_codecs` is used alone).
-    Only pages/partials are scanned as *sources* of includes -- examples
+    pages/partials/nav.adoc are scanned as *sources* of includes -- nav.adoc
+    routinely pulls in a whole partial via `include::partial$...[]` (e.g. a
+    long submenu factored out of the main nav tree, as in the real
+    docs-greengagedb case that motivated adding it here:
+    nav_reference_utils.adoc/nav_reference_admin_schemas.adoc, each included
+    only from nav.adoc and nowhere else, wrongly reported orphaned by
+    check_partials_orphaned before nav.adoc was scanned) -- while examples
     are always a leaf, never something that itself includes other content.
 
     Sources aren't limited to this repo's own modules: a tag defined here
@@ -1428,7 +1434,9 @@ def _collect_tag_usage(lang_module_roots, lang):
     for comp_modules in EXTERNAL_COMPONENTS.values():
         source_roots.extend(comp_modules.get(lang, {}).values())
     for root in source_roots:
-        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+        nav = root / "nav.adoc"
+        nav_files = [nav] if nav.is_file() else []
+        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")) + nav_files:
             lines = _read_lines(f)
             if lines is None:
                 continue

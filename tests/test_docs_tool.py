@@ -553,6 +553,21 @@ class TagsOrphanedTests(FixtureTestCase):
         self.assertTrue(ok, output)  # kept_tag used (from user.adoc, filtered out of the report but still scanned)
         self.assertNotIn("other_tag", output)  # other.adoc's own orphaned tag is filtered out of the report
 
+    def test_tag_used_only_from_nav_adoc_is_not_orphaned(self):
+        """_collect_tag_usage (shared with check_partials_orphaned) must
+        scan nav.adoc for include::...[] macros too, not just pages/ and
+        partials/ -- nav.adoc can pull in a tagged region the same as any
+        page can."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/snippet.adoc",
+            "tag::used[]\nkept\nend::used[]\n",
+        )
+        self.write("en/modules/ROOT/nav.adoc", "include::partial$snippet.adoc[tag=used]\n")
+
+        ok, output = self.run_check(dt.check_tags_orphaned)
+        self.assertTrue(ok, output)
+
     def test_cross_repo_usage_via_external_root_is_not_orphaned(self):
         """Regression test for the docs-adbes scenario: a tag defined here
         but only pulled in by a registered --external-root component's own
@@ -617,6 +632,25 @@ class PartialsOrphanedTests(FixtureTestCase):
             "tag::used[]\nkept\nend::used[]\n",
         )
         self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[tag=used]\n")
+
+        ok, output = self.run_check(dt.check_partials_orphaned)
+        self.assertTrue(ok, output)
+
+    def test_whole_file_partial_included_only_from_nav_adoc_is_not_orphaned(self):
+        """Regression test for the docs-greengagedb false positive:
+        nav_reference_utils.adoc/nav_reference_admin_schemas.adoc are each
+        pulled in only via include::partial$...[] from nav.adoc itself (a
+        long submenu factored out of the main nav tree), never from any
+        pages/partials file. _collect_tag_usage only scanned pages/ and
+        partials/ for include macros, so nav.adoc's own includes were
+        invisible to the usage scan and this whole-file partial was
+        wrongly reported orphaned."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/nav_reference_utils.adoc",
+            "* xref:reference/utils/foo.adoc[]\n",
+        )
+        self.write("en/modules/ROOT/nav.adoc", "* xref:index.adoc[]\ninclude::partial$nav_reference_utils.adoc[]\n")
 
         ok, output = self.run_check(dt.check_partials_orphaned)
         self.assertTrue(ok, output)
