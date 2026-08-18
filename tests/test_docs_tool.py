@@ -574,6 +574,70 @@ class TagsOrphanedTests(FixtureTestCase):
             shutil.rmtree(external_root, ignore_errors=True)
 
 
+class PartialsOrphanedTests(FixtureTestCase):
+    def test_whole_file_partial_with_no_tags_and_no_include_is_orphaned(self):
+        """Regression test: a partials/ file with no tag::/end:: markers at
+        all -- content meant to be pulled in only as a whole file via a
+        bare include::...[] -- must be reported orphaned once nothing
+        includes it anymore. Previously check_tags_orphaned's
+        `if not regions: continue` skipped such files entirely, so a
+        whole-file partial left behind after its last
+        include::partial$...[] was deleted was invisible to every
+        orphaned-content check (docs-adb's hosts-online.adoc)."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/hosts-online.adoc",
+            "IMPORTANT: some plain content, no tag markers\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc", "intro\n")
+
+        ok, output = self.run_check(dt.check_partials_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("hosts-online.adoc", output)
+
+    def test_whole_file_partial_included_plainly_is_not_orphaned(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/hosts-online.adoc",
+            "IMPORTANT: some plain content, no tag markers\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$hosts-online.adoc[]\n")
+
+        ok, output = self.run_check(dt.check_partials_orphaned)
+        self.assertTrue(ok, output)
+
+    def test_tagged_partial_is_left_to_tags_orphaned_check(self):
+        """A partial that has its own tag::/end:: regions is judged
+        tag-by-tag by check_tags_orphaned instead -- check_partials_orphaned
+        must not also flag it as a whole-file orphan just because it isn't
+        pulled in via a plain/wildcarded include."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/snippet.adoc",
+            "tag::used[]\nkept\nend::used[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc", "include::partial$snippet.adoc[tag=used]\n")
+
+        ok, output = self.run_check(dt.check_partials_orphaned)
+        self.assertTrue(ok, output)
+
+    def test_cross_repo_usage_via_external_root_is_not_orphaned(self):
+        self.antora_yml("en", "ADB")
+        self.write("en/modules/ROOT/partials/hosts-online.adoc", "plain content, no tag markers\n")
+
+        external_root = Path(tempfile.mkdtemp(prefix="docs_tool_ext_repo_"))
+        (external_root / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
+        (external_root / "en" / "modules" / "ROOT" / "pages" / "index.adoc").write_text(
+            "include::ADB:ROOT:partial$hosts-online.adoc[]\n", encoding="utf-8"
+        )
+        try:
+            dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADBES={external_root}"])
+            ok, output = self.run_check(dt.check_partials_orphaned)
+            self.assertTrue(ok, output)
+        finally:
+            shutil.rmtree(external_root, ignore_errors=True)
+
+
 class PagesBrokenRefsTests(FixtureTestCase):
     def test_self_qualified_own_component_image_resolves(self):
         """Regression test for the docs-adcm scenario:

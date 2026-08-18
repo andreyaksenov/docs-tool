@@ -1459,6 +1459,12 @@ def check_tags_orphaned(verbose=False) -> bool:
     flag, a tag only ever consumed by a sibling repo looks orphaned here
     even though it's genuinely rendered there.
 
+    A file with no tag::/end:: regions at all is skipped here -- it has no
+    tagged region to judge -- but a partials/ file in that shape (content
+    meant to be pulled in only as a whole file via a bare include::...[])
+    isn't left unchecked: see check_partials_orphaned, which covers that
+    exact case.
+
     --page filters which files' own tag regions get reported on, not the
     usage scan: _collect_tag_usage still scans every page/partial in the
     site regardless of --page, since a tag defined in the filtered-in file
@@ -1526,6 +1532,61 @@ def check_tags_orphaned(verbose=False) -> bool:
         print("OK: all tagged regions are included somewhere.")
     else:
         print(f"\nTotal: {orphaned_count} orphaned tag(s).")
+    return ok
+
+
+def check_partials_orphaned(verbose=False) -> bool:
+    """Every partials/ file with no tag::/end:: regions at all -- content
+    meant to be pulled in only as a whole file via a bare include::...[]
+    -- must actually be included somewhere. The same shape of check as
+    check_examples_orphaned (a whole content file nothing pulls in is
+    dead), but for partials/ instead of examples/, and reusing
+    _collect_tag_usage's include-macro resolution (component/module-
+    qualified targets, external roots, relative-path includes) instead of
+    a plain substring scan, since a partial can be referenced by a bare
+    include::sibling.adoc[] from another partial in the same directory,
+    not only include::partial$name.adoc[...].
+
+    A partial that DOES have tag::/end:: regions is judged tag-by-tag by
+    check_tags_orphaned instead -- this check only covers the whole-file
+    case, which check_tags_orphaned skips (nothing to match a tag against).
+    Without this check, a tag-less partial that nothing includes anymore
+    (e.g. after the last include::partial$foo.adoc[] referencing it was
+    deleted) would be invisible to every orphaned-content check -- pages
+    are covered by check_pages_orphaned (nav.adoc reachability) and
+    examples by check_examples_orphaned, but this exact gap in partials/
+    was the real-world docs-adb hosts-online.adoc case that motivated it."""
+    ok = True
+    orphaned_count = 0
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+
+    for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
+        tag_events = _collect_tag_usage(lang_module_roots, lang)
+
+        for root in lang_module_roots.values():
+            for f in _iter_files(root / "partials"):
+                if f.suffix != ".adoc":
+                    continue
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                if _parse_tag_regions(lines):
+                    continue  # has tags of its own -- check_tags_orphaned judges it
+                events = tag_events.get(f, [])
+                if any(whole_file for _, _, whole_file in events):
+                    continue
+                ok = False
+                orphaned_count += 1
+                print(f"ORPHANED  {f}  (whole-file partial, never pulled in via include::...[])")
+
+    if ok:
+        print("OK: all whole-file partials are included somewhere.")
+    else:
+        print(f"\nTotal: {orphaned_count} orphaned partial(s).")
     return ok
 
 
@@ -3413,6 +3474,7 @@ CHECKS = {
     "pages-terminology": check_pages_terminology,
     "pages-translation": check_pages_translation,
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
+    "partials-orphaned": check_partials_orphaned,
     "tags-orphaned": check_tags_orphaned,
 }
 

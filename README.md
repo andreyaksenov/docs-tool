@@ -110,6 +110,7 @@ The full set of `--check-*` flags:
 --check-pages-terminology (beta)
 --check-pages-translation (beta)
 --check-pages-unbalanced-delimiters
+--check-partials-orphaned
 --check-tags-orphaned
 ```
 
@@ -137,7 +138,7 @@ File and directory forms can be mixed across repeated `--page` flags:
 ./docs_tool.py --check-pages-translation -v --page reference/sql_commands
 ```
 
-`--check-tags-orphaned` also honors `--page`, but only to narrow *which files' own `tag::`/`end::` regions get reported on* — the usage scan (which file includes which tag) still covers the whole site regardless, since a tag defined in the filtered-in file can be pulled in from any other page:
+`--check-tags-orphaned` and `--check-partials-orphaned` also honor `--page`, but only to narrow *which files get reported on* — the usage scan (which file includes what) still covers the whole site regardless, since a tag or whole-file partial defined in the filtered-in file can be pulled in from any other page:
 
 ```bash
 ./docs_tool.py --check-tags-orphaned --page external_data_formats.adoc
@@ -151,7 +152,7 @@ This is what the [pre-commit hook](#pre-commit-hook) below uses, so a commit onl
 
 ## Checks
 
-Flags are named `--check-<target>-<check>`, where `<target>` is the directory scanned (`pages` covers `pages/` + `partials/`, `examples` covers `examples/`, `images` covers `images/`, `nav` covers `nav.adoc`, `tags` covers `tag::`/`end::` regions across `pages/` + `partials/` + `examples/`) and `<check>` is what it verifies.
+Flags are named `--check-<target>-<check>`, where `<target>` is the directory scanned (`pages` covers `pages/` + `partials/`, `examples` covers `examples/`, `images` covers `images/`, `nav` covers `nav.adoc`, `tags` covers `tag::`/`end::` regions across `pages/` + `partials/` + `examples/`, `partials` covers whole-file (tag-less) content under `partials/` specifically) and `<check>` is what it verifies.
 Every check below runs across all discovered modules automatically (see `--list-modules`), even though the examples say "EN"/"RU" for brevity.
 Run `./docs_tool.py --list-checks` to see the full list.
 
@@ -246,6 +247,11 @@ What follows here is just what each check does and how to run it.
   Every AsciiDoc block delimiter (open `--`, listing `----`, literal `....`, example `====`, sidebar `****`, quote `____`, passthrough `++++`, table `|===`, comment `////`) must be properly closed once a page's full include chain is flattened into the single document Asciidoctor actually renders.
   An unclosed one is almost always a forgotten closing delimiter, which silently swallows everything after it once rendered.
 
+- `--check-partials-orphaned`  
+  Every `partials/` file with no `tag::`/`end::` regions of its own (i.e. meant to be pulled in whole) must actually be pulled in somewhere via a plain/wildcarded `include::...[]` — same idea as `--check-examples-orphaned`, but for `partials/`.
+  A partial that does have tag regions is judged tag-by-tag by `--check-tags-orphaned` instead.
+  `--page NAME` narrows which files get reported on, but the usage scan always covers the whole site (see [above](#scoping-to-specific-pages-with---page)).
+
 The `(beta)` checks above are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — treat their output as a review list, not a hard gate.
 
 ### Tags
@@ -316,6 +322,7 @@ python3 docs_tool.py --page UNCOMMITTED \
   --check-pages-broken-refs \
   --check-pages-line-parity \
   --check-pages-orphaned \
+  --check-partials-orphaned \
   --check-tags-orphaned || true
 
 if [ "$blocking_failed" -ne 0 ]; then
@@ -339,7 +346,7 @@ Move one into the blocking block once it's run clean for a while in practice.
 `pages-terminology` isn't included at all, deliberately: it requires `--glossary PATH` (or an auto-discovered `*-glossary.psv`), which most repos using this tool don't have.
 A repo that does carry a glossary can add `--check-pages-terminology` to its own copy of this hook.
 `--page UNCOMMITTED` (see [above](#scoping-to-specific-pages-with---page)) scopes every check here to just the `.adoc` files the commit is actually touching; the whole-site checks (`pages-broken-refs`, `pages-orphaned`, `examples-*`, `images-orphaned`, `nav-structure-parity`) ignore it and keep scanning everything, same as any other run.
-`tags-orphaned` is in between: it only reports on tag regions defined in the touched files, but its usage scan still covers the whole site regardless.
+`tags-orphaned` and `partials-orphaned` are in between: each only reports on regions/files defined in the touched files, but its usage scan still covers the whole site regardless.
 
 ## Running the tests
 
