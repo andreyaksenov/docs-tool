@@ -33,7 +33,6 @@ maximum transmission unit|максимальный размер блока пе�
 Transparent Huge Pages|Transparent Huge Pages|Transparent Huge Pages|do-not-translate
 read-ahead|опережающее чтение|опережающ<> чтени<>|
 SSH key|SSH-ключ|SSH-ключ<>|
-option|параметр|параметр<>|
 endpoint security software|защитное программное обеспечение|защитн<> программн<> обеспечени<>|
 meta-command|метакоманда|метакоманд<>|
 backend|бэкенд|бэкенд<>|
@@ -134,7 +133,7 @@ content ID|идентификатор контента|идентификато�
 enum type|тип-перечисление|тип-перечислени<>|
 enum type|тип перечисления|тип<> перечислени<>|sense: genitive construction used in flowing prose (vs the hyphenated тип-перечисление calque used in compact type-code bullet lists)
 web table|веб-таблица|веб-таблиц<>|
-foreign data wrapper|обертка сторонних данных|обертк<> сторонн<> данн<>|
+foreign data wrapper|обертка сторонних данных|оберт<> сторонн<> данн<>|
 foreign server|сторонний сервер|сторонн<> сервер<>|
 selectivity|селективность|селективност<>|
 backend|серверный процесс|серверн<> процесс<>|
@@ -147,3 +146,4 @@ writable table|пишущая таблица|пишущ<> таблиц<>|
 leaf partition|листовая партиция|листов<> партици<>|
 security definer|контекст безопасности (определяющий контекст безопасности)|контекст<> безопасност<>|
 shared library|разделяемая библиотека|разделяем<> библиотек<>|standard RU CS term (cf. "разделяемый объект" for .so)
+transform|трансформация|трансформаци<>|
