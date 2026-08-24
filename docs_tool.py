@@ -2698,6 +2698,17 @@ _MASK_ITALIC_RE = re.compile(r'(?<!\w)_(?!\s)(?:.+?)(?<!\s)_(?!\w)')
 _MASK_MACRO_RE = re.compile(r'\b[a-zA-Z][a-zA-Z0-9]*:{1,2}\S*\[[^\]]*\]')
 _MASK_DOUBLE_ANGLE_RE = re.compile(r'<<[^>]*>>')
 _MASK_URL_RE = re.compile(r'https?://[^\s\[]*(?:\[[^\]]*\])?')
+# A run of 2+ ALL-CAPS words (e.g. "ALTER RESOURCE QUEUE") is this doc
+# set's plain-text convention for a literal SQL command/object name kept
+# untranslated by house style -- same "content is meant literally"
+# signal ALL_CAPS_TERM_RE reads elsewhere in this file. It shows up
+# unmarked-up (no code span) in :page-htmltitle:/:description: values,
+# e.g. "Overview of the ALTER RESOURCE QUEUE SQL command", where a
+# glossary term whose words happen to compose part of the command name
+# (e.g. "resource queue" inside "ALTER RESOURCE QUEUE") would otherwise
+# be flagged for not having its RU translation, even though the command
+# name itself is correctly left in English on the RU side too.
+_MASK_ALLCAPS_RUN_RE = re.compile(r'\b[A-Z][A-Z0-9]*(?:\s+[A-Z][A-Z0-9]*)+\b')
 
 # Trailing noun for the "a/the X <noun>" family of checks below. Extended
 # beyond file/folder/directory to script/archive: real usage across all
@@ -3230,6 +3241,7 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, ver
             ru_text = ru_line
 
         masked_en = _mask_code_and_links(en_text)
+        masked_en = _MASK_ALLCAPS_RUN_RE.sub(lambda m: ' ' * len(m.group(0)), masked_en)
         matched_keys = {m.group(0).lower() for m in term_re.finditer(masked_en)}
         if not matched_keys:
             continue

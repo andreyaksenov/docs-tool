@@ -1466,6 +1466,21 @@ class PagesTerminologyTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_terminology)
         self.assertTrue(ok, output)
 
+    def test_term_inside_allcaps_command_name_is_skipped(self):
+        """An SQL command name like "ALTER RESOURCE QUEUE" is kept
+        untranslated by house style and appears unmarked-up (no code span)
+        in :page-htmltitle:/:description: values -- a glossary term whose
+        words happen to compose part of that name (e.g. "resource queue")
+        must not be flagged just because the RU side rightly left the
+        command name in English too."""
+        self._set_glossary("resource queue|ресурсная очередь|ресурсн<> очеред<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    ":page-htmltitle: Overview of the ALTER RESOURCE QUEUE SQL command\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    ":page-htmltitle: Обзор SQL-команды ALTER RESOURCE QUEUE\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
     def test_other_attribute_lines_still_not_scanned(self):
         self._set_glossary("host|хост|хост<>")
         self.write("en/modules/ROOT/pages/page.adoc",
