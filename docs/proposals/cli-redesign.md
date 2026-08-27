@@ -13,8 +13,8 @@ prints one check's full rationale).
 suppressions, the baseline file — all of which need every check refactored to emit structured
 findings, a large separate change (see §6).
 **Prototyped and dropped:** `--fix` (a check that reports shouldn't also mutate files), a
-`.docs_tool.ini` config file (flags are enough), `--profile` (one hardcoded value), and
-`--lang en|ru` (`--page` covers "check what I touched" for all checks, not just the 4 both-tree ones).
+`.docs_tool.ini` config file (flags are enough), `--profile` (one hardcoded value),
+`--lang en|ru` (`--page` covers "check what I touched"), and `sync --since REF` (nobody used it).
 
 ---
 
@@ -72,7 +72,7 @@ docs_tool show <subcheck|rule-id>  # one check's full rationale (docstring)
 docs_tool list                    # the family/check map, one line per check
 docs_tool list checks             # every check as a `check ...` command
 docs_tool list targets            # what each --target value scopes to
-docs_tool sync <en-file> [--dry-run] [--since REF]
+docs_tool sync <en-file> [--dry-run]
 ```
 
 `list` enumerates; `show` describes one item — the `git branch` / `git show` split.
@@ -163,12 +163,12 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 
 ## 5. `sync`
 
-Lifts to a top-level verb, verbatim — `docs_tool sync <en-file> [--dry-run] [--since REF]`,
-bare-filename resolution unchanged. `align` would be the more honest name (the README calls
-it "a heuristic aligner, not a semantic merge"), but the accuracy gain is not worth the
-churn across ~12 vendored copies. Not hidden under `check` (it writes files). Not
-direction-namespaced (`sync ru`) — it never touches EN. Natural later extension:
-`docs_tool sync --since main` with no file = align every RU page whose EN changed since a ref.
+Lifts to a top-level verb — `docs_tool sync <en-file> [--dry-run]`, bare-filename resolution
+unchanged. `align` would be the more honest name (the README calls it "a heuristic aligner,
+not a semantic merge"), but the accuracy gain is not worth the churn across ~12 vendored
+copies. Not hidden under `check` (it writes files). Not direction-namespaced (`sync ru`) —
+it never touches EN. `--since REF` (override the reworded-line baseline) was dropped —
+nobody used it, and the default (last commit touching RU) is right in the common case.
 
 ## 6. Orthogonal improvements
 

@@ -85,7 +85,7 @@ list                          # the family/check map
 list checks                   # every check as a `check ...` command, one per line
 list targets                  # what each --target value scopes to
 
-sync <path/to/en/file.adoc> [--dry-run] [--since REF]
+sync <path/to/en/file.adoc> [--dry-run]
 ```
 
 `./docs_tool.py` with no arguments (or `--help`) prints this whole surface.
@@ -132,7 +132,7 @@ The pre-subcommand form is unchanged — `main()` routes `check`/`show`/`list`/`
                [--external-root NAME=PATH ...]
 
 --all-checks [--verbose]
---sync <path/to/en/file.adoc> [--dry-run] [--since REF]
+--sync <path/to/en/file.adoc> [--dry-run]
 --list-checks
 --list-modules
 ```

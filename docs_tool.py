@@ -12,7 +12,7 @@ Commands:
     ./docs_tool.py check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose] [--page NAME ...]
     ./docs_tool.py show  <subcheck|rule-id>     -- one check's full rationale
     ./docs_tool.py list  [checks|targets]       -- the family/check map, or a flat list
-    ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run] [--since REF]
+    ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
 
 Checks are grouped into six families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
@@ -4109,8 +4109,8 @@ def _git_diff_hunks(ref: str, path: Path):
     return hunks
 
 
-def find_reworded_lines(en_path: Path, ru_path: Path, en_lines, ru_lines, pairs, force_synced, since: str = None):
-    ref = since or _last_commit_touching(ru_path)
+def find_reworded_lines(en_path: Path, ru_path: Path, en_lines, ru_lines, pairs, force_synced, ref: str = None):
+    ref = ref or _last_commit_touching(ru_path)
     if not ref:
         return None, []
 
@@ -4219,7 +4219,7 @@ def _resolve_page_stem(name_parts):
     return matches
 
 
-def run_sync(en_file: str, dry_run: bool, since: str = None):
+def run_sync(en_file: str, dry_run: bool):
     if not en_file.endswith(".adoc"):
         sys.exit(f"error: --sync {en_file!r} must end with .adoc -- "
                   f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
@@ -4252,7 +4252,7 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
     ref = None
     old_en_lines = None
     if ru_existed:
-        ref = since or _last_commit_touching(ru_path)
+        ref = _last_commit_touching(ru_path)
         if ref:
             old_en_text = _git_show(ref, en_path)
             if old_en_text is not None:
@@ -4262,7 +4262,7 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
 
     reworded, marked = [], 0
     if ru_existed:
-        ref, reworded = find_reworded_lines(en_path, ru_path, en_lines, ru_lines, pairs, force_synced, since=ref)
+        ref, reworded = find_reworded_lines(en_path, ru_path, en_lines, ru_lines, pairs, force_synced, ref=ref)
         if reworded:
             ru_lines_marked, marked = apply_stale_markers(ru_lines, reworded)
             if marked:
@@ -4487,9 +4487,6 @@ def build_parser():
     sync_action.completer = _complete_page_name
     sync_group.add_argument("--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
-    sync_group.add_argument("--since", metavar="REF",
-                            help="With --sync: git ref to diff the EN file against when looking for "
-                                 "reworded (not just added) lines (default: the last commit that touched the RU file).")
     return parser
 
 
@@ -4580,7 +4577,7 @@ def _main_legacy():
         return
 
     if args.sync:
-        run_sync(args.sync, dry_run=args.dry_run, since=args.since)
+        run_sync(args.sync, dry_run=args.dry_run)
         return
 
     _apply_page_filter(args.page)
@@ -4654,9 +4651,6 @@ def _build_v2_parser():
     sy.completer = _complete_page_name
     s.add_argument("--dry-run", action="store_true",
                    help="Print the diff instead of writing the RU file.")
-    s.add_argument("--since", metavar="REF",
-                   help="git ref to diff EN against for reworded lines "
-                        "(default: the last commit that touched the RU file).")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         argcomplete.autocomplete(p)
@@ -4787,7 +4781,7 @@ def _main_v2():
     if args.verb == "show":
         return _v2_show(args.name)
     if args.verb == "sync":
-        run_sync(args.file, dry_run=args.dry_run, since=args.since)
+        run_sync(args.file, dry_run=args.dry_run)
         return
 
     # verb == "check"
