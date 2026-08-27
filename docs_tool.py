@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 try:
@@ -3153,14 +3154,29 @@ def check_pages_table_cell_periods(verbose=False) -> bool:
 # PAGES: glossary terminology consistency
 # --------------------------------------------------------------------------
 
+def _glossary_entry_ru_count(entry, ru_line: str) -> int:
+    """How many distinct translated mentions of the term `ru_line` can be
+    credited with, using the entry's best-fitting accepted pattern. For one
+    pattern that's the least frequent of its required stem regexes (see
+    _compile_glossary_pattern) -- a two-token pattern like "ресурсн<>
+    очеред<>" is credited once per (ресурсн, очеред) pair the line can
+    form, i.e. min of the two counts; across the entry's alternative
+    patterns the best (max) such count wins. 0 means no pattern matched at
+    all. Each pattern comes straight from a glossary row's ru_pattern
+    column, so there's no guessing here: a stem token's boundary was chosen
+    by whoever authored the glossary, not inferred at match time."""
+    best = 0
+    for pattern in entry["patterns"]:
+        counts = [len(regex.findall(ru_line)) for regex in pattern]
+        if counts:
+            best = max(best, min(counts))
+    return best
+
+
 def _glossary_entry_satisfied(entry, ru_line: str) -> bool:
     """True if `ru_line` matches at least one of the entry's accepted
-    patterns -- i.e. every compiled regex in that pattern (see
-    _compile_glossary_pattern) finds a hit somewhere in the line. Each
-    pattern comes straight from a glossary row's ru_pattern column, so
-    there's no guessing here: a stem token's boundary was chosen by whoever
-    authored the glossary, not inferred at match time."""
-    return any(all(regex.search(ru_line) for regex in pattern) for pattern in entry["patterns"])
+    patterns (see _glossary_entry_ru_count)."""
+    return _glossary_entry_ru_count(entry, ru_line) > 0
 
 
 def _build_glossary_term_re(glossary):
@@ -3180,7 +3196,16 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, ver
     line index -- same positional alignment _check_translation_pair uses --
     so it carries the same known limitation: if the two files have drifted
     out of line-parity, a matched EN line can end up checked against the
-    wrong RU line."""
+    wrong RU line.
+
+    A term is flagged when its accepted RU translation turns up on the
+    aligned line fewer times than the EN term itself does: 0 of any is the
+    plain "wrong/missing translation" case, and N-of-fewer-than-N catches
+    an EN line that repeats a term (or packs several different glossary
+    terms in) where the RU side only translated some of the mentions.
+    Because Russian routinely avoids repeating a noun (a pronoun, ellipsis,
+    or "тот же" stands in), the repeat case can misfire -- it stays on the
+    same "beta, review list" footing as the rest of this check."""
     en_lines = _read_lines(en_file)
     ru_lines = _read_lines(ru_file)
     if en_lines is None or ru_lines is None:
@@ -3242,18 +3267,24 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, ver
 
         masked_en = _mask_code_and_links(en_text)
         masked_en = _MASK_ALLCAPS_RUN_RE.sub(lambda m: ' ' * len(m.group(0)), masked_en)
-        matched_keys = {m.group(0).lower() for m in term_re.finditer(masked_en)}
-        if not matched_keys:
+        en_counts = Counter(m.group(0).lower() for m in term_re.finditer(masked_en))
+        if not en_counts:
             continue
 
-        for key in sorted(matched_keys):
+        for key in sorted(en_counts):
             entry = glossary[key]
-            if _glossary_entry_satisfied(entry, ru_text):
+            en_count = en_counts[key]
+            ru_count = _glossary_entry_ru_count(entry, ru_text)
+            if ru_count >= en_count:
                 continue
             ensure_header()
             finding_count += 1
             forms = ", ".join(f"'{f}'" for f in sorted(entry["ru_display"]))
-            print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- expected one of [{forms}], not found")
+            if ru_count == 0:
+                print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- expected one of [{forms}], not found")
+            else:
+                print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- appears {en_count}x on the EN line "
+                      f"but a translation from [{forms}] is present only {ru_count}x")
             if verbose:
                 print(f"    EN: {en_text}")
                 print(f"    RU: {ru_text}")
@@ -3263,10 +3294,12 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, ver
 
 def check_pages_terminology(verbose=False) -> bool:
     """New check (not a port of an existing shell script): flags an EN
-    glossary term (see --glossary) whose aligned RU line doesn't contain any
-    of its accepted RU translations, catching a translator drifting onto an
-    inconsistent or outdated Russian term for something the glossary already
-    has a house-style answer for.
+    glossary term (see --glossary) whose aligned RU line contains its
+    accepted RU translation fewer times than the EN term appears, catching a
+    translator drifting onto an inconsistent or outdated Russian term for
+    something the glossary already has a house-style answer for -- including
+    the case where an EN line uses the term (or several glossary terms) more
+    than once and only some mentions were translated correctly.
 
     An EN term is located via a longest-first regex alternation over every
     glossary key (see _build_glossary_term_re). Whether the RU line "has the
@@ -3278,11 +3311,14 @@ def check_pages_terminology(verbose=False) -> bool:
     pattern is just the EN term's own words, all bare, so it's effectively
     required verbatim. All tokens in a pattern must be found somewhere in
     the RU line (any order) for that pattern to count as a match; an entry
-    is satisfied if any one of its patterns matches. This still can't tell
-    "right words in an unrelated sentence" from a real match, so it's
-    deliberately biased toward fewer false positives at the cost of some
-    missed drift -- same "beta, review list" tradeoff as this file's other
-    heuristic checks.
+    is credited once per full set of its pattern tokens the line can form
+    (see _glossary_entry_ru_count), and that count is compared against how
+    many times the EN term occurs on the aligned line. This still can't
+    tell "right words in an unrelated sentence" from a real match, and the
+    repeat comparison additionally trips on Russian's habit of not
+    repeating a noun it already named, so it's deliberately biased toward
+    fewer false positives at the cost of some missed drift -- same "beta,
+    review list" tradeoff as this file's other heuristic checks.
 
     Two glossary rows sharing an EN key (e.g. the two "session" senses) are
     merged by _load_glossary into one set of alternative patterns, so either

@@ -326,7 +326,7 @@ It does resolve a self-qualified `image::<OwnComponent>:...[]` reference against
   `-v` also prints the full EN/RU line pair for each hit.
   Requires `--glossary PATH` (repeatable; a pipe-delimited file with `en|ru|ru_pattern|note` columns, format documented in a `*-glossary.psv` file's own header — `|` rather than `,` specifically so ordinary prose, which routinely contains commas, never needs quoting/escaping).
   If `--glossary` is omitted, it defaults to every `*-glossary.psv` file found directly under the current directory — so a docs repo carrying its own glossary (e.g. `greengagedb-glossary.psv`) doesn't need the path spelled out on every run; a note is printed to stderr when this default kicks in.
-  Flags an EN glossary term whose aligned RU line doesn't match any of its `ru_pattern` alternatives — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for.
+  Flags an EN glossary term whose aligned RU line matches its `ru_pattern` alternatives fewer times than the term occurs on the EN line — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for, including a line that uses the term (or several glossary terms) more than once and only translated some of the mentions. The repeat comparison can misfire where Russian legitimately avoids repeating a noun (pronoun, ellipsis) — treat it as a review list.
 
   ```bash
   ./docs_tool.py --check-pages-terminology -v --glossary greengagedb-glossary.psv

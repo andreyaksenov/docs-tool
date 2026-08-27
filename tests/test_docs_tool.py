@@ -1490,6 +1490,63 @@ class PagesTerminologyTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_terminology)
         self.assertTrue(ok, output)
 
+    def test_repeated_term_translated_every_time_passes(self):
+        self._set_glossary("host|хост|хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "The primary host talks to the standby host.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Основной хост общается с резервным хостом.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_repeated_term_translated_once_is_flagged(self):
+        self._set_glossary("host|хост|хост<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "The primary host talks to the standby host.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Основной хост общается с резервным сервером.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertIn("MISMATCH", output)
+        self.assertIn("'host'", output)
+        self.assertIn("2x", output)
+        self.assertIn("1x", output)
+
+    def test_several_different_terms_each_checked_on_one_line(self):
+        self._set_glossary(
+            "commit|фиксация|фиксац<>",
+            "rollback|откат|откат<>",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "You can commit or rollback the change.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Вы можете выполнить фиксацию или отменить изменение.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertFalse(ok)
+        self.assertNotIn("'commit'", output)  # "фиксацию" satisfies the commit entry
+        self.assertIn("'rollback'", output)   # "отменить" is not the house-style "откат"
+
+    def test_multiword_term_repeated_counts_by_scarcest_token(self):
+        self._set_glossary("resource queue|ресурсная очередь|ресурсн<> очеред<>")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "A resource queue limits load; each resource queue has a name.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                    "Ресурсная очередь ограничивает нагрузку; ресурсная очередь имеет имя.\n")
+        ok, output = self.run_check(dt.check_pages_terminology)
+        self.assertTrue(ok, output)
+
+    def test_ru_count_helper_counts_scarcest_token(self):
+        entry = {
+            "ru_display": {"ресурсная очередь"},
+            "patterns": [dt._compile_glossary_pattern("ресурсн<> очеред<>")],
+        }
+        self.assertEqual(
+            dt._glossary_entry_ru_count(entry, "ресурсная очередь и ресурсная очередь"), 2)
+        self.assertEqual(
+            dt._glossary_entry_ru_count(entry, "ресурсная и ресурсная очередь"), 1)
+        self.assertEqual(
+            dt._glossary_entry_ru_count(entry, "здесь ничего нет"), 0)
+
 
 class PagesStructureParityTests(FixtureTestCase):
     def test_matching_structure_passes(self):
