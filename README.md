@@ -18,15 +18,17 @@ the `chmod` and run `python docs_tool.py …`.
 ## Usage
 
 ```
-check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose]
-                              [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
-show  <subcheck|rule-id>        one check's full rationale
-list [checks|targets]          the family/check map, or a flat list
-sync  <en-file> [--dry-run]     align a RU page to its EN counterpart (beta)
+./docs_tool.py check <family> [<family> ...] [--<subcheck> ...]
+                     [--target NAME] [--verbose] [--page NAME ...]
+                     [--glossary PATH ...] [--external-root NAME=PATH ...]
+
+./docs_tool.py show <subcheck|rule-id>        # one check's full rationale
+./docs_tool.py list [checks|targets]          # the check map, or a flat list
+./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
 ```
 
-`./docs_tool.py` with no arguments prints the full command list. A run exits `0` if
-everything passed, `1` if any check found something.
+Run with no arguments to print the full command list. A run exits `0` if everything
+passed, `1` if any check found something.
 
 Checks are grouped into six **families**:
 
