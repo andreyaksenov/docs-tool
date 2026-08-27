@@ -6,8 +6,8 @@
 
 New design proposals for this tool go in `docs/proposals/`.
 
-**On this branch:** the `check`/`sync`/`list` surface, six families, `--target`,
-multi-family `check chars markup`, and stable rule IDs (`CH01`…, shown by `list`; `list <id>`
+**On this branch:** the `check`/`show`/`list`/`sync` surface, six families, `--target`,
+multi-family `check chars markup`, and stable rule IDs (`CH01`…, shown by `list`; `show <id>`
 prints one check's full rationale).
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
@@ -68,12 +68,14 @@ monolingual and `--page`-scopeable, and terminology breaks both.
 ```
 docs_tool check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose]
                                         [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
-docs_tool sync <en-file> [--dry-run] [--since REF]
+docs_tool show <subcheck|rule-id>  # one check's full rationale (docstring)
 docs_tool list                    # the family/check map, one line per check
-docs_tool list <subcheck|rule-id> # one check's full rationale (docstring)
 docs_tool list checks             # every check as a `check ...` command
 docs_tool list targets            # what each --target value scopes to
+docs_tool sync <en-file> [--dry-run] [--since REF]
 ```
+
+`list` enumerates; `show` describes one item — the `git branch` / `git show` split.
 
 No short flag aliases — every option is spelled out (`--verbose`, not `-v`) so a command
 or a CI log reads for itself. `-h` is the one exception, since argparse provides it.
@@ -176,8 +178,9 @@ Done on this branch:
 
 - **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`, shown by `list`.
 - **`--target`** scan-target flag instead of `pages-` vs `examples-` prefixes.
-- **`list`** — one-line-per-check family map (a `SUMMARIES` blurb each), and `list <subcheck|id>`
-  prints that check's full docstring. Replaces a separate `explain` verb.
+- **`list` / `show`** — `list` is the one-line-per-check family map (a `SUMMARIES` blurb each),
+  plus `list checks` / `list targets`; `show <subcheck|id>` prints one check's full docstring.
+  (`explain` was folded into `list`, then split back out as `show` — `list` enumerates, `show` describes.)
 - **multi-family `check`** — `check chars markup` runs both; `check all` runs everything.
 - **`--all-checks` / `check all` no longer abort** when `terms` is swept in without a glossary —
   it's dropped with a note; a bare `check terms` still errors.
@@ -212,7 +215,7 @@ refreshed by hand. So:
 
 - **Fewer, bigger moves.** Every change propagates by manual copy.
 - **Every `--check-<old>` flag still works**, routed through the legacy parser (`main()`
-  dispatches on `argv[0]`: `check`/`sync`/`list` → new surface, anything else → legacy).
+  dispatches on `argv[0]`: `check`/`show`/`list`/`sync` → new surface, anything else → legacy).
   `docs_tool.py --list-checks` still prints the old flag list; `docs_tool list checks`
   prints the new `check ...` command for each, one per line, sorted by rule ID.
 

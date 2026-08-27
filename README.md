@@ -79,12 +79,13 @@ check <family> [<family> ...]  [--<subcheck> ...] [--target NAME] [--verbose]
                                [--page NAME ...] [--glossary PATH ...]
                                [--external-root NAME=PATH ...]
 
-sync <path/to/en/file.adoc> [--dry-run] [--since REF]
+show <subcheck-or-ID>         # one check's full rationale (e.g. `show no-yo`, `show ST01`)
 
 list                          # the family/check map
-list <subcheck-or-ID>         # one check's full rationale
 list checks                   # every check as a `check ...` command, one per line
 list targets                  # what each --target value scopes to
+
+sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 ```
 
 `./docs_tool.py` with no arguments (or `--help`) prints this whole surface.
@@ -111,19 +112,19 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
 
 ./docs_tool.py list                        # the family/check map, one line per check
-./docs_tool.py list table-cell-periods     # that check's full rationale and exceptions
+./docs_tool.py show table-cell-periods     # that check's full rationale and exceptions
 ```
 
 Selection rules: `check <family> [<family> ...]` runs those whole families (`check all` for every family); adding a single `--<subcheck>` narrows to one check (target `pages` by default); `--target NAME` picks a different one (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`. Exit `0` if everything passed, `1` if any check found something.
 
-Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) — shown by `list`, and `list <ID>` prints that check's full rationale.
+Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) — shown by `list`, and `show <ID>` prints that check's full rationale.
 
 `list` marks each family `block` or `warn by default` — a hint for the [pre-commit hook](#pre-commit-hook): hard-fail the commit on the deterministic families (`chars`, `markup`), just report the heuristic ones.
 
 <details>
 <summary><b>Legacy <code>--check-*</code> flags</b> (still supported)</summary>
 
-The pre-subcommand form is unchanged — `main()` routes `check`/`sync`/`list` to the new surface and everything else to the legacy parser:
+The pre-subcommand form is unchanged — `main()` routes `check`/`show`/`list`/`sync` to the new surface and everything else to the legacy parser:
 
 ```
 --check-<name> [--check-<name> ...] [--verbose]
@@ -208,7 +209,7 @@ Run a whole family (`./docs_tool.py check chars`) or one check (`./docs_tool.py 
 `--target NAME` (default `pages`, which covers `pages/` + `partials/`; also `partials`, `examples`, `images`, `tags`, `nav`, or `all`) picks the scan target for a check that has more than one.
 
 Every check runs across all discovered modules automatically, even though the descriptions below say "EN"/"RU" for brevity.
-Every check has a stable rule ID (shown below and by `./docs_tool.py list`); `./docs_tool.py list <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
+Every check has a stable rule ID (shown below and by `./docs_tool.py list`); `./docs_tool.py show <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
 
 ### `chars` — Unicode / encoding
 

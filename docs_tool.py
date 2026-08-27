@@ -9,12 +9,10 @@ Run from the repo root (use "python docs_tool.py ..." on Windows). Every
 check scans all discovered modules automatically.
 
 Commands:
-    ./docs_tool.py check <family> [--<subcheck> ...] [--target NAME]
-    ./docs_tool.py check <family> [<family> ...] [--verbose] [--page NAME ...]
-    ./docs_tool.py check all
-    ./docs_tool.py sync <path/to/en/file.adoc> [--dry-run] [--since REF]
-    ./docs_tool.py list                        -- the family/check map
-    ./docs_tool.py list <subcheck|rule-id>     -- one check's full rationale
+    ./docs_tool.py check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose] [--page NAME ...]
+    ./docs_tool.py show  <subcheck|rule-id>     -- one check's full rationale
+    ./docs_tool.py list  [checks|targets]       -- the family/check map, or a flat list
+    ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run] [--since REF]
 
 Checks are grouped into six families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
@@ -3631,7 +3629,7 @@ TARGET_DESC = {
 _ALL_SUBCHECKS = tuple(sorted({sc for fam in FAMILIES.values() for sc in fam}))
 
 # Stable per-check identifiers, family-prefixed. The user-facing handle for a
-# check: accepted by `list <id>`, printed by `list`. (Decoupling the selector
+# check: accepted by `show <id>`, printed by `list`. (Decoupling the selector
 # from the Python function name; inline-suppression / JSON keying will build
 # on these -- see cli-redesign.md phase 1/4.)
 RULE_IDS = {
@@ -3661,7 +3659,7 @@ RULE_IDS = {
 _ID_TO_KEY = {v: k for k, v in RULE_IDS.items()}
 
 # One-line "what it does" for `docs_tool list`. The full rationale/exceptions
-# stay in each check_* function's docstring (docs_tool list <subcheck>).
+# stay in each check_* function's docstring (docs_tool show <subcheck>).
 SUMMARIES = {
     "pages-no-cyrillic":           "no Cyrillic characters in en/ files (RU text left in EN)",
     "examples-no-cyrillic":        "same check, over examples/ (all file types)",
@@ -4422,7 +4420,7 @@ def build_parser():
         description="Legacy flag interface (--check-<name>, --all-checks, --sync, "
                     "--list-checks, --list-modules). Still supported. The current "
                     "surface is 'docs_tool.py check <family>' -- run 'docs_tool.py --help' "
-                    "(no other args) or 'docs_tool.py list families' for it.",
+                    "(no other args) or 'docs_tool.py list' for it.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     check_group = parser.add_argument_group("checks")
@@ -4600,10 +4598,10 @@ def _main_legacy():
 
 
 # --------------------------------------------------------------------------
-# `docs_tool check|sync|list` -- the family-based surface
+# `docs_tool check|show|list|sync` -- the family-based surface
 # --------------------------------------------------------------------------
 
-_V2_VERBS = ("check", "sync", "list")
+_V2_VERBS = ("check", "sync", "list", "show")
 
 
 def _build_v2_parser():
@@ -4612,7 +4610,7 @@ def _build_v2_parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = p.add_subparsers(dest="verb", required=True, metavar="{check,sync,list}")
+    sub = p.add_subparsers(dest="verb", required=True, metavar="{check,show,list,sync}")
 
     c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
                        epilog="Each family has --<subcheck> flags (e.g. --no-yo, --structure) "
@@ -4643,6 +4641,13 @@ def _build_v2_parser():
                    help="Glossary file(s) for 'check terms'. Repeatable. "
                         "Defaults to *-glossary.psv in the current directory.")
 
+    sh = sub.add_parser("show", help="One check's full rationale, by subcheck name or rule ID.")
+    sh.add_argument("name", metavar="SUBCHECK", help="e.g. 'no-yo' or 'ST01'.")
+
+    ls = sub.add_parser("list", help="The family/check map (also 'list checks' / 'list targets').")
+    ls.add_argument("what", nargs="?", metavar="[checks|targets]",
+                    help="Omit for the family tree; 'checks' / 'targets' for flat lists.")
+
     s = sub.add_parser("sync", help="Align a RU page to its EN counterpart (beta).")
     sy = s.add_argument("file", metavar="EN_FILE",
                         help="EN .adoc file: full path or bare filename (resolved like --page).")
@@ -4652,11 +4657,6 @@ def _build_v2_parser():
     s.add_argument("--since", metavar="REF",
                    help="git ref to diff EN against for reworded lines "
                         "(default: the last commit that touched the RU file).")
-
-    ls = sub.add_parser("list", help="The family/check map, or one check's rationale.")
-    ls.add_argument("what", nargs="?", metavar="[checks|targets|<subcheck>]",
-                    help="Omit for the family tree. 'checks' / 'targets' for flat lists. "
-                         "A subcheck name or rule ID prints that check's full rationale.")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         argcomplete.autocomplete(p)
@@ -4729,8 +4729,13 @@ def _v2_list(what):
         for t, desc in TARGET_DESC.items():
             print(f"  {t:<10}{desc}")
         return
+    if what == "modules":
+        print("list: module discovery moved -- use 'docs_tool.py --list-modules'", file=sys.stderr)
+        sys.exit(2)
     if what not in (None, "families"):
-        return _list_one_check(what)
+        hint = f" -- did you mean 'docs_tool show {what}'?" if _resolve_check_name(what) else ""
+        print(f"list: unknown argument '{what}' (expected: checks, targets){hint}", file=sys.stderr)
+        sys.exit(2)
 
     for i, (fam, subs) in enumerate(FAMILIES.items()):
         if i:
@@ -4750,14 +4755,11 @@ def _v2_list(what):
     print("check <family> [<family> ...]  run those families")
     print("check <family> --<subcheck>    run just one check")
     print("check all                      run everything")
-    print("list <subcheck>                print that check's full rationale")
+    print("show <subcheck|rule-id>        one check's full rationale")
     print("list checks | list targets     flat check list · --target values")
 
 
-def _list_one_check(name):
-    if name == "modules":
-        print("list: module discovery moved -- use 'docs_tool.py --list-modules'", file=sys.stderr)
-        sys.exit(2)
+def _v2_show(name):
     key = _resolve_check_name(name)
     if key is None:
         print(f"unknown check: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
@@ -4782,6 +4784,8 @@ def _main_v2():
 
     if args.verb == "list":
         return _v2_list(args.what)
+    if args.verb == "show":
+        return _v2_show(args.name)
     if args.verb == "sync":
         run_sync(args.file, dry_run=args.dry_run, since=args.since)
         return

@@ -2043,22 +2043,27 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("no Cyrillic", out)          # a SUMMARIES blurb
         self.assertNotIn("pages-no-cyrillic", out) # no legacy-key line in the tree
 
-    def test_list_subcheck_prints_its_rationale(self):
-        code, out, _ = self._run("list", "no-yo")
+    def test_show_subcheck_prints_its_rationale(self):
+        code, out, _ = self._run("show", "no-yo")
         self.assertEqual(code, 0)
         self.assertIn("ST01", out)
         self.assertIn("check style --no-yo", out)
         self.assertIn("ё", out)                    # from the docstring
 
-    def test_list_rule_id_prints_its_rationale(self):
-        code, out, _ = self._run("list", "ln02")   # case-insensitive
+    def test_show_rule_id_case_insensitive(self):
+        code, out, _ = self._run("show", "ln02")
         self.assertEqual(code, 0)
         self.assertIn("check l10n --structure", out)
 
-    def test_list_unknown_name_errors(self):
-        code, _, err = self._run("list", "not-a-check")
+    def test_show_unknown_name_errors(self):
+        code, _, err = self._run("show", "not-a-check")
         self.assertEqual(code, 2)
         self.assertIn("unknown check", err)
+
+    def test_list_with_a_check_name_hints_at_show(self):
+        code, _, err = self._run("list", "no-yo")
+        self.assertEqual(code, 2)
+        self.assertIn("show no-yo", err)
 
     def test_list_modules_points_at_legacy_flag(self):
         code, _, err = self._run("list", "modules")
@@ -2127,7 +2132,7 @@ class CliV2RoutingTests(unittest.TestCase):
         code, out, _ = self._run()
         self.assertEqual(code, 0)
         self.assertIn("check <family>", out)
-        self.assertIn("{check,sync,list}", out)
+        self.assertIn("{check,show,list,sync}", out)
 
     def test_top_level_help_routes_to_new_surface(self):
         code, out, _ = self._run("--help")
@@ -2154,10 +2159,10 @@ class RuleIdRegistryTests(unittest.TestCase):
                     self.assertTrue(dt.RULE_IDS[key].startswith(prefix[fam]),
                                     f"{key} -> {dt.RULE_IDS[key]} (family {fam})")
 
-    def test_list_one_check_accepts_an_id(self):
+    def test_show_accepts_an_id(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            dt._list_one_check("ST01")
+            dt._v2_show("ST01")
         self.assertIn("check style --no-yo", out.getvalue())
 
     def test_resolve_check_name(self):
