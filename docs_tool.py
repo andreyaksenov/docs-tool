@@ -4728,14 +4728,31 @@ def _tier_of(fam):
 
 
 def _target_of(key):
-    """The scan target a specific CHECKS key sits under (e.g. 'examples' for
-    examples-orphaned), or None for the default 'pages' target."""
+    """The non-default scan target `--target` needs to reach a specific
+    CHECKS key (e.g. 'examples' for examples-orphaned), or None. Only
+    subchecks with more than one target ever need it -- a single-target
+    subcheck like l10n --examples is unambiguous on its own."""
     for subs in FAMILIES.values():
         for targets in subs.values():
+            if key not in targets.values() or len(targets) == 1:
+                continue
             for t, k in targets.items():
                 if k == key and t != "pages":
                     return t
     return None
+
+
+def _check_command(key):
+    """The `check ...` command that runs one CHECKS key -- 'check terms' for
+    a single-check family, else 'check <fam> --<sub> [--target X]'."""
+    sc = _subcheck_of(key)
+    fam = _family_of(sc)
+    tgt = _target_of(key)
+    if fam and len(FAMILIES[fam]) == 1:
+        base = f"check {fam}"
+    else:
+        base = f"check {fam} --{sc}"
+    return base + (f" --target {tgt}" if tgt else "")
 
 
 def _v2_list(what):
@@ -4744,9 +4761,10 @@ def _v2_list(what):
             print(name)
         return
     if what == "checks":
-        for name in CHECKS:
-            beta = "  [beta]" if name in BETA_CHECKS else ""
-            print(f"{RULE_IDS[name]}  {name}{beta}")
+        rows = sorted((RULE_IDS[k], _check_command(k),
+                       "  [beta]" if k in BETA_CHECKS else "") for k in CHECKS)
+        for rid, cmd, beta in rows:
+            print(f"{rid}  {cmd}{beta}")
         return
     if what not in (None, "families"):
         return _list_one_check(what)
@@ -4777,13 +4795,10 @@ def _list_one_check(name):
     if key is None:
         print(f"unknown check: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
         sys.exit(2)
-    sc = _subcheck_of(key)
-    fam = _family_of(sc) or "?"
+    fam = _family_of(_subcheck_of(key)) or "?"
     disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
-    tgt = _target_of(key)
-    cmd = f"check {fam} --{sc}" + (f" --target {tgt}" if tgt else "")
     beta = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
-    print(f"{RULE_IDS[key]}  {cmd}   ({disp}){beta}\n")
+    print(f"{RULE_IDS[key]}  {_check_command(key)}   ({disp}){beta}\n")
     print(SUMMARIES.get(key, ""))
     doc = (CHECKS[key].__doc__ or "").strip()
     if doc:

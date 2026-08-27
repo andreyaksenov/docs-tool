@@ -212,9 +212,9 @@ refreshed by hand. So:
 
 - **Fewer, bigger moves.** Every change propagates by manual copy.
 - **Every `--check-<old>` flag still works**, routed through the legacy parser (`main()`
-  dispatches on `argv[0]`: `check`/`sync`/`list` → new surface, anything else →
-  legacy). `docs_tool list checks` and `docs_tool.py --list-checks` both still print the
-  registry.
+  dispatches on `argv[0]`: `check`/`sync`/`list` → new surface, anything else → legacy).
+  `docs_tool.py --list-checks` still prints the old flag list; `docs_tool list checks`
+  prints the new `check ...` command for each, one per line, sorted by rule ID.
 
 Not done: over-nesting (two levels — family then subcheck — is the limit); the 0/1/2 exit
 contract only applies to `--profile` runs so far — plain `check` and legacy stay 0/1.

@@ -86,7 +86,8 @@ sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 
 list                          # the family/check map
 list <subcheck-or-ID>         # one check's full rationale
-list checks | list modules    # flat lists
+list checks                   # every check as a `check ...` command, one per line
+list modules                  # discovered modules
 ```
 
 `./docs_tool.py` with no arguments (or `--help`) prints this whole surface.

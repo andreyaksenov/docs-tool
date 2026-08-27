@@ -2104,10 +2104,15 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("OK:", out)
 
-    def test_list_checks_prints_the_flat_list(self):
+    def test_list_checks_prints_commands_sorted_by_id(self):
         code, out, _ = self._run("list", "checks")
         self.assertEqual(code, 0)
-        self.assertIn("CH01  pages-no-cyrillic", out)
+        self.assertIn("CH01  check chars --no-cyrillic", out)
+        self.assertIn("RF04  check refs --orphaned --target examples", out)
+        self.assertIn("TM01  check terms", out)
+        self.assertNotIn("pages-no-cyrillic", out)   # no internal registry keys
+        lines = [l for l in out.splitlines() if l[:2] in ("CH", "MK", "RF", "ST", "TM", "LN")]
+        self.assertEqual(lines, sorted(lines))
 
     def test_bare_invocation_prints_the_new_surface(self):
         code, out, _ = self._run()
