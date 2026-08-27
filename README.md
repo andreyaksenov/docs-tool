@@ -76,11 +76,9 @@ Either way, `./docs_tool.py <TAB>` completes the subcommands and, within `check`
 Run `./docs_tool.py` from the repo root, followed by one of:
 
 ```
-check <family|all> [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
-                   [--page NAME ...] [--glossary PATH ...]
-                   [--external-root NAME=PATH ...]
-
-check --profile <name> [--page NAME ...]
+check <family> [<family> ...]  [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
+                               [--page NAME ...] [--glossary PATH ...]
+                               [--external-root NAME=PATH ...]
 
 sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 
@@ -106,6 +104,7 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ```bash
 ./docs_tool.py check style                  # every style check
 ./docs_tool.py check style --no-yo          # just one
+./docs_tool.py check chars markup           # two families at once
 ./docs_tool.py check markup --lang ru       # both-tree checks, RU only
 ./docs_tool.py check refs                   # broken-refs + every orphan check
 ./docs_tool.py check all
@@ -117,13 +116,13 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py list table-cell-periods     # that check's full rationale and exceptions
 ```
 
-Selection rules: `check <family>` runs the whole family across every scan target; adding `--<subcheck>` narrows to one check (target `pages` by default); `--target NAME` picks a different one (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`.
+Selection rules: `check <family> [<family> ...]` runs those whole families (`check all` for every family); adding a single `--<subcheck>` narrows to one check (target `pages` by default); `--target NAME` picks a different one (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`. Exit `0` if everything passed, `1` if any check found something.
 
 `--lang en|ru` restricts the checks that scan both trees (`chars`, `markup`) to one language; inherently single- or bi-lingual checks ignore it.
 
 Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) — shown by `list`, and `list <ID>` prints that check's full rationale.
 
-`check --profile <name>` runs a built-in named check set (currently just `pre-commit`: blocks `chars` + `markup`, warns on the rest) and returns a 3-way exit code — `2` blocking finding, `1` warn-only, `0` clean.
+`list` marks each family `block` or `warn by default` — a hint for the [pre-commit hook](#pre-commit-hook): hard-fail the commit on the deterministic families (`chars`, `markup`), just report the heuristic ones.
 
 <details>
 <summary><b>Legacy <code>--check-*</code> flags</b> (still supported)</summary>
@@ -434,17 +433,21 @@ Review and reconcile those cases by hand.
 
 Runs a subset of the checks above automatically before every `git commit`.
 
-With the new surface this is a two-liner, using the built-in `pre-commit` profile (`chars` + `markup` block the commit; `style`, `terms`, `l10n`, `refs` warn only):
+Two `check` calls scoped to the commit's own files — the deterministic families block, the heuristic ones just report:
 
 ```bash
 #!/usr/bin/env bash
 cd "$(git rev-parse --show-toplevel)"
-python3 docs_tool.py check --profile pre-commit --page UNCOMMITTED
-[ $? -ge 2 ] && { echo "pre-commit: blocking check(s) failed -- commit aborted." >&2; exit 1; }
-exit 0
+
+# block the commit on these
+python3 docs_tool.py check chars markup --page UNCOMMITTED \
+  || { echo "pre-commit: blocking check(s) failed -- commit aborted." >&2; exit 1; }
+
+# report-only
+python3 docs_tool.py check style terms l10n refs --page UNCOMMITTED || true
 ```
 
-Exit `2` = a blocking-family finding, `1` = warn-only, `0` = clean.
+Move a family from the second line to the first once it's run clean for a while.
 
 <details>
 <summary>Equivalent hook using the legacy <code>--check-*</code> flags</summary>

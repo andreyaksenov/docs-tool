@@ -1937,8 +1937,8 @@ class RunSyncGitRewordTests(unittest.TestCase):
 
 
 class FamilySelectionTests(unittest.TestCase):
-    """_resolve_family_selection / _resolve_profile_selection: the routing
-    layer that maps `check <family> [--sub] [--target]` to legacy CHECKS keys."""
+    """_resolve_family_selection: the routing layer that maps
+    `check <family> [--sub] [--target]` to legacy CHECKS keys."""
 
     def test_every_family_and_subcheck_maps_to_a_real_check(self):
         for fam, subs in dt.FAMILIES.items():
@@ -2003,14 +2003,6 @@ class FamilySelectionTests(unittest.TestCase):
         got = dt._resolve_family_selection("all", None, None)
         self.assertEqual(len(got), len(set(got)))
 
-    def test_profile_splits_block_and_warn(self):
-        block, warn = dt._resolve_profile_selection(dt.PROFILES["pre-commit"])
-        self.assertIn("pages-stray-backticks", block)
-        self.assertIn("pages-no-cyrillic", block)
-        self.assertIn("pages-terminology", warn)
-        self.assertIn("pages-structure-parity", warn)
-        self.assertFalse(set(block) & set(warn))
-
     def test_family_of(self):
         self.assertEqual(dt._family_of("no-yo"), "style")
         self.assertEqual(dt._family_of("structure"), "l10n")
@@ -2073,10 +2065,19 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown check", err)
 
-    def test_check_requires_a_family_or_profile(self):
+    def test_check_requires_a_family(self):
         code, _, err = self._run("check")
         self.assertEqual(code, 2)
-        self.assertIn("family", err)
+        self.assertIn("FAMILY", err)  # argparse: "the following arguments are required: FAMILY"
+
+    def test_check_accepts_multiple_families(self):
+        code, out, err = self._run("check", "chars", "markup")
+        self.assertEqual(code, 0, err)   # no fixture tree -> nothing found
+
+    def test_subcheck_with_multiple_families_is_rejected(self):
+        code, _, err = self._run("check", "chars", "markup", "--backticks")
+        self.assertEqual(code, 2)
+        self.assertIn("exactly one family", err)
 
     def test_wrong_subcheck_for_family_is_rejected(self):
         code, _, err = self._run("check", "chars", "--no-yo")

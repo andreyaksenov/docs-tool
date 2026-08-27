@@ -10,8 +10,8 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [--<subcheck> ...] [--target NAME]
-    ./docs_tool.py check <family|all> [--lang en|ru] [--verbose]
-    ./docs_tool.py check --profile <name> [--page NAME ...]
+    ./docs_tool.py check <family> [<family> ...] [--lang en|ru] [--verbose]
+    ./docs_tool.py check all [--page NAME ...]
     ./docs_tool.py sync <path/to/en/file.adoc> [--dry-run] [--since REF]
     ./docs_tool.py list                        -- the family/check map
     ./docs_tool.py list <subcheck|rule-id>     -- one check's full rationale
@@ -26,7 +26,7 @@ Examples:
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
     ./docs_tool.py check markup --lang ru
-    ./docs_tool.py check --profile pre-commit --page UNCOMMITTED
+    ./docs_tool.py check chars markup --page UNCOMMITTED
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
@@ -3576,7 +3576,8 @@ BETA_CHECKS = {
 #                                              a target X
 #   --target all                            -> every target of whatever is selected
 #
-# TIERS drives the default block/warn disposition (used by --profile).
+# TIERS is advisory: `list` shows "block"/"warn by default" per family, as a
+# hint for what a pre-commit hook should hard-fail on vs. just report.
 FAMILIES = {
     "chars": {                        # L0 -- Unicode / encoding
         "no-cyrillic":  {"pages": "pages-no-cyrillic", "examples": "examples-no-cyrillic"},
@@ -3615,15 +3616,6 @@ TIERS = {
     "universal": ("chars", "markup", "refs"),   # deterministic  -> block by default
     "house":     ("style", "terms"),            # per-vendor      -> warn by default
     "relational": ("l10n",),                    # needs both trees -> warn by default
-}
-
-# Named check sets for `check --profile NAME`. block/warn is a list of
-# family names, resolved to their full check sets at run time.
-PROFILES = {
-    "pre-commit": {
-        "block": ["chars", "markup"],
-        "warn":  ["style", "terms", "l10n", "refs"],
-    },
 }
 
 _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
@@ -3731,21 +3723,6 @@ def _resolve_family_selection(family, picked_subchecks, target):
                 out.extend(targets.values())
     seen = set()
     return [k for k in out if k and not (k in seen or seen.add(k))]
-
-
-def _resolve_profile_selection(prof):
-    """(block_keys, warn_keys) for a PROFILES entry {"block": [families],
-    "warn": [families]} -- each family expanded to its full check set, block
-    winning a check that somehow lands in both."""
-    block, warn = [], []
-    for fam in prof.get("block", []):
-        block += _resolve_family_selection(fam, None, None)
-    for fam in prof.get("warn", []):
-        warn += [k for k in _resolve_family_selection(fam, None, None) if k not in block]
-    seen = set()
-    block = [k for k in block if not (k in seen or seen.add(k))]
-    warn = [k for k in warn if not (k in seen or seen.add(k))]
-    return block, warn
 
 
 # --------------------------------------------------------------------------
@@ -4557,9 +4534,9 @@ def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):
     if "pages-terminology" in selected:
         paths = glossary_paths or _discover_default_glossaries()
         if not paths and len(selected) > 1:
-            # Swept in as part of a family / --all-checks / profile run with no
-            # glossary available -- skip it with a note rather than aborting
-            # the whole run (a bare `check terms` still errors, in the check).
+            # Swept in as part of a multi-check run (a family, `check all`,
+            # `--all-checks`) with no glossary available -- skip it with a note
+            # rather than aborting (a bare `check terms` still errors, in the check).
             print("note: skipping terminology check -- no --glossary and no "
                   "*-glossary.psv in the current directory", file=sys.stderr)
             selected = [k for k in selected if k != "pages-terminology"]
@@ -4650,9 +4627,10 @@ def _build_v2_parser():
                        epilog="Each family has --<subcheck> flags (e.g. --no-yo, --structure) "
                               "and, where relevant, --target NAME. Run 'docs_tool list' "
                               "for the full map.")
-    c.add_argument("family", nargs="?", choices=list(FAMILIES) + ["all"],
-                   help="chars | markup | refs | style | terms | l10n | all. "
-                        "Omit only with --profile.")
+    c.add_argument("families", nargs="+", metavar="FAMILY",
+                   choices=list(FAMILIES) + ["all"],
+                   help="one or more of: chars, markup, refs, style, terms, l10n, all. "
+                        "--<subcheck> flags need exactly one family.")
     for sc in _ALL_SUBCHECKS:
         c.add_argument(f"--{sc}", dest=sc.replace("-", "_"), action="store_true",
                        help=argparse.SUPPRESS)
@@ -4663,10 +4641,6 @@ def _build_v2_parser():
     c.add_argument("--lang", choices=("en", "ru"),
                    help="Restrict the both-tree checks (chars, markup) to one "
                         "language. Ignored by inherently single- or bi-lingual checks.")
-    c.add_argument("--profile", metavar="NAME", choices=list(PROFILES),
-                   help="Run a named profile instead of a family (available: %s). Exit 2 "
-                        "on a blocking-family finding, 1 on warn-only, 0 clean."
-                        % ", ".join(PROFILES))
     c.add_argument("--verbose", action="store_true",
                    help="Show diffs / enable the stricter translation heuristic.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
@@ -4784,10 +4758,10 @@ def _v2_list(what):
                 note = f"  [{oids[0]}–{oids[-1]}]" if len(oids) > 1 else f"  [{oids[0]}]"
                 print(f"{'':>7}{'':<21}  --target {'|'.join(others)}{note}")
     print()
-    print("check <family>               run every check in the family")
-    print("check <family> --<subcheck>  run just one")
-    print("check --profile pre-commit   run the pre-commit block/warn set")
-    print("list <subcheck>              print that check's full rationale")
+    print("check <family> [<family> ...]  run those families")
+    print("check <family> --<subcheck>    run just one check")
+    print("check all                      run everything")
+    print("list <subcheck>                print that check's full rationale")
 
 
 def _list_one_check(name):
@@ -4825,35 +4799,27 @@ def _main_v2():
     _LANG_FILTER = args.lang
     _apply_page_filter(args.page)
 
-    if args.profile:
-        if args.family:
-            print("check: pass a family or --profile, not both.", file=sys.stderr)
-            sys.exit(2)
-        block, warn = _resolve_profile_selection(PROFILES[args.profile])
-        block_ok = _run_selected(block, args.verbose, glossary) if block else True
-        if block and warn:
-            print()
-        warn_ok = _run_selected(warn, args.verbose, glossary) if warn else True
-        if not block_ok:
-            sys.exit(2)
-        sys.exit(0 if warn_ok else 1)
-
-    if not args.family:
-        print("check: a family (or --profile) is required -- "
-              "chars | markup | refs | style | terms | l10n | all", file=sys.stderr)
-        sys.exit(2)
-
+    families = list(dict.fromkeys(args.families))   # de-dup, keep order
     picked = {sc for sc in _ALL_SUBCHECKS if getattr(args, sc.replace("-", "_"))}
-    bad = {sc for sc in picked if _family_of(sc) != args.family and args.family != "all"}
+
+    if picked and (len(families) != 1 or families[0] == "all"):
+        print("check: --<subcheck> flags need exactly one family "
+              f"(got: {' '.join(families)})", file=sys.stderr)
+        sys.exit(2)
+    bad = {sc for sc in picked if _family_of(sc) != families[0]}
     if bad:
-        print(f"check {args.family}: unknown flag(s) for this family: "
+        print(f"check {families[0]}: unknown flag(s) for this family: "
               f"{', '.join('--' + b for b in sorted(bad))}", file=sys.stderr)
         sys.exit(2)
 
-    selected = _resolve_family_selection(args.family, picked, args.target)
+    selected = []
+    for fam in families:
+        selected += _resolve_family_selection(fam, picked, args.target)
+    seen = set()
+    selected = [k for k in selected if not (k in seen or seen.add(k))]
     if not selected:
-        print("check: that selection matched no checks "
-              f"(family={args.family}, --target={args.target}).", file=sys.stderr)
+        print(f"check: that selection matched no checks "
+              f"({' '.join(families)}, --target={args.target}).", file=sys.stderr)
         sys.exit(2)
 
     ok = _run_selected(selected, args.verbose, glossary)

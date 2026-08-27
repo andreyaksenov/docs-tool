@@ -7,9 +7,8 @@
 New design proposals for this tool go in `docs/proposals/`.
 
 **On this branch:** the `check`/`sync`/`list` surface, six families, `--target`,
-`--profile` (built-in `pre-commit` only), stable rule IDs (`CH01`…, shown by `list`;
-`list <id>` prints one check's full rationale), and a `--lang en|ru` filter for the
-both-tree checks.
+multi-family `check chars markup`, stable rule IDs (`CH01`…, shown by `list`; `list <id>`
+prints one check's full rationale), and a `--lang en|ru` filter for the both-tree checks.
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
 findings, a large separate change (see §6).
@@ -66,9 +65,8 @@ monolingual and `--page`-scopeable, and terminology breaks both.
 ## 3. The command surface
 
 ```
-docs_tool check <family|all> [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
-                             [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
-docs_tool check --profile <name> [--page NAME ...]
+docs_tool check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
+                                        [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
 docs_tool sync <en-file> [--dry-run] [--since REF]
 docs_tool list                    # the family/check map, one line per check
 docs_tool list <subcheck|rule-id> # one check's full rationale (docstring)
@@ -82,8 +80,9 @@ Selection rules:
 
 | Invocation | Runs |
 |---|---|
-| `check <family>` | every check in the family, all scan targets |
-| `check <family> --<subcheck>` | that subcheck, target `pages` (or its sole target) |
+| `check <family> [<family> ...]` | every check in each family, all scan targets |
+| `check all` | every family |
+| `check <family> --<subcheck>` | that subcheck, target `pages` (or its sole target) — one family only |
 | `check <family> --<subcheck> --target X` | that subcheck, target `X` |
 | `check <family> --target X` | every subcheck in the family that has a target `X` |
 | `--target all` | every target of whatever is selected |
@@ -111,21 +110,18 @@ docs_tool check all                # everything
 ### The pre-commit hook, before → after
 
 Today: two ~15-line `python3 docs_tool.py` invocations, block/warn split implied by which
-one a check sits in. After:
+one a check sits in. After — the split is explicit in the hook, two `check` calls:
 
 ```bash
-docs_tool check --profile pre-commit --page UNCOMMITTED
-[ $? -ge 2 ] && exit 1        # 2 = blocking finding · 1 = warn-only · 0 = clean
+docs_tool check chars markup --page UNCOMMITTED \
+  || { echo "blocked" >&2; exit 1; }        # deterministic -> block the commit
+docs_tool check style terms l10n refs --page UNCOMMITTED || true   # heuristic -> report only
 ```
 
-Named profiles live in `PROFILES` in `docs_tool.py`:
-
-```python
-PROFILES = {
-    "pre-commit": {"block": ["chars", "markup"],
-                   "warn":  ["style", "terms", "l10n", "refs"]},
-}
-```
+`list` marks each family `block` / `warn by default` (from `TIERS`), so the hook author knows
+which is which. A `check --profile <name>` flag and a `PROFILES` table were prototyped and
+dropped — one hardcoded profile is just machinery for two lines of shell, and the config file
+that would have made custom profiles worthwhile is gone too (below).
 
 A `.docs_tool.ini` config file was prototyped (INI, glossary / external-root defaults,
 `[profile:*]` sections) and dropped — flags are explicit and discoverable, and the config
@@ -181,7 +177,7 @@ Done on this branch:
 - **`--lang en|ru`** — restricts the both-tree checks (`chars`, `markup`) to one language.
 - **`list`** — one-line-per-check family map (a `SUMMARIES` blurb each), and `list <subcheck|id>`
   prints that check's full docstring. Replaces a separate `explain` verb.
-- **Severity as exit code** — `0` clean · `1` warn · `2` block, for `--profile` runs.
+- **multi-family `check`** — `check chars markup` runs both; `check all` runs everything.
 - **`--all-checks` / `check all` no longer abort** when `terms` is swept in without a glossary —
   it's dropped with a note; a bare `check terms` still errors.
 
@@ -204,6 +200,9 @@ Considered and rejected:
 - **`.docs_tool.ini` config file** (glossary / external-root defaults, `[profile:*]`
   sections). Flags are explicit and discoverable; the only real payoff was baking in
   docs-adcm's four `--external-root` values, which a shell alias covers.
+- **`check --profile <name>`** + a `PROFILES` table. One hardcoded profile is just machinery
+  for two lines of shell; the hook expresses block-vs-warn with two `check` calls, and `list`
+  labels each family so the author knows which is which.
 
 ## 7. Migration & compatibility
 
@@ -216,8 +215,8 @@ refreshed by hand. So:
   `docs_tool.py --list-checks` still prints the old flag list; `docs_tool list checks`
   prints the new `check ...` command for each, one per line, sorted by rule ID.
 
-Not done: over-nesting (two levels — family then subcheck — is the limit); the 0/1/2 exit
-contract only applies to `--profile` runs so far — plain `check` and legacy stay 0/1.
+Not done: over-nesting (two levels — family then subcheck — is the limit). Exit codes are a
+plain `0` clean / `1` findings everywhere — no severity tiers in the exit code.
 
 ## 8. Suggested sequencing
 
@@ -225,17 +224,15 @@ contract only applies to `--profile` runs so far — plain `check` and legacy st
 |------:|------|--------|
 | 1 | Rule IDs + unified output format + JSON | rule IDs **done**; output format + JSON deferred |
 | 2 | Subcommand restructure with back-compat aliases | **this branch** |
-| 3 | Named profiles → shrink the pre-commit hook | **this branch** (built-in `pre-commit`) |
+| 3 | ~~Named profiles~~ → hook expresses block/warn in shell | reverted; `--profile` dropped |
 | 4 | Inline suppressions + baseline → promote betas to blocking | deferred (needs the findings refactor) |
-| — | `--lang` filter (extra) | **this branch** |
+| — | `--lang` filter, multi-family `check` (extras) | **this branch** |
 
 ## Open questions
 
 - Family name for L3: `style` (vendor-neutral, room for `style_guide = "arenadata"` later)
   vs `arenadata-guidelines` (honest about whose rules these are).
 - Six families or five (folding `terms` into `l10n --terminology`).
-- Should custom profiles be reintroduced somehow (a `--profile-file`, or teams just fork the
-  hook)? Dropped with the config file for now.
-- Should a plain `check <family>` failure also use exit code 2, or stay 1 (2 only for `--profile`)?
+- Named check sets: needed at all, or is "two `check` calls in the hook" enough? Dropped for now.
 - Rule-ID scheme: `CH01` (2-letter family + 2 digits) vs `L10N002`-style. Current choice keeps
   IDs short; renumbering later is a breaking change for anything that pins them.
