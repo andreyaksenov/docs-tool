@@ -3616,6 +3616,18 @@ TIERS = {
 
 _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
 
+# `--target` values, for the two subchecks that have more than one target
+# (chars --no-cyrillic, refs --orphaned). Shown by `list targets`.
+TARGET_DESC = {
+    "pages":    "pages/ + partials/  (the default)",
+    "partials": "partials/ only",
+    "examples": "examples/",
+    "images":   "images/",
+    "tags":     "tag:: / end:: regions (in pages/, partials/, examples/)",
+    "nav":      "nav.adoc",
+    "all":      "every target above",
+}
+
 _ALL_SUBCHECKS = tuple(sorted({sc for fam in FAMILIES.values() for sc in fam}))
 
 # Stable per-check identifiers, family-prefixed. The user-facing handle for a
@@ -4642,8 +4654,8 @@ def _build_v2_parser():
                         "(default: the last commit that touched the RU file).")
 
     ls = sub.add_parser("list", help="The family/check map, or one check's rationale.")
-    ls.add_argument("what", nargs="?", metavar="[checks|<subcheck>]",
-                    help="Omit for the family tree. 'checks' for a flat list. "
+    ls.add_argument("what", nargs="?", metavar="[checks|targets|<subcheck>]",
+                    help="Omit for the family tree. 'checks' / 'targets' for flat lists. "
                          "A subcheck name or rule ID prints that check's full rationale.")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
@@ -4712,6 +4724,11 @@ def _v2_list(what):
         for rid, cmd, beta in rows:
             print(f"{rid}  {cmd}{beta}")
         return
+    if what == "targets":
+        print("--target values (for checks that scan more than one place):\n")
+        for t, desc in TARGET_DESC.items():
+            print(f"  {t:<10}{desc}")
+        return
     if what not in (None, "families"):
         return _list_one_check(what)
 
@@ -4734,6 +4751,7 @@ def _v2_list(what):
     print("check <family> --<subcheck>    run just one check")
     print("check all                      run everything")
     print("list <subcheck>                print that check's full rationale")
+    print("list checks | list targets     flat check list · --target values")
 
 
 def _list_one_check(name):

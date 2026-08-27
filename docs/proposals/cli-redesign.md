@@ -72,6 +72,7 @@ docs_tool sync <en-file> [--dry-run] [--since REF]
 docs_tool list                    # the family/check map, one line per check
 docs_tool list <subcheck|rule-id> # one check's full rationale (docstring)
 docs_tool list checks             # every check as a `check ...` command
+docs_tool list targets            # what each --target value scopes to
 ```
 
 No short flag aliases — every option is spelled out (`--verbose`, not `-v`) so a command

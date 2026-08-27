@@ -2065,6 +2065,14 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--list-modules", err)
 
+    def test_list_targets(self):
+        code, out, _ = self._run("list", "targets")
+        self.assertEqual(code, 0)
+        self.assertIn("pages", out)
+        self.assertIn("nav.adoc", out)
+        for t in dt._SCAN_TARGETS + ("all",):
+            self.assertIn(t, out)
+
     def test_check_requires_a_family(self):
         code, _, err = self._run("check")
         self.assertEqual(code, 2)
