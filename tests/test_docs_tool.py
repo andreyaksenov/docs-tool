@@ -2047,21 +2047,29 @@ class CliV2RoutingTests(unittest.TestCase):
                 code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
         return code, out.getvalue(), err.getvalue()
 
-    def test_list_families_prints_the_map(self):
-        code, out, _ = self._run("list", "families")
+    def test_list_prints_the_family_map(self):
+        code, out, _ = self._run("list")
         self.assertEqual(code, 0)
         self.assertIn("chars", out)
         self.assertIn("--no-yo", out)
-        self.assertIn("profiles: pre-commit", out)
+        self.assertIn("CH01", out)
+        self.assertIn("no Cyrillic", out)          # a SUMMARIES blurb
+        self.assertNotIn("pages-no-cyrillic", out) # no legacy-key line in the tree
 
-    def test_explain_resolves_a_subcheck_to_its_docstring(self):
-        code, out, _ = self._run("explain", "no-yo")
+    def test_list_subcheck_prints_its_rationale(self):
+        code, out, _ = self._run("list", "no-yo")
         self.assertEqual(code, 0)
-        self.assertIn("pages-no-yo", out)
-        self.assertIn("ё", out)
+        self.assertIn("ST01", out)
+        self.assertIn("check style --no-yo", out)
+        self.assertIn("ё", out)                    # from the docstring
 
-    def test_explain_unknown_name_errors(self):
-        code, _, err = self._run("explain", "not-a-check")
+    def test_list_rule_id_prints_its_rationale(self):
+        code, out, _ = self._run("list", "ln02")   # case-insensitive
+        self.assertEqual(code, 0)
+        self.assertIn("check l10n --structure", out)
+
+    def test_list_unknown_name_errors(self):
+        code, _, err = self._run("list", "not-a-check")
         self.assertEqual(code, 2)
         self.assertIn("unknown check", err)
 
@@ -2096,16 +2104,16 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("OK:", out)
 
-    def test_list_defaults_to_families(self):
-        code, out, _ = self._run("list")
+    def test_list_checks_prints_the_flat_list(self):
+        code, out, _ = self._run("list", "checks")
         self.assertEqual(code, 0)
-        self.assertIn("(universal)", out)
+        self.assertIn("CH01  pages-no-cyrillic", out)
 
     def test_bare_invocation_prints_the_new_surface(self):
         code, out, _ = self._run()
         self.assertEqual(code, 0)
         self.assertIn("check <family>", out)
-        self.assertIn("{check,sync,list,explain}", out)
+        self.assertIn("{check,sync,list}", out)
 
     def test_top_level_help_routes_to_new_surface(self):
         code, out, _ = self._run("--help")
@@ -2132,11 +2140,17 @@ class RuleIdRegistryTests(unittest.TestCase):
                     self.assertTrue(dt.RULE_IDS[key].startswith(prefix[fam]),
                                     f"{key} -> {dt.RULE_IDS[key]} (family {fam})")
 
-    def test_explain_accepts_an_id(self):
+    def test_list_one_check_accepts_an_id(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            dt._v2_explain("ST01")
-        self.assertIn("pages-no-yo", out.getvalue())
+            dt._list_one_check("ST01")
+        self.assertIn("check style --no-yo", out.getvalue())
+
+    def test_resolve_check_name(self):
+        self.assertEqual(dt._resolve_check_name("no-yo"), "pages-no-yo")
+        self.assertEqual(dt._resolve_check_name("LN02"), "pages-structure-parity")
+        self.assertEqual(dt._resolve_check_name("examples-orphaned"), "examples-orphaned")
+        self.assertIsNone(dt._resolve_check_name("nonsense"))
 
 
 class LangFilterTests(FixtureTestCase):

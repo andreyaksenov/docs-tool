@@ -13,13 +13,13 @@ Commands:
     ./docs_tool.py check <family|all> [--lang en|ru] [--verbose]
     ./docs_tool.py check --profile <name> [--page NAME ...]
     ./docs_tool.py sync <path/to/en/file.adoc> [--dry-run] [--since REF]
-    ./docs_tool.py list [families|checks|modules]
-    ./docs_tool.py explain <subcheck|rule-id>
+    ./docs_tool.py list                        -- the family/check map
+    ./docs_tool.py list <subcheck|rule-id>     -- one check's full rationale
 
 Checks are grouped into six families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
 resolution), style (house style), terms (glossary), l10n (EN<->RU parity).
-Run "docs_tool.py list families" for the full map.
+Run "docs_tool.py list" for the full map.
 
 Examples:
     ./docs_tool.py check chars
@@ -3631,7 +3631,7 @@ _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
 _ALL_SUBCHECKS = tuple(sorted({sc for fam in FAMILIES.values() for sc in fam}))
 
 # Stable per-check identifiers, family-prefixed. The user-facing handle for a
-# check: accepted by `explain`, printed by `list`. (Decoupling the selector
+# check: accepted by `list <id>`, printed by `list`. (Decoupling the selector
 # from the Python function name; inline-suppression / JSON keying will build
 # on these -- see cli-redesign.md phase 1/4.)
 RULE_IDS = {
@@ -3659,6 +3659,44 @@ RULE_IDS = {
     "nav-structure-parity":       "LN05",
 }
 _ID_TO_KEY = {v: k for k, v in RULE_IDS.items()}
+
+# One-line "what it does" for `docs_tool list`. The full rationale/exceptions
+# stay in each check_* function's docstring (docs_tool list <subcheck>).
+SUMMARIES = {
+    "pages-no-cyrillic":           "no Cyrillic characters in en/ files (RU text left in EN)",
+    "examples-no-cyrillic":        "same check, over examples/ (all file types)",
+    "pages-no-invisible-chars":    "no zero-width / invisible / bidi-control characters",
+    "pages-no-unicode-dashes":     "no literal en/em dash -- house style uses --",
+    "pages-ru-latin-homoglyphs":   "Latin letters in ru/ prose that should be Cyrillic",
+    "pages-stray-backticks":       "no line with an odd number of backticks",
+    "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
+    "pages-broken-refs":           "every xref: / include:: / image: target resolves",
+    "pages-orphaned":              "every pages/*.adoc reachable from some nav.adoc",
+    "partials-orphaned":           "every tag-less partial pulled in by some include::",
+    "examples-orphaned":           "every examples/ file pulled in by include::example$",
+    "images-orphaned":             "every images/ file the target of an image: macro",
+    "tags-orphaned":               "every tag::/end:: region pulled in by an include tag=",
+    "pages-no-yo":                 "no ё/Ё in ru/ files (:page-author: exempt)",
+    "pages-file-path-italics":     "file / directory names in prose need _italics_",
+    "pages-table-cell-periods":    "a table cell's last sentence shouldn't end with a period",
+    "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
+    "pages-line-parity":           "EN file and its RU counterpart have the same line count",
+    "pages-structure-parity":      "EN and RU structural skeletons must match",
+    "pages-translation":           "RU line byte-identical to its EN counterpart (untranslated)",
+    "examples-parity":             "EN and RU examples/ must match (byte / comment-stripped)",
+    "nav-structure-parity":        "EN and RU nav.adoc structure must match",
+}
+
+# Short label per family for `list`; tier -> commit disposition.
+FAMILY_DESC = {
+    "chars":  "Unicode / encoding",
+    "markup": "AsciiDoc syntax",
+    "refs":   "Antora reference resolution",
+    "style":  "Arenadata house style",
+    "terms":  "controlled vocabulary",
+    "l10n":   "EN<->RU parity",
+}
+_TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"}
 
 
 def _family_of(subcheck):
@@ -4594,10 +4632,10 @@ def _main_legacy():
 
 
 # --------------------------------------------------------------------------
-# `docs_tool check|sync|list|explain` -- the family-based surface
+# `docs_tool check|sync|list` -- the family-based surface
 # --------------------------------------------------------------------------
 
-_V2_VERBS = ("check", "sync", "list", "explain")
+_V2_VERBS = ("check", "sync", "list")
 
 
 def _build_v2_parser():
@@ -4606,11 +4644,11 @@ def _build_v2_parser():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = p.add_subparsers(dest="verb", required=True, metavar="{check,sync,list,explain}")
+    sub = p.add_subparsers(dest="verb", required=True, metavar="{check,sync,list}")
 
     c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
                        epilog="Each family has --<subcheck> flags (e.g. --no-yo, --structure) "
-                              "and, where relevant, --target NAME. Run 'docs_tool list families' "
+                              "and, where relevant, --target NAME. Run 'docs_tool list' "
                               "for the full map.")
     c.add_argument("family", nargs="?", choices=list(FAMILIES) + ["all"],
                    help="chars | markup | refs | style | terms | l10n | all. "
@@ -4653,41 +4691,14 @@ def _build_v2_parser():
                    help="git ref to diff EN against for reworded lines "
                         "(default: the last commit that touched the RU file).")
 
-    ls = sub.add_parser("list", help="List families, checks, or modules.")
-    ls.add_argument("what", nargs="?", default="families",
-                    choices=("families", "checks", "modules"))
-
-    ex = sub.add_parser("explain", help="Print a check's rationale and exceptions.")
-    ex.add_argument("name", metavar="SUBCHECK",
-                    help="Subcheck name (e.g. no-yo, structure) or a legacy CHECKS key.")
+    ls = sub.add_parser("list", help="The family/check map, or one check's rationale.")
+    ls.add_argument("what", nargs="?", metavar="[checks|modules|<subcheck>]",
+                    help="Omit for the family tree. 'checks' / 'modules' for a flat list. "
+                         "A subcheck name or rule ID prints that check's full rationale.")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         argcomplete.autocomplete(p)
     return p
-
-
-def _v2_list(what):
-    if what == "modules":
-        for name in discover_module_names():
-            print(name)
-        return
-    if what == "checks":
-        for name in CHECKS:
-            tag = "  (beta)" if name in BETA_CHECKS else ""
-            print(f"{RULE_IDS[name]}  {name}{tag}")
-        return
-    # families
-    tier_of = {f: t for t, fams in TIERS.items() for f in fams}
-    for fam, subs in FAMILIES.items():
-        print(f"{fam}  ({tier_of.get(fam, '?')})")
-        for sc, targets in subs.items():
-            ids = " ".join(RULE_IDS[k] for k in targets.values())
-            keys = ", ".join(sorted(set(targets.values())))
-            beta = "  (beta)" if any(k in BETA_CHECKS for k in targets.values()) else ""
-            tlist = "" if list(targets) == ["pages"] else "  --target " + "|".join(targets)
-            print(f"    --{sc}{tlist}{beta}    [{ids}]")
-            print(f"        {keys}")
-    print("\nprofiles: " + ", ".join(PROFILES))
 
 
 def _subcheck_of(key):
@@ -4700,23 +4711,83 @@ def _subcheck_of(key):
     return key
 
 
-def _v2_explain(name):
-    key = None
+def _resolve_check_name(name):
+    """A subcheck name, a legacy CHECKS key, or a rule ID -> CHECKS key
+    (None if it matches nothing)."""
     fam = _family_of(name)
     if fam:
         targets = FAMILIES[fam][name]
-        key = targets.get("pages") or next(iter(targets.values()))
-    elif name in CHECKS:
-        key = name
-    elif name in _ID_TO_KEY:
-        key = _ID_TO_KEY[name]
+        return targets.get("pages") or next(iter(targets.values()))
+    if name in CHECKS:
+        return name
+    return _ID_TO_KEY.get(name.upper())
+
+
+def _tier_of(fam):
+    return next((t for t, fams in TIERS.items() if fam in fams), None)
+
+
+def _target_of(key):
+    """The scan target a specific CHECKS key sits under (e.g. 'examples' for
+    examples-orphaned), or None for the default 'pages' target."""
+    for subs in FAMILIES.values():
+        for targets in subs.values():
+            for t, k in targets.items():
+                if k == key and t != "pages":
+                    return t
+    return None
+
+
+def _v2_list(what):
+    if what == "modules":
+        for name in discover_module_names():
+            print(name)
+        return
+    if what == "checks":
+        for name in CHECKS:
+            beta = "  [beta]" if name in BETA_CHECKS else ""
+            print(f"{RULE_IDS[name]}  {name}{beta}")
+        return
+    if what not in (None, "families"):
+        return _list_one_check(what)
+
+    for i, (fam, subs) in enumerate(FAMILIES.items()):
+        if i:
+            print()
+        disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
+        print(f"{fam}  —  {FAMILY_DESC.get(fam, '')}  ({disp} by default)")
+        for sc, targets in subs.items():
+            primary = targets.get("pages") or next(iter(targets.values()))
+            beta = "  [beta]" if primary in BETA_CHECKS else ""
+            print(f"  {RULE_IDS[primary]:<5}--{sc:<21}{SUMMARIES[primary]}{beta}")
+            if len(targets) > 1:
+                others = [t for t in targets if t != "pages"]
+                oids = sorted({RULE_IDS[targets[t]] for t in others})
+                note = f"  [{oids[0]}–{oids[-1]}]" if len(oids) > 1 else f"  [{oids[0]}]"
+                print(f"{'':>7}{'':<21}  --target {'|'.join(others)}{note}")
+    print()
+    print("check <family>               run every check in the family")
+    print("check <family> --<subcheck>  run just one")
+    print("check --profile pre-commit   run the pre-commit block/warn set")
+    print("list <subcheck>              print that check's full rationale")
+
+
+def _list_one_check(name):
+    key = _resolve_check_name(name)
     if key is None:
-        print(f"unknown check: {name}  (try 'docs_tool list checks')", file=sys.stderr)
+        print(f"unknown check: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
         sys.exit(2)
-    doc = (CHECKS[key].__doc__ or "(no description)").strip()
-    tag = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
-    print(f"{RULE_IDS[key]}  {_subcheck_of(key)}  ({key}){tag}\n")
-    print("\n".join(line.strip() for line in doc.splitlines()))
+    sc = _subcheck_of(key)
+    fam = _family_of(sc) or "?"
+    disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
+    tgt = _target_of(key)
+    cmd = f"check {fam} --{sc}" + (f" --target {tgt}" if tgt else "")
+    beta = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
+    print(f"{RULE_IDS[key]}  {cmd}   ({disp}){beta}\n")
+    print(SUMMARIES.get(key, ""))
+    doc = (CHECKS[key].__doc__ or "").strip()
+    if doc:
+        print("\n" + "\n".join(line.strip() for line in doc.splitlines()))
 
 
 def _main_v2():
@@ -4729,8 +4800,6 @@ def _main_v2():
 
     if args.verb == "list":
         return _v2_list(args.what)
-    if args.verb == "explain":
-        return _v2_explain(args.name)
     if args.verb == "sync":
         run_sync(args.file, dry_run=args.dry_run, since=args.since)
         return

@@ -84,9 +84,9 @@ check --profile <name> [--page NAME ...]
 
 sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 
-list [families|checks|modules]
-
-explain <subcheck|rule-id>
+list                          # the family/check map
+list <subcheck-or-ID>         # one check's full rationale
+list checks | list modules    # flat lists
 ```
 
 `./docs_tool.py` with no arguments (or `--help`) prints this whole surface.
@@ -112,22 +112,22 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py check chars --no-cyrillic --target examples
 ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
 
-./docs_tool.py list families                # the map: subchecks, IDs, legacy keys
-./docs_tool.py explain table-cell-periods   # a check's rationale and exceptions
+./docs_tool.py list                        # the family/check map, one line per check
+./docs_tool.py list table-cell-periods     # that check's full rationale and exceptions
 ```
 
 Selection rules: `check <family>` runs the whole family across every scan target; adding `--<subcheck>` narrows to one check (target `pages` by default); `--target NAME` picks a different one (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`.
 
 `--lang en|ru` restricts the checks that scan both trees (`chars`, `markup`) to one language; inherently single- or bi-lingual checks ignore it.
 
-Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) shown by `list` and accepted by `explain`.
+Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) — shown by `list`, and `list <ID>` prints that check's full rationale.
 
 `check --profile <name>` runs a built-in named check set (currently just `pre-commit`: blocks `chars` + `markup`, warns on the rest) and returns a 3-way exit code — `2` blocking finding, `1` warn-only, `0` clean.
 
 <details>
 <summary><b>Legacy <code>--check-*</code> flags</b> (still supported)</summary>
 
-The pre-subcommand form is unchanged — `main()` routes `check`/`sync`/`list`/`explain` to the new surface and everything else to the legacy parser:
+The pre-subcommand form is unchanged — `main()` routes `check`/`sync`/`list` to the new surface and everything else to the legacy parser:
 
 ```
 --check-<name> [--check-<name> ...] [--verbose]
@@ -212,7 +212,7 @@ Run a whole family (`./docs_tool.py check chars`) or one check (`./docs_tool.py 
 `--target NAME` (default `pages`, which covers `pages/` + `partials/`; also `partials`, `examples`, `images`, `tags`, `nav`, or `all`) picks the scan target for a check that has more than one.
 
 Every check runs across all discovered modules automatically (`./docs_tool.py list modules`), even though the descriptions below say "EN"/"RU" for brevity.
-Every check has a stable rule ID (shown below and by `./docs_tool.py list families`); `./docs_tool.py explain <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
+Every check has a stable rule ID (shown below and by `./docs_tool.py list`); `./docs_tool.py list <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
 
 ### `chars` — Unicode / encoding
 

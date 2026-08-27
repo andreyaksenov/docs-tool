@@ -6,9 +6,10 @@
 
 New design proposals for this tool go in `docs/proposals/`.
 
-**On this branch:** the `check`/`sync`/`list`/`explain` surface, six families, `--target`,
-`--profile` (built-in `pre-commit` only), stable rule IDs (`CH01`…, surfaced by
-`list`/`explain`), and a `--lang en|ru` filter for the both-tree checks.
+**On this branch:** the `check`/`sync`/`list` surface, six families, `--target`,
+`--profile` (built-in `pre-commit` only), stable rule IDs (`CH01`…, shown by `list`;
+`list <id>` prints one check's full rationale), and a `--lang en|ru` filter for the
+both-tree checks.
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
 findings, a large separate change (see §6).
@@ -69,8 +70,9 @@ docs_tool check <family|all> [--<subcheck> ...] [--target NAME] [--lang en|ru] [
                              [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
 docs_tool check --profile <name> [--page NAME ...]
 docs_tool sync <en-file> [--dry-run] [--since REF]
-docs_tool list [families|checks|modules]
-docs_tool explain <subcheck|rule-id>
+docs_tool list                    # the family/check map, one line per check
+docs_tool list <subcheck|rule-id> # one check's full rationale (docstring)
+docs_tool list checks | modules   # flat lists
 ```
 
 No short flag aliases — every option is spelled out (`--verbose`, not `-v`) so a command
@@ -174,11 +176,11 @@ Ranked by value; independent of the grouping.
 
 Done on this branch:
 
-- **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`. Accepted by
-  `explain`, printed by `list checks` / `list families`.
+- **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`, shown by `list`.
 - **`--target`** scan-target flag instead of `pages-` vs `examples-` prefixes.
 - **`--lang en|ru`** — restricts the both-tree checks (`chars`, `markup`) to one language.
-- **`explain`** — surfaces the check docstring; keyed on subcheck name or rule ID.
+- **`list`** — one-line-per-check family map (a `SUMMARIES` blurb each), and `list <subcheck|id>`
+  prints that check's full docstring. Replaces a separate `explain` verb.
 - **Severity as exit code** — `0` clean · `1` warn · `2` block, for `--profile` runs.
 - **`--all-checks` / `check all` no longer abort** when `terms` is swept in without a glossary —
   it's dropped with a note; a bare `check terms` still errors.
@@ -210,7 +212,7 @@ refreshed by hand. So:
 
 - **Fewer, bigger moves.** Every change propagates by manual copy.
 - **Every `--check-<old>` flag still works**, routed through the legacy parser (`main()`
-  dispatches on `argv[0]`: `check`/`sync`/`list`/`explain` → new surface, anything else →
+  dispatches on `argv[0]`: `check`/`sync`/`list` → new surface, anything else →
   legacy). `docs_tool list checks` and `docs_tool.py --list-checks` both still print the
   registry.
 
