@@ -10,9 +10,9 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [--<subcheck> ...] [--in <target>]
-    ./docs_tool.py check <family|all> [--lang en|ru] [-v]
+    ./docs_tool.py check <family|all> [--lang en|ru] [--verbose]
     ./docs_tool.py check --profile <name> [--page NAME ...]
-    ./docs_tool.py sync <path/to/en/file.adoc> [-n] [--since REF]
+    ./docs_tool.py sync <path/to/en/file.adoc> [--dry-run] [--since REF]
     ./docs_tool.py list [families|checks|modules]
     ./docs_tool.py explain <subcheck|rule-id>
 
@@ -24,10 +24,10 @@ Run "docs_tool.py list families" for the full map.
 Examples:
     ./docs_tool.py check chars
     ./docs_tool.py check style --no-yo
-    ./docs_tool.py check l10n --structure -v --page resource_groups.adoc
+    ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
     ./docs_tool.py check markup --lang ru
     ./docs_tool.py check --profile pre-commit --page UNCOMMITTED
-    ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc -n
+    ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
 --list-checks, --list-modules -- still works; see "docs_tool.py --list-checks".
@@ -656,8 +656,8 @@ _INCLUDE_PARTIAL_RE = re.compile(r'include::partial\$([^\[]+\.adoc)')
 
 def _nav_skeleton(path: Path):
     """Structural skeleton of a nav file: list depth + xref/include target,
-    or an <svg:...>/<text> placeholder. Numbered lines (1-based) for -v
-    lookup; caller strips the number prefix for the plain equality check."""
+    or an <svg:...>/<text> placeholder. Numbered lines (1-based) for
+    --verbose lookup; caller strips the number prefix for the plain equality check."""
     lines = _read_lines(path)
     if lines is None:
         return []
@@ -718,7 +718,7 @@ def _compare_skeleton_pair(en_file: Path, ru_file: Path, skeleton_fn, verbose) -
                  min(len(en_plain), len(ru_plain)))
         en_lineno = en_skel[i][0] if i < len(en_skel) else "EOF"
         ru_lineno = ru_skel[i][0] if i < len(ru_skel) else "EOF"
-        print(f"         first difference: {en_file}:{en_lineno}  vs  {ru_file}:{ru_lineno}  (rerun with -v for the full diff)")
+        print(f"         first difference: {en_file}:{en_lineno}  vs  {ru_file}:{ru_lineno}  (rerun with --verbose for the full diff)")
     return False
 
 
@@ -2612,8 +2612,8 @@ def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_h
 
 
 def check_pages_translation(verbose=False) -> bool:
-    """Port of check_pages_translation.sh. `verbose` enables the stricter
-    stopword-based heuristic (the script's `-v` flag)."""
+    """Port of check_pages_translation.sh. `verbose` (--verbose) enables the
+    stricter stopword-based heuristic."""
     ok = True
     total_hits = 0
 
@@ -2655,8 +2655,8 @@ def check_pages_translation(verbose=False) -> bool:
 # "wiki.deb") with the same low collision risk as the original list --
 # "tar.gz" doesn't need special-casing: "tar" alone is in the list, so
 # "archive.tar.gz" already matches on "...gz6.tar" (stopping at the "tar"
-# segment, not continuing through ".gz") -- a good enough anchor for -v
-# to show the full line, without needing a two-extension pattern.
+# segment, not continuing through ".gz") -- a good enough anchor for
+# --verbose to show the full line, without needing a two-extension pattern.
 # xml added later: real Hadoop config files (hive-site.xml, hdfs-site.xml,
 # core-site.xml, ...) turned up ~13 times in docs-adh, almost all already
 # italicized correctly, with one confirmed miss in backticks
@@ -4427,7 +4427,7 @@ def build_parser():
     parser.add_argument("--list-checks", action="store_true", help="List available --check-* flags and exit.")
     parser.add_argument("--list-modules", action="store_true",
                         help="List every discovered module (under en/modules/ and ru/modules/) and exit.")
-    parser.add_argument("-v", "--verbose", action="store_true",
+    parser.add_argument("--verbose", action="store_true",
                         help="Verbose mode: show diffs (parity checks) or enable the stricter "
                              "stopword heuristic (--check-pages-translation).")
     page_action = parser.add_argument("--page", action="append", metavar="NAME",
@@ -4481,7 +4481,7 @@ def build_parser():
                                  "Heuristic aligner, not a semantic merge -- review its output before "
                                  "trusting it.")
     sync_action.completer = _complete_page_name
-    sync_group.add_argument("-n", "--dry-run", action="store_true",
+    sync_group.add_argument("--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
     sync_group.add_argument("--since", metavar="REF",
                             help="With --sync: git ref to diff the EN file against when looking for "
@@ -4629,7 +4629,7 @@ def _build_v2_parser():
                    help="Run a named profile instead of a family (available: %s). Exit 2 "
                         "on a blocking-family finding, 1 on warn-only, 0 clean."
                         % ", ".join(PROFILES))
-    c.add_argument("-v", "--verbose", action="store_true",
+    c.add_argument("--verbose", action="store_true",
                    help="Show diffs / enable the stricter translation heuristic.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
                         help="Limit per-file EN/RU checks to matching page(s)/"
@@ -4647,7 +4647,7 @@ def _build_v2_parser():
     sy = s.add_argument("file", metavar="EN_FILE",
                         help="EN .adoc file: full path or bare filename (resolved like --page).")
     sy.completer = _complete_page_name
-    s.add_argument("-n", "--dry-run", action="store_true",
+    s.add_argument("--dry-run", action="store_true",
                    help="Print the diff instead of writing the RU file.")
     s.add_argument("--since", metavar="REF",
                    help="git ref to diff EN against for reworded lines "
@@ -4790,7 +4790,7 @@ def main():
         return _main_legacy()
     argv = sys.argv[1:]
     # No args, top-level --help, or a subcommand -> the current surface.
-    # A legacy flag (--check-*, --all-checks, --list-*, --sync, -v ...) -> legacy.
+    # A legacy flag (--check-*, --all-checks, --list-*, --sync, --verbose ...) -> legacy.
     if not argv or argv[0] in _V2_VERBS or argv[0] in ("-h", "--help"):
         return _main_v2()
     return _main_legacy()

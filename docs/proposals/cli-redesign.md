@@ -65,13 +65,16 @@ monolingual and `--page`-scopeable, and terminology breaks both.
 ## 3. The command surface
 
 ```
-docs_tool check <family> [--<subcheck> ...] [--in <target>] [-v] [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
-docs_tool check <family|all>
+docs_tool check <family|all> [--<subcheck> ...] [--in <target>] [--lang en|ru] [--verbose]
+                             [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
 docs_tool check --profile <name> [--page NAME ...]
-docs_tool sync <en-file> [-n] [--since REF]
+docs_tool sync <en-file> [--dry-run] [--since REF]
 docs_tool list [families|checks|modules]
-docs_tool explain <subcheck>
+docs_tool explain <subcheck|rule-id>
 ```
+
+No short flag aliases — every option is spelled out (`--verbose`, not `-v`) so a command
+or a CI log reads for itself. `-h` is the one exception, since argparse provides it.
 
 Selection rules:
 
@@ -158,7 +161,7 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 
 ## 5. `sync`
 
-Lifts to a top-level verb, verbatim — `docs_tool sync <en-file> [-n] [--since REF]`,
+Lifts to a top-level verb, verbatim — `docs_tool sync <en-file> [--dry-run] [--since REF]`,
 bare-filename resolution unchanged. `align` would be the more honest name (the README calls
 it "a heuristic aligner, not a semantic merge"), but the accuracy gain is not worth the
 churn across ~12 vendored copies. Not hidden under `check` (it writes files). Not

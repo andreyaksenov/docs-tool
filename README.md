@@ -76,13 +76,13 @@ Either way, `./docs_tool.py <TAB>` completes the subcommands and, within `check`
 Run `./docs_tool.py` from the repo root, followed by one of:
 
 ```
-check <family|all> [--<subcheck> ...] [--in <target>] [--lang en|ru] [-v]
+check <family|all> [--<subcheck> ...] [--in <target>] [--lang en|ru] [--verbose]
                    [--page NAME ...] [--glossary PATH ...]
                    [--external-root NAME=PATH ...]
 
 check --profile <name> [--page NAME ...]
 
-sync <path/to/en/file.adoc> [-n] [--since REF]
+sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 
 list [families|checks|modules]
 
@@ -110,7 +110,7 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py check all
 
 ./docs_tool.py check chars --no-cyrillic --in examples
-./docs_tool.py check l10n --structure -v --page resource_groups.adoc
+./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
 
 ./docs_tool.py list families                # the map: subchecks, IDs, legacy keys
 ./docs_tool.py explain table-cell-periods   # a check's rationale and exceptions
@@ -130,12 +130,12 @@ Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `L
 The pre-subcommand form is unchanged — `main()` routes `check`/`sync`/`list`/`explain` to the new surface and everything else to the legacy parser:
 
 ```
---check-<name> [--check-<name> ...] [-v]
+--check-<name> [--check-<name> ...] [--verbose]
                [--page NAME ...] [--glossary PATH ...]
                [--external-root NAME=PATH ...]
 
---all-checks [-v]
---sync <path/to/en/file.adoc> [-n] [--since REF]
+--all-checks [--verbose]
+--sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 --list-checks
 --list-modules
 ```
@@ -180,7 +180,7 @@ By default, every check scans the whole site.
 Pass `--page NAME` (repeatable) to limit the per-file checks in the `chars`, `markup`, `style`, `terms`, and `l10n` families to just the page(s)/partial(s) whose filename matches `NAME`, e.g.:
 
 ```bash
-./docs_tool.py check l10n --untranslated -v --page resource_groups.adoc
+./docs_tool.py check l10n --untranslated --verbose --page resource_groups.adoc
 ```
 
 `NAME` must end with `.adoc` — AsciiDoc/Antora has no separate topic-id distinct from the filename, so unlike some other doc systems there's no shorter identifier to accept; matching is by the path relative to `pages`/`partials` (never the module itself), so the same name in two different modules is scoped together.
@@ -190,7 +190,7 @@ A `NAME` that *doesn't* end with `.adoc` scopes a whole directory instead, recur
 File and directory forms can be mixed across repeated `--page` flags:
 
 ```bash
-./docs_tool.py check l10n --untranslated -v --page reference/sql_commands
+./docs_tool.py check l10n --untranslated --verbose --page reference/sql_commands
 ```
 
 `check refs --orphaned --in tags` and `check refs --orphaned --in partials` also honor `--page`, but only to narrow *which files get reported on* — the usage scan (which file includes what) still covers the whole site regardless, since a tag or whole-file partial defined in the filtered-in file can be pulled in from any other page:
@@ -228,10 +228,10 @@ Every check has a stable rule ID (shown below and by `./docs_tool.py list famili
 
 - **`check chars --no-invisible`** · `CH03`  
   No `pages/`/`partials/` `.adoc` file may contain zero-width or other invisible/formatting Unicode characters.
-  `-v` also prints each hit line with the invisible character swapped for a visible `⟦U+XXXX⟧` marker.
+  `--verbose` also prints each hit line with the invisible character swapped for a visible `⟦U+XXXX⟧` marker.
 
   ```bash
-  ./docs_tool.py check chars --no-invisible -v
+  ./docs_tool.py check chars --no-invisible --verbose
   ```
 
 - **`check chars --dashes`** · `CH04`  
@@ -244,11 +244,11 @@ Every check has a stable rule ID (shown below and by `./docs_tool.py list famili
 
 - **`check chars --homoglyphs`** · `CH05` · beta  
   Flags Latin letters in `ru/` prose that look like they were meant to be Cyrillic: a word mixing both scripts, or a standalone Latin letter matching one of four Cyrillic/Latin homoglyph pairs that double as real one-letter Russian words (`а`/`о`/`с`/`у`).
-  Found dozens of real typos across every repo tested during development. `-v` prints the full line for each hit.
+  Found dozens of real typos across every repo tested during development. `--verbose` prints the full line for each hit.
 
   ```bash
-  ./docs_tool.py check chars --homoglyphs -v
-  ./docs_tool.py check chars --homoglyphs -v --page resource_groups.adoc
+  ./docs_tool.py check chars --homoglyphs --verbose
+  ./docs_tool.py check chars --homoglyphs --verbose --page resource_groups.adoc
   ```
 
 `--lang en|ru` restricts `--no-invisible` and `--dashes` (the checks that scan both trees) to one language; `--no-cyrillic` (EN-only) and `--homoglyphs` (RU-only) ignore it.
@@ -332,11 +332,11 @@ Heuristic family — treat findings as a review list, not a hard gate.
 
 - **`check style --file-path-italics`** · `ST02` · beta  
   Flags file/directory names mentioned in plain prose without the italics (`_..._`) house style requires: known config/archive file extensions, well-known absolute-path prefixes, bare directory basenames, underscore/slash-containing words, and common dotfiles, all checked in the relevant `a`/`an`/`the ... file/folder/...` grammatical slot.
-  Deliberately narrow to keep false positives low. `-v` prints the full line for each hit.
+  Deliberately narrow to keep false positives low. `--verbose` prints the full line for each hit.
 
   ```bash
-  ./docs_tool.py check style --file-path-italics -v
-  ./docs_tool.py check style --file-path-italics -v --page resource_groups.adoc
+  ./docs_tool.py check style --file-path-italics --verbose
+  ./docs_tool.py check style --file-path-italics --verbose --page resource_groups.adoc
   ```
 
 - **`check style --table-cell-periods`** · `ST03` · beta  
@@ -351,13 +351,13 @@ Heuristic family — treat findings as a review list, not a hard gate.
 
 - **`check terms`** · `TM01` · beta  
   Flags an EN glossary term whose aligned RU line matches its `ru_pattern` alternatives fewer times than the term occurs on the EN line — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for, including a line that uses the term (or several glossary terms) more than once and only translated some of the mentions.
-  The repeat comparison can misfire where Russian legitimately avoids repeating a noun (pronoun, ellipsis) — treat it as a review list. `-v` prints the full EN/RU line pair for each hit.
+  The repeat comparison can misfire where Russian legitimately avoids repeating a noun (pronoun, ellipsis) — treat it as a review list. `--verbose` prints the full EN/RU line pair for each hit.
 
   Needs a glossary: `--glossary PATH` (repeatable; pipe-delimited `en|ru|ru_pattern|note`, format documented in a `*-glossary.psv` file's own header), or — if omitted — every `*-glossary.psv` found directly under the current directory (a note is printed to stderr when this default kicks in).
 
   ```bash
-  ./docs_tool.py check terms -v
-  ./docs_tool.py check terms -v --glossary greengagedb-glossary.psv --page resource_groups.adoc
+  ./docs_tool.py check terms --verbose
+  ./docs_tool.py check terms --verbose --glossary greengagedb-glossary.psv --page resource_groups.adoc
   ```
 
 ### `l10n` — EN↔RU parity
@@ -372,36 +372,36 @@ Heuristic family — treat findings as a review list, not a hard gate.
 
 - **`check l10n --structure`** · `LN02` · beta  
   Deeper structural comparison of each EN/RU `.adoc` pair (heading levels, block titles, delimited blocks, block attributes, `include::` directives), catching drift even when line counts match.
-  Reports the first differing line by default; `-v` shows the full diff with file:line references.
+  Reports the first differing line by default; `--verbose` shows the full diff with file:line references.
 
   ```bash
-  ./docs_tool.py check l10n --structure -v
-  ./docs_tool.py check l10n --structure -v --page resource_groups.adoc
+  ./docs_tool.py check l10n --structure --verbose
+  ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
   ```
 
 - **`check l10n --untranslated`** · `LN03` · beta  
   Flags `pages/`/`partials/` lines that look untranslated: RU byte-identical to its EN counterpart, skipping code, attributes, comments, table cells, and keyword-only lines.
-  `-v` also flags RU lines containing common English stopwords.
+  `--verbose` also flags RU lines containing common English stopwords.
 
   ```bash
-  ./docs_tool.py check l10n --untranslated -v
-  ./docs_tool.py check l10n --untranslated -v --page resource_groups.adoc
+  ./docs_tool.py check l10n --untranslated --verbose
+  ./docs_tool.py check l10n --untranslated --verbose --page resource_groups.adoc
   ```
 
 - **`check l10n --examples`** · `LN04`  
   Each module's EN and RU `examples/` must have the same files; non-`.sql` files must match byte-for-byte, `.sql` files once comment-only lines are blanked out (comments are legitimately translated).
-  `-v` shows a diff for mismatched non-`.sql` files. Whole-site — ignores `--page`.
+  `--verbose` shows a diff for mismatched non-`.sql` files. Whole-site — ignores `--page`.
 
   ```bash
-  ./docs_tool.py check l10n --examples -v
+  ./docs_tool.py check l10n --examples --verbose
   ```
 
 - **`check l10n --nav`** · `LN05`  
   Compares each module's `nav.adoc` structure (list depth, `xref:`/`include::` targets) between EN and RU, plus any included `partial$...adoc` files. Translated labels are ignored; modules without their own `nav.adoc` are skipped.
-  Reports the first differing line by default; `-v` shows the full diff. Whole-site — ignores `--page`.
+  Reports the first differing line by default; `--verbose` shows the full diff. Whole-site — ignores `--page`.
 
   ```bash
-  ./docs_tool.py check l10n --nav -v
+  ./docs_tool.py check l10n --nav --verbose
   ```
 
 ## Sync a RU page after an EN edit (beta)
@@ -411,8 +411,8 @@ Heuristic aligner, not a semantic merge — review its output before trusting it
 ```bash
 ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc
 
-# same file, by bare filename; -n = dry run (print the diff, don't write)
-./docs_tool.py sync analyzedb.adoc -n
+# same file, by bare filename; --dry-run prints the diff instead of writing
+./docs_tool.py sync analyzedb.adoc --dry-run
 ```
 
 `sync`'s argument works the same way `--page NAME` does: it must end with `.adoc`, and can be either the full relative path or just the bare filename — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses.
