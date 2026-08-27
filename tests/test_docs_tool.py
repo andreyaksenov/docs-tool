@@ -1376,6 +1376,21 @@ class PagesTerminologyTests(FixtureTestCase):
         with self.assertRaises(SystemExit):
             dt.check_pages_terminology()
 
+    def test_missing_glossary_in_multi_check_run_skips_not_aborts(self):
+        """`check all` / `--all-checks` / a profile sweeps terminology in; with
+        no glossary it must be dropped with a note, not abort the run."""
+        self.write("ru/modules/ROOT/pages/page.adoc", "Обычный текст.\n")
+        cwd = os.getcwd()
+        os.chdir(self._tmpdir)  # away from this repo's own greengagedb-glossary.psv
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                ok = dt._run_selected(["pages-no-yo", "pages-terminology"], False, None)
+        finally:
+            os.chdir(cwd)
+        self.assertTrue(ok)
+        self.assertIn("skipping terminology check", err.getvalue())
+
     def test_correct_translation_passes(self):
         self._set_glossary("host|хост|хост<>")
         self.write("en/modules/ROOT/pages/page.adoc", "Connect to the host over SSH.\n")

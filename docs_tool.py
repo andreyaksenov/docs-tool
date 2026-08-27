@@ -4670,12 +4670,21 @@ def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):
     when more than one is selected. Loads the glossary lazily if a
     terminology check is in the set. Returns True if every check passed."""
     global GLOSSARY
+    selected = list(selected)
     if "pages-terminology" in selected:
         paths = glossary_paths or _discover_default_glossaries()
-        if paths and not glossary_paths:
-            print(f"info: --glossary not passed -- defaulting to discovered "
-                  f"{', '.join(paths)}", file=sys.stderr)
-        GLOSSARY = _load_glossary(paths)
+        if not paths and len(selected) > 1:
+            # Swept in as part of a family / --all-checks / profile run with no
+            # glossary available -- skip it with a note rather than aborting
+            # the whole run (a bare `check terms` still errors, in the check).
+            print("note: skipping terminology check -- no --glossary and no "
+                  "*-glossary.psv in the current directory", file=sys.stderr)
+            selected = [k for k in selected if k != "pages-terminology"]
+        else:
+            if paths and not glossary_paths:
+                print(f"info: --glossary not passed -- defaulting to discovered "
+                      f"{', '.join(paths)}", file=sys.stderr)
+            GLOSSARY = _load_glossary(paths)
 
     overall_ok = True
     for i, name in enumerate(selected):
