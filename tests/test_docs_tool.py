@@ -38,11 +38,13 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_external = dt.EXTERNAL_COMPONENTS
         self._orig_page_filter = dt._PAGE_FILTER
         self._orig_glossary = dt.GLOSSARY
+        self._orig_lang_filter = dt._LANG_FILTER
         dt.EN_MODULES_ROOT = self.root / "en" / "modules"
         dt.RU_MODULES_ROOT = self.root / "ru" / "modules"
         dt.EXTERNAL_COMPONENTS = {}
         dt._PAGE_FILTER = None
         dt.GLOSSARY = {}
+        dt._LANG_FILTER = None
         dt._OWN_COMPONENT_NAME_CACHE.clear()
 
     def tearDown(self):
@@ -51,6 +53,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = self._orig_external
         dt._PAGE_FILTER = self._orig_page_filter
         dt.GLOSSARY = self._orig_glossary
+        dt._LANG_FILTER = self._orig_lang_filter
         dt._OWN_COMPONENT_NAME_CACHE.clear()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
@@ -1916,6 +1919,306 @@ class RunSyncGitRewordTests(unittest.TestCase):
         self.assertIn("This paragraph now explains caching in a completely different way.", result)
         self.assertIn("// STALE VERSION:", result)
         self.assertIn("Это оригинальное объяснение поведения кэширования.", result)
+
+
+class FamilySelectionTests(unittest.TestCase):
+    """_resolve_family_selection / _resolve_profile_selection: the routing
+    layer that maps `check <family> [--sub] [--in]` to legacy CHECKS keys."""
+
+    def test_every_family_and_subcheck_maps_to_a_real_check(self):
+        for fam, subs in dt.FAMILIES.items():
+            for sc, targets in subs.items():
+                for key in targets.values():
+                    self.assertIn(key, dt.CHECKS, f"{fam} --{sc} -> {key}")
+
+    def test_all_22_checks_are_reachable_through_some_family(self):
+        reachable = {k for subs in dt.FAMILIES.values()
+                     for t in subs.values() for k in t.values()}
+        self.assertEqual(reachable, set(dt.CHECKS))
+
+    def test_subcheck_names_are_unique_across_families(self):
+        seen = [sc for subs in dt.FAMILIES.values() for sc in subs]
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_whole_family_runs_every_target(self):
+        self.assertEqual(
+            set(dt._resolve_family_selection("style", None, None)),
+            {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods"},
+        )
+        self.assertEqual(
+            set(dt._resolve_family_selection("refs", None, None)),
+            {"pages-broken-refs", "pages-orphaned", "partials-orphaned",
+             "examples-orphaned", "images-orphaned", "tags-orphaned"},
+        )
+
+    def test_subcheck_without_in_defaults_to_pages(self):
+        self.assertEqual(
+            dt._resolve_family_selection("chars", {"no-cyrillic"}, None),
+            ["pages-no-cyrillic"],
+        )
+
+    def test_subcheck_with_in_picks_that_target(self):
+        self.assertEqual(
+            dt._resolve_family_selection("chars", {"no-cyrillic"}, "examples"),
+            ["examples-no-cyrillic"],
+        )
+
+    def test_in_all_expands_every_target(self):
+        self.assertEqual(
+            set(dt._resolve_family_selection("chars", {"no-cyrillic"}, "all")),
+            {"pages-no-cyrillic", "examples-no-cyrillic"},
+        )
+
+    def test_in_target_filters_whole_family(self):
+        self.assertEqual(
+            dt._resolve_family_selection("refs", None, "images"),
+            ["images-orphaned"],
+        )
+
+    def test_family_all_spans_every_family(self):
+        self.assertEqual(
+            set(dt._resolve_family_selection("all", None, None)),
+            set(dt.CHECKS),
+        )
+
+    def test_no_matching_target_yields_empty(self):
+        self.assertEqual(dt._resolve_family_selection("style", None, "images"), [])
+
+    def test_selection_is_deduplicated_and_ordered(self):
+        got = dt._resolve_family_selection("all", None, None)
+        self.assertEqual(len(got), len(set(got)))
+
+    def test_profile_splits_block_and_warn(self):
+        block, warn = dt._resolve_profile_selection(dt.PROFILES["pre-commit"])
+        self.assertIn("pages-stray-backticks", block)
+        self.assertIn("pages-no-cyrillic", block)
+        self.assertIn("pages-terminology", warn)
+        self.assertIn("pages-structure-parity", warn)
+        self.assertFalse(set(block) & set(warn))
+
+    def test_family_of(self):
+        self.assertEqual(dt._family_of("no-yo"), "style")
+        self.assertEqual(dt._family_of("structure"), "l10n")
+        self.assertIsNone(dt._family_of("nonsense"))
+
+
+class CliV2RoutingTests(unittest.TestCase):
+    """main() dispatch: `check|sync|list|explain` route to the new surface,
+    everything else stays on the legacy --check-* parser."""
+
+    def setUp(self):
+        self._argv = sys.argv
+        self._pf = dt._PAGE_FILTER
+        self._lang = dt._LANG_FILTER
+        self._tmp = tempfile.mkdtemp(prefix="docs_tool_cli_")
+        self._cwd = os.getcwd()
+        os.chdir(self._tmp)
+
+    def tearDown(self):
+        sys.argv = self._argv
+        dt._PAGE_FILTER = self._pf
+        dt._LANG_FILTER = self._lang
+        os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _run(self, *args):
+        sys.argv = ["docs_tool.py", *args]
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_list_families_prints_the_map(self):
+        code, out, _ = self._run("list", "families")
+        self.assertEqual(code, 0)
+        self.assertIn("chars", out)
+        self.assertIn("--no-yo", out)
+        self.assertIn("profiles: pre-commit", out)
+
+    def test_explain_resolves_a_subcheck_to_its_docstring(self):
+        code, out, _ = self._run("explain", "no-yo")
+        self.assertEqual(code, 0)
+        self.assertIn("pages-no-yo", out)
+        self.assertIn("ё", out)
+
+    def test_explain_unknown_name_errors(self):
+        code, _, err = self._run("explain", "not-a-check")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown check", err)
+
+    def test_check_requires_a_family_or_profile(self):
+        code, _, err = self._run("check")
+        self.assertEqual(code, 2)
+        self.assertIn("family", err)
+
+    def test_wrong_subcheck_for_family_is_rejected(self):
+        code, _, err = self._run("check", "chars", "--no-yo")
+        self.assertEqual(code, 2)
+        self.assertIn("--no-yo", err)
+
+    def test_check_sets_page_filter_then_runs(self):
+        # no fixture tree here -> checks just find nothing, but routing +
+        # --page parsing must work and exit 0.
+        code, out, _ = self._run("check", "l10n", "--structure", "--page", "foo.adoc")
+        self.assertEqual(dt._PAGE_FILTER, {"names": {("foo",)}, "dirs": set()})
+        self.assertEqual(code, 0)
+
+    def test_legacy_flags_still_route_to_legacy(self):
+        code, out, _ = self._run("--check-pages-no-yo")
+        self.assertEqual(code, 0)
+        self.assertIn("OK:", out)
+
+    def test_list_defaults_to_families(self):
+        code, out, _ = self._run("list")
+        self.assertEqual(code, 0)
+        self.assertIn("(universal)", out)
+
+    def test_bare_invocation_prints_the_new_surface(self):
+        code, out, _ = self._run()
+        self.assertEqual(code, 0)
+        self.assertIn("check <family>", out)
+        self.assertIn("{check,sync,list,explain}", out)
+
+    def test_top_level_help_routes_to_new_surface(self):
+        code, out, _ = self._run("--help")
+        self.assertEqual(code, 0)
+        self.assertIn("check <family>", out)
+
+    def test_legacy_flag_still_gets_legacy_help(self):
+        code, out, _ = self._run("--all-checks", "--help")
+        self.assertEqual(code, 0)
+        self.assertIn("Legacy flag interface", out)
+
+
+class RuleIdRegistryTests(unittest.TestCase):
+    def test_every_check_has_a_unique_id(self):
+        self.assertEqual(set(dt.RULE_IDS), set(dt.CHECKS))
+        self.assertEqual(len(set(dt.RULE_IDS.values())), len(dt.CHECKS))
+
+    def test_ids_are_family_prefixed(self):
+        prefix = {"chars": "CH", "markup": "MK", "refs": "RF",
+                  "style": "ST", "terms": "TM", "l10n": "LN"}
+        for fam, subs in dt.FAMILIES.items():
+            for targets in subs.values():
+                for key in targets.values():
+                    self.assertTrue(dt.RULE_IDS[key].startswith(prefix[fam]),
+                                    f"{key} -> {dt.RULE_IDS[key]} (family {fam})")
+
+    def test_explain_accepts_an_id(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dt._v2_explain("ST01")
+        self.assertIn("pages-no-yo", out.getvalue())
+
+
+class ConfigFileTests(unittest.TestCase):
+    def setUp(self):
+        self._cwd = os.getcwd()
+        self._tmp = tempfile.mkdtemp(prefix="docs_tool_cfg_")
+        os.chdir(self._tmp)
+        subprocess.run(["git", "init", "-q"], check=True)
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _write_cfg(self, text):
+        Path(".docs_tool.ini").write_text(text, encoding="utf-8")
+
+    def test_no_file_gives_empty_config(self):
+        self.assertEqual(dt._load_config(), {})
+
+    def test_reads_lists_and_profiles(self):
+        self._write_cfg(
+            "[docs_tool]\n"
+            "glossary = a.psv, b.psv\n"
+            "external_root =\n"
+            "    ADB=../docs-adb\n"
+            "    ADH=../docs-adh\n"
+            "\n"
+            "[profile:ci]\n"
+            "block = chars, markup, refs\n"
+            "warn = style, l10n\n"
+            "scope = uncommitted\n"
+        )
+        cfg = dt._load_config()
+        self.assertEqual(cfg["glossary"], ["a.psv", "b.psv"])
+        self.assertEqual(cfg["external_root"], ["ADB=../docs-adb", "ADH=../docs-adh"])
+        self.assertEqual(cfg["profiles"]["ci"]["block"], ["chars", "markup", "refs"])
+        self.assertEqual(cfg["profiles"]["ci"]["scope"], "uncommitted")
+
+    def test_effective_profiles_merge_builtin_and_file(self):
+        self._write_cfg("[profile:ci]\nblock = chars\nwarn = l10n\n")
+        profs = dt._effective_profiles(dt._load_config())
+        self.assertIn("pre-commit", profs)   # built-in kept
+        self.assertIn("ci", profs)           # file-added
+
+    def test_malformed_file_is_ignored_with_a_warning(self):
+        self._write_cfg("not ini at all [[[\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            cfg = dt._load_config()
+        self.assertEqual(cfg, {})
+        self.assertIn("ignoring", err.getvalue())
+
+
+class LangFilterTests(FixtureTestCase):
+    def _tree_with_dash_in_both(self):
+        self.antora_yml("en", "T")
+        self.antora_yml("ru", "T")
+        self.write("en/modules/ROOT/pages/p.adoc", "Text with an — em dash.\n")
+        self.write("ru/modules/ROOT/pages/p.adoc", "Текст — тире.\n")
+
+    def test_lang_ru_skips_en_tree(self):
+        self._tree_with_dash_in_both()
+        dt._LANG_FILTER = "ru"
+        ok, out = self.run_check(dt.check_pages_no_unicode_dashes)
+        self.assertFalse(ok)
+        self.assertIn("/ru/", out)
+        self.assertNotIn("/en/", out)
+
+    def test_no_filter_scans_both(self):
+        self._tree_with_dash_in_both()
+        ok, out = self.run_check(dt.check_pages_no_unicode_dashes)
+        self.assertFalse(ok)
+        self.assertIn("/ru/", out)
+        self.assertIn("/en/", out)
+
+
+class FixModeTests(FixtureTestCase):
+    def test_fix_rewrites_dashes_and_yo(self):
+        self.antora_yml("en", "T")
+        self.antora_yml("ru", "T")
+        self.write("en/modules/ROOT/pages/p.adoc", "A – b — c.\n")
+        ru = self.write("ru/modules/ROOT/pages/p.adoc", "Ещё текст.\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertTrue(dt._fix_selected(["pages-no-unicode-dashes", "pages-no-yo"], verbose=False))
+        self.assertEqual((self.root / "en/modules/ROOT/pages/p.adoc").read_text(), "A -- b -- c.\n")
+        self.assertEqual(ru.read_text(), "Еще текст.\n")  # ё -> е
+        # files now pass their checks
+        self.assertTrue(self.run_check(dt.check_pages_no_unicode_dashes)[0])
+        self.assertTrue(self.run_check(dt.check_pages_no_yo)[0])
+
+    def test_fix_rejects_a_non_fixable_selection(self):
+        with self.assertRaises(SystemExit) as ctx:
+            with contextlib.redirect_stderr(io.StringIO()):
+                dt._fix_selected(["pages-broken-refs"], verbose=False)
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_page_author_line_keeps_its_yo(self):
+        self.antora_yml("ru", "T")
+        p = self.write("ru/modules/ROOT/pages/p.adoc",
+                       ":page-author: Фёдоров\n\nЕщё текст.\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            dt._fix_selected(["pages-no-yo"], verbose=False)
+        text = p.read_text()
+        self.assertIn(":page-author: Фёдоров", text)  # ё kept
+        self.assertIn("Еще текст.", text)        # ё -> е in body
 
 
 if __name__ == "__main__":
