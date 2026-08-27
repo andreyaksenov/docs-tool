@@ -30,14 +30,14 @@ everything passed, `1` if any check found something.
 
 Checks are grouped into six **families**:
 
-| Family | Covers |
-|--------|--------|
-| `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files |
-| `markup` | stray backticks, unbalanced block delimiters |
+| Family   | Covers                                                                                   |
+|----------|------------------------------------------------------------------------------------------|
+| `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files               |
+| `markup` | stray backticks, unbalanced block delimiters                                             |
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
-| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods |
-| `terms`  | EN term translated to a non-house-style RU word (glossary-driven) |
-| `l10n`   | line-count / structure / nav parity, untranslated lines, `examples/` parity |
+| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods                                    |
+| `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
+| `l10n`   | line-count / structure / nav parity, untranslated lines, `examples/` parity              |
 
 ```bash
 ./docs_tool.py check style                  # the whole style family
@@ -56,25 +56,25 @@ Every check has a stable **rule ID**. `list` prints the table below as a tree wi
 one-line descriptions; `show <subcheck|id>` (e.g. `show no-yo`, `show ST03`) prints
 one check's full rationale, exceptions, and the false positives it was tuned against.
 
-| ID | Command | What |
-|----|---------|------|
-| `CH01` | `check chars --no-cyrillic` | no Cyrillic in `en/` files (`--target examples` → `CH02`) |
-| `CH03` | `check chars --no-invisible` | no zero-width / invisible / bidi-control characters |
-| `CH04` | `check chars --dashes` | no literal en/em dash — house style uses `--` |
-| `CH05` | `check chars --homoglyphs` | Latin letters in RU prose that should be Cyrillic · beta |
-| `MK01` | `check markup --backticks` | no line with an odd number of backticks |
-| `MK02` | `check markup --delimiters` | every block delimiter closed once the include chain is flattened |
-| `RF01` | `check refs --broken` | every `xref:` / `include::` / `image:` target resolves |
+| ID            | Command                              | What                                                                                               |
+|---------------|--------------------------------------|----------------------------------------------------------------------------------------------------|
+| `CH01`        | `check chars --no-cyrillic`          | no Cyrillic in `en/` files (`--target examples` → `CH02`)                                          |
+| `CH03`        | `check chars --no-invisible`         | no zero-width / invisible / bidi-control characters                                                |
+| `CH04`        | `check chars --dashes`               | no literal en/em dash — house style uses `--`                                                      |
+| `CH05`        | `check chars --homoglyphs`           | Latin letters in RU prose that should be Cyrillic · beta                                           |
+| `MK01`        | `check markup --backticks`           | no line with an odd number of backticks                                                            |
+| `MK02`        | `check markup --delimiters`          | every block delimiter closed once the include chain is flattened                                   |
+| `RF01`        | `check refs --broken`                | every `xref:` / `include::` / `image:` target resolves                                             |
 | `RF02`–`RF06` | `check refs --orphaned [--target …]` | flags pages / partials / examples / images / `tag::` regions that are defined but never referenced |
-| `ST01` | `check style --no-yo` | no `ё`/`Ё` in `ru/` files (`:page-author:` exempt) |
-| `ST02` | `check style --file-path-italics` | file / directory names in prose need `_italics_` · beta |
-| `ST03` | `check style --table-cell-periods` | a table cell's last sentence shouldn't end with a period · beta |
-| `TM01` | `check terms` | EN glossary term translated to a non-house-style RU word · beta |
-| `LN01` | `check l10n --lines` | EN file and its RU counterpart have the same line count |
-| `LN02` | `check l10n --structure` | EN and RU structural skeletons match · beta |
-| `LN03` | `check l10n --untranslated` | RU line byte-identical to its EN counterpart · beta |
-| `LN04` | `check l10n --examples` | EN and RU `examples/` match |
-| `LN05` | `check l10n --nav` | EN and RU `nav.adoc` structure match |
+| `ST01`        | `check style --no-yo`                | no `ё`/`Ё` in `ru/` files (`:page-author:` exempt)                                                 |
+| `ST02`        | `check style --file-path-italics`    | file / directory names in prose need `_italics_` · beta                                            |
+| `ST03`        | `check style --table-cell-periods`   | a table cell's last sentence shouldn't end with a period · beta                                    |
+| `TM01`        | `check terms`                        | EN glossary term translated to a non-house-style RU word · beta                                    |
+| `LN01`        | `check l10n --lines`                 | EN file and its RU counterpart have the same line count                                            |
+| `LN02`        | `check l10n --structure`             | EN and RU structural skeletons match · beta                                                        |
+| `LN03`        | `check l10n --untranslated`          | RU line byte-identical to its EN counterpart · beta                                                |
+| `LN04`        | `check l10n --examples`              | EN and RU `examples/` match                                                                        |
+| `LN05`        | `check l10n --nav`                   | EN and RU `nav.adoc` structure match                                                               |
 
 Notes:
 
@@ -92,7 +92,7 @@ Notes:
 
 ## Scoping with `--page`
 
-By default every per-file check scans the whole site. `--page NAME` (repeatable)
+By default, every per-file check scans the whole site. `--page NAME` (repeatable)
 limits `chars`, `markup`, `style`, `terms`, and `l10n` to matching files:
 
 ```bash
