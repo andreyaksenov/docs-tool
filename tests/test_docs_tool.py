@@ -2065,6 +2065,11 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown check", err)
 
+    def test_list_modules_points_at_legacy_flag(self):
+        code, _, err = self._run("list", "modules")
+        self.assertEqual(code, 2)
+        self.assertIn("--list-modules", err)
+
     def test_check_requires_a_family(self):
         code, _, err = self._run("check")
         self.assertEqual(code, 2)

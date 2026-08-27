@@ -70,7 +70,7 @@ docs_tool check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--la
 docs_tool sync <en-file> [--dry-run] [--since REF]
 docs_tool list                    # the family/check map, one line per check
 docs_tool list <subcheck|rule-id> # one check's full rationale (docstring)
-docs_tool list checks | modules   # flat lists
+docs_tool list checks             # every check as a `check ...` command
 ```
 
 No short flag aliases — every option is spelled out (`--verbose`, not `-v`) so a command

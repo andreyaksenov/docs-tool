@@ -5,7 +5,6 @@ Run it from the root of the Antora docs repo you want to check.
 
 Works on both single-module Antora sites (just `en/modules/ROOT`) and multi-module ones (`en/modules/ROOT`, `en/modules/how-to`, ...).
 Every module under `en/modules/` and `ru/modules/` is auto-discovered, and every check scans all of them automatically.
-Run `./docs_tool.py list modules` to see what was found.
 
 ## Prerequisites
 
@@ -85,7 +84,6 @@ sync <path/to/en/file.adoc> [--dry-run] [--since REF]
 list                          # the family/check map
 list <subcheck-or-ID>         # one check's full rationale
 list checks                   # every check as a `check ...` command, one per line
-list modules                  # discovered modules
 ```
 
 `./docs_tool.py` with no arguments (or `--help`) prints this whole surface.
@@ -211,7 +209,7 @@ Checks are grouped into six **families** — `chars`, `markup`, `refs`, `style`,
 Run a whole family (`./docs_tool.py check chars`) or one check (`./docs_tool.py check chars --dashes`).
 `--target NAME` (default `pages`, which covers `pages/` + `partials/`; also `partials`, `examples`, `images`, `tags`, `nav`, or `all`) picks the scan target for a check that has more than one.
 
-Every check runs across all discovered modules automatically (`./docs_tool.py list modules`), even though the descriptions below say "EN"/"RU" for brevity.
+Every check runs across all discovered modules automatically, even though the descriptions below say "EN"/"RU" for brevity.
 Every check has a stable rule ID (shown below and by `./docs_tool.py list`); `./docs_tool.py list <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
 
 ### `chars` — Unicode / encoding

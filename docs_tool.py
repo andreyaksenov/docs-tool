@@ -4666,8 +4666,8 @@ def _build_v2_parser():
                         "(default: the last commit that touched the RU file).")
 
     ls = sub.add_parser("list", help="The family/check map, or one check's rationale.")
-    ls.add_argument("what", nargs="?", metavar="[checks|modules|<subcheck>]",
-                    help="Omit for the family tree. 'checks' / 'modules' for a flat list. "
+    ls.add_argument("what", nargs="?", metavar="[checks|<subcheck>]",
+                    help="Omit for the family tree. 'checks' for a flat list. "
                          "A subcheck name or rule ID prints that check's full rationale.")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
@@ -4730,10 +4730,6 @@ def _check_command(key):
 
 
 def _v2_list(what):
-    if what == "modules":
-        for name in discover_module_names():
-            print(name)
-        return
     if what == "checks":
         rows = sorted((RULE_IDS[k], _check_command(k),
                        "  [beta]" if k in BETA_CHECKS else "") for k in CHECKS)
@@ -4765,6 +4761,9 @@ def _v2_list(what):
 
 
 def _list_one_check(name):
+    if name == "modules":
+        print("list: module discovery moved -- use 'docs_tool.py --list-modules'", file=sys.stderr)
+        sys.exit(2)
     key = _resolve_check_name(name)
     if key is None:
         print(f"unknown check: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
