@@ -1,18 +1,19 @@
 # Proposal: regroup the `docs_tool` CLI around the writing-quality pyramid
 
 **Status:** implemented on branch `cli-redesign` for review · legacy `--check-*` flags kept working
-**Scope:** CLI surface + config file + rule IDs + `--lang` — no check *logic* changes
+**Scope:** CLI surface + rule IDs + `--lang` — no check *logic* changes
 **Visual version:** [artifact](https://claude.ai/code/artifact/17a8e6b6-e251-411d-adf8-8e726809df3c)
 
 New design proposals for this tool go in `docs/proposals/`.
 
-**On this branch:** the `check`/`sync`/`list`/`explain` surface, six families, `--in`, `--profile`,
-a `.docs_tool.ini` config file, stable rule IDs (`CH01`…, surfaced by `list`/`explain`), and a
-`--lang en|ru` filter for the both-tree checks.
+**On this branch:** the `check`/`sync`/`list`/`explain` surface, six families, `--in`,
+`--profile` (built-in `pre-commit` only), stable rule IDs (`CH01`…, surfaced by
+`list`/`explain`), and a `--lang en|ru` filter for the both-tree checks.
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
-findings, a large separate change (see §6). `--fix` (in-place autofix) was prototyped and
-dropped: a check that reports shouldn't also mutate files.
+findings, a large separate change (see §6).
+**Prototyped and dropped:** `--fix` (a check that reports shouldn't also mutate files) and a
+`.docs_tool.ini` config file (flags are enough).
 
 ---
 
@@ -112,25 +113,19 @@ docs_tool check --profile pre-commit --page UNCOMMITTED
 [ $? -ge 2 ] && exit 1        # 2 = blocking finding · 1 = warn-only · 0 = clean
 ```
 
-Built-in profiles live in `PROFILES` in `docs_tool.py`; a repo adds or overrides them in
-`.docs_tool.ini`:
+Named profiles live in `PROFILES` in `docs_tool.py`:
 
-```ini
-[docs_tool]
-glossary = greengagedb-glossary.psv
-external_root =
-    ADB=../docs-adb
-    ADH=../docs-adh
-
-[profile:pre-commit]
-block = chars, markup
-warn  = style, terms, l10n, refs
-scope = uncommitted
+```python
+PROFILES = {
+    "pre-commit": {"block": ["chars", "markup"],
+                   "warn":  ["style", "terms", "l10n", "refs"]},
+}
 ```
 
-The nearest `.docs_tool.ini` from the cwd up to the git root is used. CLI flags
-(`--glossary`, `--external-root`, `--page`) always win over the file. INI rather than TOML:
-`configparser` is stdlib on every Python the tool targets (3.7+), no dependency.
+A `.docs_tool.ini` config file was prototyped (INI, glossary / external-root defaults,
+`[profile:*]` sections) and dropped — flags are explicit and discoverable, and the config
+file's only real payoff was baking in docs-adcm's four `--external-root` values, which a
+shell alias handles just as well.
 
 ## 4. Full migration map
 
@@ -178,7 +173,6 @@ Done on this branch:
 
 - **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`. Accepted by
   `explain`, printed by `list checks` / `list families`.
-- **Config file** — `.docs_tool.ini` (`external_root`, `glossary`, `[profile:*]`), see §3.
 - **`--in`** scan-target flag instead of `pages-` vs `examples-` prefixes.
 - **`--lang en|ru`** — restricts the both-tree checks (`chars`, `markup`) to one language.
 - **`explain`** — surfaces the check docstring; keyed on subcheck name or rule ID.
@@ -197,9 +191,14 @@ and bloats the branch:
   for the beta checks.
 - **Baseline file** — `docs_tool baseline` snapshots findings; later runs report only new ones.
 
-Considered and rejected: **`--fix`** (in-place autofix for the deterministic char rules). A
-check's job is to report; having it also rewrite files is surprising. If autofix is wanted
-later it should be a separate `docs_tool fix` verb, not a flag on `check`.
+Considered and rejected:
+
+- **`--fix`** (in-place autofix for the deterministic char rules). A check's job is to
+  report, not mutate files; if autofix is wanted later it belongs in a separate
+  `docs_tool fix` verb.
+- **`.docs_tool.ini` config file** (glossary / external-root defaults, `[profile:*]`
+  sections). Flags are explicit and discoverable; the only real payoff was baking in
+  docs-adcm's four `--external-root` values, which a shell alias covers.
 
 ## 7. Migration & compatibility
 
@@ -212,9 +211,8 @@ refreshed by hand. So:
   legacy). `docs_tool list checks` and `docs_tool.py --list-checks` both still print the
   registry.
 
-Not done: over-nesting (two levels — family then subcheck — is the limit); requiring the
-config file (zero-config `check all` still works); the 0/1/2 exit contract only applies to
-`--profile` runs so far — plain `check` and legacy stay 0/1.
+Not done: over-nesting (two levels — family then subcheck — is the limit); the 0/1/2 exit
+contract only applies to `--profile` runs so far — plain `check` and legacy stay 0/1.
 
 ## 8. Suggested sequencing
 
@@ -222,7 +220,7 @@ config file (zero-config `check all` still works); the 0/1/2 exit contract only 
 |------:|------|--------|
 | 1 | Rule IDs + unified output format + JSON | rule IDs **done**; output format + JSON deferred |
 | 2 | Subcommand restructure with back-compat aliases | **this branch** |
-| 3 | Config file + profiles → shrink the pre-commit hook | **this branch** (`.docs_tool.ini`) |
+| 3 | Named profiles → shrink the pre-commit hook | **this branch** (built-in `pre-commit`) |
 | 4 | Inline suppressions + baseline → promote betas to blocking | deferred (needs the findings refactor) |
 | — | `--lang` filter (extra) | **this branch** |
 
@@ -231,8 +229,8 @@ config file (zero-config `check all` still works); the 0/1/2 exit contract only 
 - Family name for L3: `style` (vendor-neutral, room for `style_guide = "arenadata"` later)
   vs `arenadata-guidelines` (honest about whose rules these are).
 - Six families or five (folding `terms` into `l10n --terminology`).
-- Config format: went with `.docs_tool.ini` (stdlib, 3.7+). Revisit as `.toml` once the tool's
-  min Python is 3.11+ (`tomllib`)?
+- Should custom profiles be reintroduced somehow (a `--profile-file`, or teams just fork the
+  hook)? Dropped with the config file for now.
 - Should a plain `check <family>` failure also use exit code 2, or stay 1 (2 only for `--profile`)?
 - Rule-ID scheme: `CH01` (2-letter family + 2 digits) vs `L10N002`-style. Current choice keeps
   IDs short; renumbering later is a breaking change for anything that pins them.

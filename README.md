@@ -122,25 +122,7 @@ Selection rules: `check <family>` runs the whole family across every scan target
 
 Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) shown by `list` and accepted by `explain`.
 
-### Config file — `.docs_tool.ini`
-
-The nearest `.docs_tool.ini` from the current directory up to the git root is read automatically (INI, via stdlib `configparser`). CLI flags always win over it.
-
-```ini
-[docs_tool]
-glossary = greengagedb-glossary.psv
-external_root =
-    ADB=../docs-adb
-    ADH=../docs-adh
-
-[profile:pre-commit]
-block = chars, markup
-warn  = style, terms, l10n, refs
-scope = uncommitted
-```
-
-- `[docs_tool] glossary` / `external_root` — defaults for `--glossary` / `--external-root` (comma- or newline-separated).
-- `[profile:NAME]` — adds or overrides a `check --profile NAME` set. `block`/`warn` are family lists; `scope = uncommitted` makes the profile imply `--page UNCOMMITTED` when no `--page` is given. The built-in `pre-commit` profile blocks `chars` + `markup` and warns on the rest (scan everything unless you pass `--page`).
+`check --profile <name>` runs a built-in named check set (currently just `pre-commit`: blocks `chars` + `markup`, warns on the rest) and returns a 3-way exit code — `2` blocking finding, `1` warn-only, `0` clean.
 
 <details>
 <summary><b>Legacy <code>--check-*</code> flags</b> (still supported)</summary>
@@ -230,7 +212,7 @@ Run a whole family (`./docs_tool.py check chars`) or one check (`./docs_tool.py 
 `--in <target>` (default `pages`, which covers `pages/` + `partials/`; also `partials`, `examples`, `images`, `tags`, `nav`, or `all`) picks the scan target for a check that has more than one.
 
 Every check runs across all discovered modules automatically (`./docs_tool.py list modules`), even though the descriptions below say "EN"/"RU" for brevity.
-Every check has a stable rule ID (shown below and by `./docs_tool.py list families`); `./docs_tool.py explain <subcheck>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
+Every check has a stable rule ID (shown below and by `./docs_tool.py list families`); `./docs_tool.py explain <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
 
 ### `chars` — Unicode / encoding
 
@@ -300,7 +282,7 @@ Always scans the whole site: `--page` narrows only *which files are reported* fo
 - **`check refs --broken`** · `RF01`  
   Every `xref:`, `include::`, `image:`/`image::`, `injectSvg:`/`injectSvg::`, `inlineSVG:`/`inlineSVG::`, and `link:`/`link::` reference in `pages/`/`partials/` must resolve to a real file or anchor.
   Cross-module references resolve against sibling modules automatically.
-  A reference into a component outside this repo (e.g. a separate ADCM docs repo) is left unchecked unless you pass `--external-root NAME=PATH` (repeatable, or `[docs_tool] external_root` in `.docs_tool.ini`) to resolve against a local checkout of it:
+  A reference into a component outside this repo (e.g. a separate ADCM docs repo) is left unchecked unless you pass `--external-root NAME=PATH` (repeatable) to resolve against a local checkout of it:
 
   ```bash
   ./docs_tool.py check refs --broken
@@ -371,7 +353,7 @@ Heuristic family — treat findings as a review list, not a hard gate.
   Flags an EN glossary term whose aligned RU line matches its `ru_pattern` alternatives fewer times than the term occurs on the EN line — a translator drifting onto an inconsistent or outdated Russian word for something the glossary already has a house-style answer for, including a line that uses the term (or several glossary terms) more than once and only translated some of the mentions.
   The repeat comparison can misfire where Russian legitimately avoids repeating a noun (pronoun, ellipsis) — treat it as a review list. `-v` prints the full EN/RU line pair for each hit.
 
-  Needs a glossary: `--glossary PATH` (repeatable; pipe-delimited `en|ru|ru_pattern|note`, format documented in a `*-glossary.psv` file's own header), or `[docs_tool] glossary` in `.docs_tool.ini`, or — failing both — every `*-glossary.psv` found directly under the current directory (a note is printed to stderr when this default kicks in).
+  Needs a glossary: `--glossary PATH` (repeatable; pipe-delimited `en|ru|ru_pattern|note`, format documented in a `*-glossary.psv` file's own header), or — if omitted — every `*-glossary.psv` found directly under the current directory (a note is printed to stderr when this default kicks in).
 
   ```bash
   ./docs_tool.py check terms -v

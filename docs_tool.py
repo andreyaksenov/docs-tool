@@ -29,9 +29,6 @@ Examples:
     ./docs_tool.py check --profile pre-commit --page UNCOMMITTED
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc -n
 
-A .docs_tool.ini (nearest one from the cwd up to the git root) can set
-default --glossary / --external-root values and named [profile:*] sections.
-
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
 --list-checks, --list-modules -- still works; see "docs_tool.py --list-checks".
 
@@ -39,7 +36,6 @@ Heuristic checks (marked "beta" by "list") and sync can misfire on
 legitimate content -- treat their output as a review list, not a hard gate.
 """
 import argparse
-import configparser
 import difflib
 import os
 import re
@@ -3621,10 +3617,8 @@ TIERS = {
     "relational": ("l10n",),                    # needs both trees -> warn by default
 }
 
-# Named check sets for `check --profile NAME`. The built-in defaults; a
-# .docs_tool.ini [profile:NAME] section adds to / overrides these (see
-# _effective_profiles). block/warn is a list of family names, resolved to
-# their full check sets at run time.
+# Named check sets for `check --profile NAME`. block/warn is a list of
+# family names, resolved to their full check sets at run time.
 PROFILES = {
     "pre-commit": {
         "block": ["chars", "markup"],
@@ -3702,9 +3696,9 @@ def _resolve_family_selection(family, picked_subchecks, in_target):
 
 
 def _resolve_profile_selection(prof):
-    """(block_keys, warn_keys) for a profile dict {"block": [families],
-    "warn": [families], ...} -- each family expanded to its full check set,
-    block winning a check that somehow lands in both."""
+    """(block_keys, warn_keys) for a PROFILES entry {"block": [families],
+    "warn": [families]} -- each family expanded to its full check set, block
+    winning a check that somehow lands in both."""
     block, warn = [], []
     for fam in prof.get("block", []):
         block += _resolve_family_selection(fam, None, None)
@@ -3714,77 +3708,6 @@ def _resolve_profile_selection(prof):
     block = [k for k in block if not (k in seen or seen.add(k))]
     warn = [k for k in warn if not (k in seen or seen.add(k))]
     return block, warn
-
-
-# --------------------------------------------------------------------------
-# CONFIG FILE  (.docs_tool.ini)
-# --------------------------------------------------------------------------
-#
-# INI rather than TOML: stdlib configparser works on every Python the tool
-# targets (3.7+), no dependency. Nearest .docs_tool.ini from the cwd up to
-# the git root:
-#
-#   [docs_tool]
-#   glossary = greengagedb-glossary.psv
-#   external_root =
-#       ADB=../docs-adb
-#       ADH=../docs-adh
-#
-#   [profile:pre-commit]
-#   block = chars, markup
-#   warn  = style, terms, l10n, refs
-#   scope = uncommitted
-#
-# CLI flags always win over the file.
-
-def _split_cfg_list(raw):
-    return [x.strip() for x in re.split(r"[\n,]+", raw or "") if x.strip()]
-
-
-def _find_config():
-    here = Path.cwd()
-    for d in (here, *here.parents):
-        p = d / ".docs_tool.ini"
-        if p.is_file():
-            return p
-        if (d / ".git").exists():
-            break
-    return None
-
-
-def _load_config():
-    """Parsed .docs_tool.ini as {"glossary": [...], "external_root": [...],
-    "profiles": {name: {block, warn, scope}}, "_path": str}. Empty dict if
-    there's no file or it won't parse."""
-    path = _find_config()
-    if path is None:
-        return {}
-    cp = configparser.ConfigParser(interpolation=None)
-    try:
-        cp.read(path, encoding="utf-8")
-    except configparser.Error as e:
-        print(f"warning: ignoring {path}: {e}", file=sys.stderr)
-        return {}
-    out = {"glossary": [], "external_root": [], "profiles": {}, "_path": str(path)}
-    if cp.has_section("docs_tool"):
-        s = cp["docs_tool"]
-        out["glossary"] = _split_cfg_list(s.get("glossary", ""))
-        out["external_root"] = _split_cfg_list(s.get("external_root", ""))
-    for sec in cp.sections():
-        if sec.startswith("profile:"):
-            p = cp[sec]
-            out["profiles"][sec[len("profile:"):].strip()] = {
-                "block": _split_cfg_list(p.get("block", "")),
-                "warn": _split_cfg_list(p.get("warn", "")),
-                "scope": (p.get("scope", "") or "").strip() or None,
-            }
-    return out
-
-
-def _effective_profiles(config):
-    merged = {k: dict(v) for k, v in PROFILES.items()}
-    merged.update(config.get("profiles", {}))
-    return merged
 
 
 # --------------------------------------------------------------------------
@@ -4636,8 +4559,7 @@ def _main_legacy():
                 action.help = None
         argcomplete.autocomplete(parser, print_suppressed=True)
     args = parser.parse_args()
-    config = _load_config()
-    EXTERNAL_COMPONENTS = _load_external_components(args.external_root or config.get("external_root"))
+    EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
 
     if args.list_checks:
         for name in CHECKS:
@@ -4667,8 +4589,7 @@ def _main_legacy():
         parser.print_help()
         sys.exit(2)
 
-    overall_ok = _run_selected(selected, args.verbose, args.glossary or config.get("glossary"),
-                               legacy_headers=True)
+    overall_ok = _run_selected(selected, args.verbose, args.glossary, legacy_headers=True)
     sys.exit(0 if overall_ok else 1)
 
 
@@ -4704,10 +4625,9 @@ def _build_v2_parser():
     c.add_argument("--lang", choices=("en", "ru"),
                    help="Restrict the both-tree checks (chars, markup) to one "
                         "language. Ignored by inherently single- or bi-lingual checks.")
-    c.add_argument("--profile", metavar="NAME",
-                   help="Run a named profile instead of a family (built-in: %s; "
-                        "plus any [profile:NAME] in .docs_tool.ini). Exit 2 on a "
-                        "blocking-family finding, 1 on warn-only, 0 clean."
+    c.add_argument("--profile", metavar="NAME", choices=list(PROFILES),
+                   help="Run a named profile instead of a family (available: %s). Exit 2 "
+                        "on a blocking-family finding, 1 on warn-only, 0 clean."
                         % ", ".join(PROFILES))
     c.add_argument("-v", "--verbose", action="store_true",
                    help="Show diffs / enable the stricter translation heuristic.")
@@ -4718,11 +4638,10 @@ def _build_v2_parser():
     pa.completer = _complete_page_or_dir_name
     c.add_argument("--external-root", action="append", metavar="NAME=PATH",
                    help="Resolve cross-repo refs against a local checkout, e.g. "
-                        "--external-root ADCM=../docs-adcm. Repeatable. "
-                        "Falls back to [docs_tool] external_root in .docs_tool.ini.")
+                        "--external-root ADCM=../docs-adcm. Repeatable.")
     c.add_argument("--glossary", action="append", metavar="PATH",
-                   help="Glossary file(s) for 'check terms'. Repeatable. Falls back to "
-                        "[docs_tool] glossary in .docs_tool.ini, then *-glossary.psv in the cwd.")
+                   help="Glossary file(s) for 'check terms'. Repeatable. "
+                        "Defaults to *-glossary.psv in the current directory.")
 
     s = sub.add_parser("sync", help="Align a RU page to its EN counterpart (beta).")
     sy = s.add_argument("file", metavar="EN_FILE",
@@ -4768,8 +4687,7 @@ def _v2_list(what):
             tlist = "" if list(targets) == ["pages"] else "  --in " + "|".join(targets)
             print(f"    --{sc}{tlist}{beta}    [{ids}]")
             print(f"        {keys}")
-    profs = _effective_profiles(_load_config())
-    print("\nprofiles: " + ", ".join(profs))
+    print("\nprofiles: " + ", ".join(PROFILES))
 
 
 def _subcheck_of(key):
@@ -4818,11 +4736,8 @@ def _main_v2():
         return
 
     # verb == "check"
-    config = _load_config()
-    if config.get("_path"):
-        print(f"info: using {config['_path']}", file=sys.stderr)
-    EXTERNAL_COMPONENTS = _load_external_components(args.external_root or config.get("external_root"))
-    glossary = args.glossary or config.get("glossary")
+    EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
+    glossary = args.glossary
     _LANG_FILTER = args.lang
     _apply_page_filter(args.page)
 
@@ -4830,14 +4745,7 @@ def _main_v2():
         if args.family:
             print("check: pass a family or --profile, not both.", file=sys.stderr)
             sys.exit(2)
-        profs = _effective_profiles(config)
-        if args.profile not in profs:
-            print(f"check: unknown profile '{args.profile}' (have: {', '.join(profs)})", file=sys.stderr)
-            sys.exit(2)
-        prof = profs[args.profile]
-        if prof.get("scope") == "uncommitted" and not args.page:
-            _apply_page_filter(["UNCOMMITTED"])
-        block, warn = _resolve_profile_selection(prof)
+        block, warn = _resolve_profile_selection(PROFILES[args.profile])
         block_ok = _run_selected(block, args.verbose, glossary) if block else True
         if block and warn:
             print()

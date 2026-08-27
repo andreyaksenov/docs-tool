@@ -2130,57 +2130,6 @@ class RuleIdRegistryTests(unittest.TestCase):
         self.assertIn("pages-no-yo", out.getvalue())
 
 
-class ConfigFileTests(unittest.TestCase):
-    def setUp(self):
-        self._cwd = os.getcwd()
-        self._tmp = tempfile.mkdtemp(prefix="docs_tool_cfg_")
-        os.chdir(self._tmp)
-        subprocess.run(["git", "init", "-q"], check=True)
-
-    def tearDown(self):
-        os.chdir(self._cwd)
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def _write_cfg(self, text):
-        Path(".docs_tool.ini").write_text(text, encoding="utf-8")
-
-    def test_no_file_gives_empty_config(self):
-        self.assertEqual(dt._load_config(), {})
-
-    def test_reads_lists_and_profiles(self):
-        self._write_cfg(
-            "[docs_tool]\n"
-            "glossary = a.psv, b.psv\n"
-            "external_root =\n"
-            "    ADB=../docs-adb\n"
-            "    ADH=../docs-adh\n"
-            "\n"
-            "[profile:ci]\n"
-            "block = chars, markup, refs\n"
-            "warn = style, l10n\n"
-            "scope = uncommitted\n"
-        )
-        cfg = dt._load_config()
-        self.assertEqual(cfg["glossary"], ["a.psv", "b.psv"])
-        self.assertEqual(cfg["external_root"], ["ADB=../docs-adb", "ADH=../docs-adh"])
-        self.assertEqual(cfg["profiles"]["ci"]["block"], ["chars", "markup", "refs"])
-        self.assertEqual(cfg["profiles"]["ci"]["scope"], "uncommitted")
-
-    def test_effective_profiles_merge_builtin_and_file(self):
-        self._write_cfg("[profile:ci]\nblock = chars\nwarn = l10n\n")
-        profs = dt._effective_profiles(dt._load_config())
-        self.assertIn("pre-commit", profs)   # built-in kept
-        self.assertIn("ci", profs)           # file-added
-
-    def test_malformed_file_is_ignored_with_a_warning(self):
-        self._write_cfg("not ini at all [[[\n")
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            cfg = dt._load_config()
-        self.assertEqual(cfg, {})
-        self.assertIn("ignoring", err.getvalue())
-
-
 class LangFilterTests(FixtureTestCase):
     def _tree_with_dash_in_both(self):
         self.antora_yml("en", "T")
