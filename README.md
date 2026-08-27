@@ -73,13 +73,21 @@ Either way, `./docs_tool.py <TAB>` completes the subcommands and, within `check`
 
 ## Usage
 
-```bash
-./docs_tool.py check <family> [--<subcheck> ...] [--in <target>] [--lang en|ru] [--fix] [-v] [--page NAME ...] [--external-root NAME=PATH ...] [--glossary PATH ...]
-./docs_tool.py check <family|all>
-./docs_tool.py check --profile <name> [--page NAME ...]
-./docs_tool.py sync <path/to/en/file.adoc> [-n] [--since REF]
-./docs_tool.py list [families|checks|modules]
-./docs_tool.py explain <subcheck|rule-id>
+Run `./docs_tool.py` from the repo root, followed by one of:
+
+```
+check <family|all> [--<subcheck> ...] [--in <target>]
+                   [--lang en|ru] [--fix] [-v]
+                   [--page NAME ...] [--glossary PATH ...]
+                   [--external-root NAME=PATH ...]
+
+check --profile <name> [--page NAME ...]
+
+sync <path/to/en/file.adoc> [-n] [--since REF]
+
+list [families|checks|modules]
+
+explain <subcheck|rule-id>
 ```
 
 `./docs_tool.py` with no arguments (or `--help`) prints this whole surface.
@@ -96,16 +104,18 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 | `l10n`   | EN↔RU       | line-count / structure / nav parity, untranslated lines, `examples/` byte parity |
 
 ```bash
-./docs_tool.py check style                       # every style check
-./docs_tool.py check style --no-yo               # just one
-./docs_tool.py check chars --no-cyrillic --in examples
-./docs_tool.py check markup --lang ru            # both-tree checks, RU only
-./docs_tool.py check chars --dashes --fix        # rewrite –/— to -- in place
-./docs_tool.py check l10n --structure -v --page resource_groups.adoc
-./docs_tool.py check refs                         # broken-refs + every orphan check
+./docs_tool.py check style                  # every style check
+./docs_tool.py check style --no-yo          # just one
+./docs_tool.py check markup --lang ru       # both-tree checks, RU only
+./docs_tool.py check chars --dashes --fix   # rewrite –/— to -- in place
+./docs_tool.py check refs                   # broken-refs + every orphan check
 ./docs_tool.py check all
-./docs_tool.py list families                      # the full map: subchecks, rule IDs, legacy keys
-./docs_tool.py explain table-cell-periods         # a check's rationale and exceptions
+
+./docs_tool.py check chars --no-cyrillic --in examples
+./docs_tool.py check l10n --structure -v --page resource_groups.adoc
+
+./docs_tool.py list families                # the map: subchecks, IDs, legacy keys
+./docs_tool.py explain table-cell-periods   # a check's rationale and exceptions
 ```
 
 Selection rules: `check <family>` runs the whole family across every scan target; adding `--<subcheck>` narrows to one check (target `pages` by default); `--in <target>` picks a different target (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`.
@@ -134,19 +144,23 @@ scope = uncommitted
 - `[docs_tool] glossary` / `external_root` — defaults for `--glossary` / `--external-root` (comma- or newline-separated).
 - `[profile:NAME]` — adds or overrides a `check --profile NAME` set. `block`/`warn` are family lists; `scope = uncommitted` makes the profile imply `--page UNCOMMITTED` when no `--page` is given. The built-in `pre-commit` profile blocks `chars` + `markup` and warns on the rest (scan everything unless you pass `--page`).
 
-### Legacy `--check-*` flags
+<details>
+<summary><b>Legacy <code>--check-*</code> flags</b> (still supported)</summary>
 
-The pre-subcommand form still works and is unchanged — `main()` routes `check`/`sync`/`list`/`explain` to the new surface and everything else to the legacy parser:
+The pre-subcommand form is unchanged — `main()` routes `check`/`sync`/`list`/`explain` to the new surface and everything else to the legacy parser:
 
-```bash
-./docs_tool.py --check-<name> [--check-<name> ...] [-v] [--page NAME ...] [--external-root NAME=PATH ...] [--glossary PATH ...]
-./docs_tool.py --all-checks [-v]
-./docs_tool.py --sync <path/to/en/file.adoc> [-n] [--since REF]
-./docs_tool.py --list-checks
-./docs_tool.py --list-modules
+```
+--check-<name> [--check-<name> ...] [-v]
+               [--page NAME ...] [--glossary PATH ...]
+               [--external-root NAME=PATH ...]
+
+--all-checks [-v]
+--sync <path/to/en/file.adoc> [-n] [--since REF]
+--list-checks
+--list-modules
 ```
 
-The full set of `--check-*` flags (see the [migration map](docs/proposals/cli-redesign.md#4-full-migration-map) for the `check <family>` equivalent of each):
+The full set of `--check-*` flags (the [migration map](docs/proposals/cli-redesign.md#4-full-migration-map) gives the `check <family>` equivalent of each):
 
 ```
 --check-examples-no-cyrillic
@@ -173,10 +187,12 @@ The full set of `--check-*` flags (see the [migration map](docs/proposals/cli-re
 --check-tags-orphaned
 ```
 
-`(beta)` checks are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — see their entries under [Checks](#checks) for details and treat their output as a review list, not a hard gate.
+`(beta)` checks are heuristic rather than a real AsciiDoc parser and can misfire on legitimate content — see their entries under [Checks](#checks) and treat their output as a review list, not a hard gate.
 
 Multiple `--check-*` flags can be combined in one run.
 Exits `0` if every selected check passed, `1` if any check found something.
+
+</details>
 
 ### Scoping to specific pages with `--page`
 
@@ -416,7 +432,9 @@ Heuristic aligner, not a semantic merge — review its output before trusting it
 
 ```bash
 ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc
-./docs_tool.py sync analyzedb.adoc -n   # same file, by bare filename -- dry run: print the diff instead of writing
+
+# same file, by bare filename; -n = dry run (print the diff, don't write)
+./docs_tool.py sync analyzedb.adoc -n
 ```
 
 `sync`'s argument works the same way `--page NAME` does: it must end with `.adoc`, and can be either the full relative path or just the bare filename — resolved by searching all discovered modules' `pages`/`partials`, same lookup `--page` uses.
