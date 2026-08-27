@@ -54,43 +54,192 @@ Checks are grouped into six **families**:
 
 ## Checks
 
-Every check has a stable **rule ID**. `list` prints the table below as a tree with
-one-line descriptions; `show <subcheck|id>` (e.g. `show no-yo`, `show ST03`) prints
-one check's full rationale, exceptions, and the false positives it was tuned against.
+Every check has a stable **rule ID**. `list` prints this section as a tree;
+`show <subcheck|id>` (e.g. `show no-yo`, `show ST03`) prints one check's full
+rationale, exceptions, and the false positives it was tuned against. `beta` checks
+are heuristics — treat their output as a review list, not a hard gate.
 
-| ID            | Command                              | What                                                                                               |
-|---------------|--------------------------------------|----------------------------------------------------------------------------------------------------|
-| `CH01`        | `check chars --no-cyrillic`          | no Cyrillic in `en/` files (`--target examples` → `CH02`)                                          |
-| `CH03`        | `check chars --no-invisible`         | no zero-width / invisible / bidi-control characters                                                |
-| `CH04`        | `check chars --dashes`               | no literal en/em dash — house style uses `--`                                                      |
-| `CH05`        | `check chars --homoglyphs`           | Latin letters in RU prose that should be Cyrillic · beta                                           |
-| `MK01`        | `check markup --backticks`           | no line with an odd number of backticks                                                            |
-| `MK02`        | `check markup --delimiters`          | every block delimiter closed once the include chain is flattened                                   |
-| `RF01`        | `check refs --broken`                | every `xref:` / `include::` / `image:` target resolves                                             |
-| `RF02`–`RF06` | `check refs --orphaned [--target …]` | flags pages / partials / examples / images / `tag::` regions that are defined but never referenced |
-| `ST01`        | `check style --no-yo`                | no `ё`/`Ё` in `ru/` files (`:page-author:` exempt)                                                 |
-| `ST02`        | `check style --file-path-italics`    | file / directory names in prose need `_italics_` · beta                                            |
-| `ST03`        | `check style --table-cell-periods`   | a table cell's last sentence shouldn't end with a period · beta                                    |
-| `TM01`        | `check terms`                        | EN glossary term translated to a non-house-style RU word · beta                                    |
-| `LN01`        | `check l10n --lines`                 | EN file and its RU counterpart have the same line count                                            |
-| `LN02`        | `check l10n --structure`             | EN and RU structural skeletons match · beta                                                        |
-| `LN03`        | `check l10n --untranslated`          | RU line byte-identical to its EN counterpart · beta                                                |
-| `LN04`        | `check l10n --examples`              | EN and RU `examples/` match                                                                        |
-| `LN05`        | `check l10n --nav`                   | EN and RU `nav.adoc` structure match                                                               |
+| ID | Command |
+|----|---------|
+| `CH01` | `check chars --no-cyrillic` |
+| `CH03` | `check chars --no-invisible` |
+| `CH04` | `check chars --dashes` |
+| `CH05` | `check chars --homoglyphs` |
+| `MK01` | `check markup --backticks` |
+| `MK02` | `check markup --delimiters` |
+| `RF01` | `check refs --broken` |
+| `RF02`–`RF06` | `check refs --orphaned [--target …]` |
+| `ST01` | `check style --no-yo` |
+| `ST02` | `check style --file-path-italics` |
+| `ST03` | `check style --table-cell-periods` |
+| `TM01` | `check terms` |
+| `LN01` | `check l10n --lines` |
+| `LN02` | `check l10n --structure` |
+| `LN03` | `check l10n --untranslated` |
+| `LN04` | `check l10n --examples` |
+| `LN05` | `check l10n --nav` |
 
-Notes:
+### `chars` — Unicode / encoding
 
-- **beta** checks are heuristics, not a real AsciiDoc parser — treat their output as
-  a review list, not a hard gate.
-- **`refs`** always scans the whole site. `--page` only narrows which files are
-  *reported* for `--orphaned --target tags|partials`; everything else in `refs`
-  ignores it.
-- **`terms`** needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`),
-  or any `*-glossary.psv` in the current directory.
-- **`--external-root NAME=PATH`** (repeatable) resolves references into a sibling
-  Antora repo, for `check refs --broken` and `--orphaned --target partials|tags`,
-  e.g. `--external-root ADCM=../docs-adcm`.
-- **`--verbose`** shows the full diff / hit line on the parity and heuristic checks.
+- **`CH01` · `check chars --no-cyrillic`** — no Cyrillic in `en/` files (RU text
+  left in an EN file). `--target examples` also scans `examples/` → `CH02`.
+  ```bash
+  ./docs_tool.py check chars --no-cyrillic
+  ./docs_tool.py check chars --no-cyrillic --page resource_groups.adoc
+  ./docs_tool.py check chars --no-cyrillic --target examples
+  ```
+
+- **`CH03` · `check chars --no-invisible`** — no zero-width / invisible /
+  bidi-control Unicode characters. `--verbose` marks the character in the line.
+  ```bash
+  ./docs_tool.py check chars --no-invisible
+  ./docs_tool.py check chars --no-invisible --page auth.adoc
+  ./docs_tool.py check chars --no-invisible --verbose
+  ```
+
+- **`CH04` · `check chars --dashes`** — no literal en dash (`–`) or em dash (`—`);
+  house style uses `--`.
+  ```bash
+  ./docs_tool.py check chars --dashes
+  ./docs_tool.py check chars --dashes --page resource_groups.adoc
+  ```
+
+- **`CH05` · `check chars --homoglyphs`** · beta — Latin letters in `ru/` prose
+  that should be Cyrillic: a mixed-script word, or a lone `а`/`о`/`с`/`у` look-alike.
+  ```bash
+  ./docs_tool.py check chars --homoglyphs
+  ./docs_tool.py check chars --homoglyphs --page resource_groups.adoc
+  ./docs_tool.py check chars --homoglyphs --verbose
+  ```
+
+### `markup` — AsciiDoc syntax
+
+- **`MK01` · `check markup --backticks`** — no line with an odd number of
+  backticks (usually a stray or missing `` ` `` around inline monospace).
+  ```bash
+  ./docs_tool.py check markup --backticks
+  ./docs_tool.py check markup --backticks --page resource_groups.adoc
+  ```
+
+- **`MK02` · `check markup --delimiters`** — every AsciiDoc block delimiter
+  (`----`, `====`, `|===`, `////`, …) closed, checked on the flattened include chain.
+  ```bash
+  ./docs_tool.py check markup --delimiters
+  ./docs_tool.py check markup --delimiters --page resource_groups.adoc
+  ```
+
+### `refs` — Antora reference resolution
+
+Always scans the whole site. `--page` only narrows *which files are reported* for
+`--orphaned --target tags|partials`; everything else in `refs` ignores it. Bare
+`check refs` runs `--broken` plus every orphan target.
+
+- **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
+  `link:` reference resolves to a real file or anchor. `--external-root NAME=PATH`
+  (repeatable) resolves references into a sibling Antora repo checked out locally.
+  ```bash
+  ./docs_tool.py check refs --broken
+  ./docs_tool.py check refs --broken --external-root ADCM=../docs-adcm
+  ```
+
+- **`RF02`–`RF06` · `check refs --orphaned [--target …]`** — flags content that is
+  defined but never referenced. `check refs --orphaned` runs all five; `--target`
+  picks one:
+
+  | `--target` | ID | Flags a … |
+  |------------|----|-----------|
+  | `pages`    | `RF02` | `pages/*.adoc` not reachable from any `nav.adoc` (`start_page` exempt) |
+  | `partials` | `RF03` | tag-less `partials/` file never `include::`d whole |
+  | `examples` | `RF04` | `examples/` file never pulled in via `include::example$…[]` |
+  | `images`   | `RF05` | `images/` file that is no `image:` / `injectSvg:` macro's target |
+  | `tags`     | `RF06` | `tag::NAME[]` region never pulled in via `include::…[tag=NAME]` |
+
+  ```bash
+  ./docs_tool.py check refs --orphaned
+  ./docs_tool.py check refs --orphaned --target tags
+  ./docs_tool.py check refs --orphaned --target partials \
+    --external-root ADB=../docs-adb --external-root ADH=../docs-adh
+  ```
+
+### `style` — Arenadata style guide
+
+Heuristic family — treat findings as a review list, not a hard gate.
+
+- **`ST01` · `check style --no-yo`** — no `ё`/`Ё` in `ru/` files; house style
+  spells it `е`. The `:page-author:` attribute is exempt.
+  ```bash
+  ./docs_tool.py check style --no-yo
+  ./docs_tool.py check style --no-yo --page resource_groups.adoc
+  ```
+
+- **`ST02` · `check style --file-path-italics`** · beta — file / directory names
+  in plain prose that should be in `_italics_` per house style.
+  ```bash
+  ./docs_tool.py check style --file-path-italics
+  ./docs_tool.py check style --file-path-italics --page resource_groups.adoc
+  ./docs_tool.py check style --file-path-italics --verbose
+  ```
+
+- **`ST03` · `check style --table-cell-periods`** · beta — a table cell's last
+  sentence shouldn't end with a period (lists, admonitions, abbreviations exempt).
+  ```bash
+  ./docs_tool.py check style --table-cell-periods
+  ./docs_tool.py check style --table-cell-periods --page resource_groups.adoc
+  ```
+
+### `terms` — controlled vocabulary
+
+Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or any
+`*-glossary.psv` in the current directory (auto-discovered).
+
+- **`TM01` · `check terms`** · beta — flags an EN glossary term whose aligned RU
+  line uses a non-house-style translation (or leaves some repeats untranslated).
+  `--verbose` prints the EN/RU line pair.
+  ```bash
+  ./docs_tool.py check terms
+  ./docs_tool.py check terms --glossary greengagedb-glossary.psv
+  ./docs_tool.py check terms --verbose --page resource_groups.adoc
+  ```
+
+### `l10n` — EN↔RU parity
+
+- **`LN01` · `check l10n --lines`** — every EN `.adoc` has a RU counterpart with
+  the same line count, and vice versa.
+  ```bash
+  ./docs_tool.py check l10n --lines
+  ./docs_tool.py check l10n --lines --page resource_groups.adoc
+  ```
+
+- **`LN02` · `check l10n --structure`** · beta — EN/RU structural skeletons
+  (headings, blocks, `include::`) must match, catching drift when line counts don't.
+  `--verbose` shows the full diff.
+  ```bash
+  ./docs_tool.py check l10n --structure
+  ./docs_tool.py check l10n --structure --page resource_groups.adoc
+  ./docs_tool.py check l10n --structure --verbose
+  ```
+
+- **`LN03` · `check l10n --untranslated`** · beta — RU lines byte-identical to
+  their EN counterpart. `--verbose` also flags English stopwords in RU lines.
+  ```bash
+  ./docs_tool.py check l10n --untranslated
+  ./docs_tool.py check l10n --untranslated --page resource_groups.adoc
+  ./docs_tool.py check l10n --untranslated --verbose
+  ```
+
+- **`LN04` · `check l10n --examples`** — EN and RU `examples/` must hold the same
+  files (byte-for-byte; `.sql` comments may differ). Whole-site — ignores `--page`.
+  ```bash
+  ./docs_tool.py check l10n --examples
+  ./docs_tool.py check l10n --examples --verbose
+  ```
+
+- **`LN05` · `check l10n --nav`** — EN and RU `nav.adoc` structure (list depth,
+  `xref:`/`include::` targets) must match; translated labels ignored. Ignores `--page`.
+  ```bash
+  ./docs_tool.py check l10n --nav
+  ./docs_tool.py check l10n --nav --verbose
+  ```
 
 ## Scoping with `--page`
 
