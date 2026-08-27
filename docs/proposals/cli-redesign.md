@@ -6,7 +6,7 @@
 
 New design proposals for this tool go in `docs/proposals/`.
 
-**On this branch:** the `check`/`sync`/`list`/`explain` surface, six families, `--in`,
+**On this branch:** the `check`/`sync`/`list`/`explain` surface, six families, `--target`,
 `--profile` (built-in `pre-commit` only), stable rule IDs (`CH01`…, surfaced by
 `list`/`explain`), and a `--lang en|ru` filter for the both-tree checks.
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
@@ -65,7 +65,7 @@ monolingual and `--page`-scopeable, and terminology breaks both.
 ## 3. The command surface
 
 ```
-docs_tool check <family|all> [--<subcheck> ...] [--in <target>] [--lang en|ru] [--verbose]
+docs_tool check <family|all> [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
                              [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
 docs_tool check --profile <name> [--page NAME ...]
 docs_tool sync <en-file> [--dry-run] [--since REF]
@@ -82,11 +82,11 @@ Selection rules:
 |---|---|
 | `check <family>` | every check in the family, all scan targets |
 | `check <family> --<subcheck>` | that subcheck, target `pages` (or its sole target) |
-| `check <family> --<subcheck> --in X` | that subcheck, target `X` |
-| `check <family> --in X` | every subcheck in the family that has a target `X` |
-| `--in all` | every target of whatever is selected |
+| `check <family> --<subcheck> --target X` | that subcheck, target `X` |
+| `check <family> --target X` | every subcheck in the family that has a target `X` |
+| `--target all` | every target of whatever is selected |
 
-Default `--in` is `pages` (which means `pages/` + `partials/`, as today). `refs` always
+Default `--target` is `pages` (which means `pages/` + `partials/`, as today). `refs` always
 scans the whole site regardless of `--page`.
 
 ### Whole families — the ergonomic win
@@ -95,7 +95,7 @@ scans the whole site regardless of `--page`.
 docs_tool check chars              # invisible + dashes + homoglyphs + cyrillic-in-EN + examples
 docs_tool check markup             # stray-backticks + unbalanced-delimiters
 docs_tool check refs               # broken-refs + every orphan check
-docs_tool check refs --orphaned --in all   # every orphan target, no broken-refs
+docs_tool check refs --orphaned --target all   # every orphan target, no broken-refs
 docs_tool check style              # the Arenadata house-style set
 docs_tool check terms              # glossary check (needs a *-glossary.psv)
 docs_tool check l10n               # all EN<->RU drift checks
@@ -136,10 +136,10 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 
 | # | Today | After |
 |--:|-------|-------|
-|  1 | `--check-examples-no-cyrillic`          | `docs_tool check chars --no-cyrillic --in examples` |
-|  2 | `--check-examples-orphaned`             | `docs_tool check refs --orphaned --in examples` |
+|  1 | `--check-examples-no-cyrillic`          | `docs_tool check chars --no-cyrillic --target examples` |
+|  2 | `--check-examples-orphaned`             | `docs_tool check refs --orphaned --target examples` |
 |  3 | `--check-examples-parity`               | `docs_tool check l10n --examples` |
-|  4 | `--check-images-orphaned`               | `docs_tool check refs --orphaned --in images` |
+|  4 | `--check-images-orphaned`               | `docs_tool check refs --orphaned --target images` |
 |  5 | `--check-nav-structure-parity`          | `docs_tool check l10n --nav` |
 |  6 | `--check-pages-broken-refs`             | `docs_tool check refs --broken` |
 |  7 | `--check-pages-file-path-italics` *(beta)* | `docs_tool check style --file-path-italics` |
@@ -148,7 +148,7 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 | 10 | `--check-pages-no-invisible-chars`      | `docs_tool check chars --no-invisible` |
 | 11 | `--check-pages-no-unicode-dashes`       | `docs_tool check chars --dashes` |
 | 12 | `--check-pages-no-yo`                   | `docs_tool check style --no-yo` |
-| 13 | `--check-pages-orphaned`                | `docs_tool check refs --orphaned --in pages` |
+| 13 | `--check-pages-orphaned`                | `docs_tool check refs --orphaned --target pages` |
 | 14 | `--check-pages-ru-latin-homoglyphs` *(beta)* | `docs_tool check chars --homoglyphs` |
 | 15 | `--check-pages-stray-backticks`         | `docs_tool check markup --backticks` |
 | 16 | `--check-pages-structure-parity` *(beta)* | `docs_tool check l10n --structure` |
@@ -156,8 +156,8 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 | 18 | `--check-pages-terminology` *(beta)*    | `docs_tool check terms` |
 | 19 | `--check-pages-translation` *(beta)*    | `docs_tool check l10n --untranslated` |
 | 20 | `--check-pages-unbalanced-delimiters`   | `docs_tool check markup --delimiters` |
-| 21 | `--check-partials-orphaned`             | `docs_tool check refs --orphaned --in partials` |
-| 22 | `--check-tags-orphaned`                 | `docs_tool check refs --orphaned --in tags` |
+| 21 | `--check-partials-orphaned`             | `docs_tool check refs --orphaned --target partials` |
+| 22 | `--check-tags-orphaned`                 | `docs_tool check refs --orphaned --target tags` |
 
 ## 5. `sync`
 
@@ -176,7 +176,7 @@ Done on this branch:
 
 - **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`. Accepted by
   `explain`, printed by `list checks` / `list families`.
-- **`--in`** scan-target flag instead of `pages-` vs `examples-` prefixes.
+- **`--target`** scan-target flag instead of `pages-` vs `examples-` prefixes.
 - **`--lang en|ru`** — restricts the both-tree checks (`chars`, `markup`) to one language.
 - **`explain`** — surfaces the check docstring; keyed on subcheck name or rule ID.
 - **Severity as exit code** — `0` clean · `1` warn · `2` block, for `--profile` runs.

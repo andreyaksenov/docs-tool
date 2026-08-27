@@ -1938,7 +1938,7 @@ class RunSyncGitRewordTests(unittest.TestCase):
 
 class FamilySelectionTests(unittest.TestCase):
     """_resolve_family_selection / _resolve_profile_selection: the routing
-    layer that maps `check <family> [--sub] [--in]` to legacy CHECKS keys."""
+    layer that maps `check <family> [--sub] [--target]` to legacy CHECKS keys."""
 
     def test_every_family_and_subcheck_maps_to_a_real_check(self):
         for fam, subs in dt.FAMILIES.items():
@@ -1966,25 +1966,25 @@ class FamilySelectionTests(unittest.TestCase):
              "examples-orphaned", "images-orphaned", "tags-orphaned"},
         )
 
-    def test_subcheck_without_in_defaults_to_pages(self):
+    def test_subcheck_without_target_defaults_to_pages(self):
         self.assertEqual(
             dt._resolve_family_selection("chars", {"no-cyrillic"}, None),
             ["pages-no-cyrillic"],
         )
 
-    def test_subcheck_with_in_picks_that_target(self):
+    def test_subcheck_with_target_picks_it(self):
         self.assertEqual(
             dt._resolve_family_selection("chars", {"no-cyrillic"}, "examples"),
             ["examples-no-cyrillic"],
         )
 
-    def test_in_all_expands_every_target(self):
+    def test_target_all_expands_every_target(self):
         self.assertEqual(
             set(dt._resolve_family_selection("chars", {"no-cyrillic"}, "all")),
             {"pages-no-cyrillic", "examples-no-cyrillic"},
         )
 
-    def test_in_target_filters_whole_family(self):
+    def test_target_filters_whole_family(self):
         self.assertEqual(
             dt._resolve_family_selection("refs", None, "images"),
             ["images-orphaned"],
@@ -2081,6 +2081,15 @@ class CliV2RoutingTests(unittest.TestCase):
         code, out, _ = self._run("check", "l10n", "--structure", "--page", "foo.adoc")
         self.assertEqual(dt._PAGE_FILTER, {"names": {("foo",)}, "dirs": set()})
         self.assertEqual(code, 0)
+
+    def test_target_flag_is_accepted(self):
+        code, _, err = self._run("check", "refs", "--orphaned", "--target", "images")
+        self.assertEqual(code, 0, err)
+
+    def test_bad_target_value_is_rejected(self):
+        code, _, err = self._run("check", "chars", "--target", "bogus")
+        self.assertEqual(code, 2)
+        self.assertIn("bogus", err)
 
     def test_legacy_flags_still_route_to_legacy(self):
         code, out, _ = self._run("--check-pages-no-yo")

@@ -9,7 +9,7 @@ Run from the repo root (use "python docs_tool.py ..." on Windows). Every
 check scans all discovered modules automatically.
 
 Commands:
-    ./docs_tool.py check <family> [--<subcheck> ...] [--in <target>]
+    ./docs_tool.py check <family> [--<subcheck> ...] [--target NAME]
     ./docs_tool.py check <family|all> [--lang en|ru] [--verbose]
     ./docs_tool.py check --profile <name> [--page NAME ...]
     ./docs_tool.py sync <path/to/en/file.adoc> [--dry-run] [--since REF]
@@ -3568,13 +3568,13 @@ BETA_CHECKS = {
 #   FAMILIES[family][subcheck] = {scan-target: CHECKS-key}
 #
 # Selection rules (see _resolve_family_selection):
-#   check <family>                     -> every check in the family, all targets
-#   check <family> --<subcheck>        -> that subcheck, target "pages" (or its
-#                                         sole target)
-#   check <family> --<subcheck> --in X -> that subcheck, target X
-#   check <family> --in X              -> every subcheck in the family that has
-#                                         a target X
-#   --in all                           -> every target of whatever is selected
+#   check <family>                          -> every check in the family, all targets
+#   check <family> --<subcheck>             -> that subcheck, target "pages" (or its
+#                                              sole target)
+#   check <family> --<subcheck> --target X  -> that subcheck, target X
+#   check <family> --target X               -> every subcheck in the family that has
+#                                              a target X
+#   --target all                            -> every target of whatever is selected
 #
 # TIERS drives the default block/warn disposition (used by --profile).
 FAMILIES = {
@@ -3670,11 +3670,11 @@ def _family_of(subcheck):
     return None
 
 
-def _resolve_family_selection(family, picked_subchecks, in_target):
+def _resolve_family_selection(family, picked_subchecks, target):
     """Map a `check` invocation to an ordered, de-duplicated list of CHECKS
     keys. `family` may be None/"all" for every family; `picked_subchecks` is
-    a set (empty = whole family); `in_target` is a scan target, "all", or
-    None. See the selection rules above FAMILIES."""
+    a set (empty = whole family); `target` is a scan target, "all", or None.
+    See the selection rules above FAMILIES."""
     fams = list(FAMILIES) if family in (None, "all") else [family]
     picked = set(picked_subchecks or ())
     out = []
@@ -3682,11 +3682,11 @@ def _resolve_family_selection(family, picked_subchecks, in_target):
         for sc, targets in FAMILIES[fam].items():
             if picked and sc not in picked:
                 continue
-            if in_target == "all":
+            if target == "all":
                 out.extend(targets.values())
-            elif in_target:
-                if in_target in targets:
-                    out.append(targets[in_target])
+            elif target:
+                if target in targets:
+                    out.append(targets[target])
             elif picked:
                 out.append(targets.get("pages") or next(iter(targets.values())))
             else:
@@ -4610,7 +4610,7 @@ def _build_v2_parser():
 
     c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
                        epilog="Each family has --<subcheck> flags (e.g. --no-yo, --structure) "
-                              "and, where relevant, --in <target>. Run 'docs_tool list families' "
+                              "and, where relevant, --target NAME. Run 'docs_tool list families' "
                               "for the full map.")
     c.add_argument("family", nargs="?", choices=list(FAMILIES) + ["all"],
                    help="chars | markup | refs | style | terms | l10n | all. "
@@ -4618,7 +4618,7 @@ def _build_v2_parser():
     for sc in _ALL_SUBCHECKS:
         c.add_argument(f"--{sc}", dest=sc.replace("-", "_"), action="store_true",
                        help=argparse.SUPPRESS)
-    c.add_argument("--in", dest="in_target", metavar="TARGET",
+    c.add_argument("--target", metavar="NAME",
                    choices=_SCAN_TARGETS + ("all",),
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
@@ -4684,7 +4684,7 @@ def _v2_list(what):
             ids = " ".join(RULE_IDS[k] for k in targets.values())
             keys = ", ".join(sorted(set(targets.values())))
             beta = "  (beta)" if any(k in BETA_CHECKS for k in targets.values()) else ""
-            tlist = "" if list(targets) == ["pages"] else "  --in " + "|".join(targets)
+            tlist = "" if list(targets) == ["pages"] else "  --target " + "|".join(targets)
             print(f"    --{sc}{tlist}{beta}    [{ids}]")
             print(f"        {keys}")
     print("\nprofiles: " + ", ".join(PROFILES))
@@ -4766,10 +4766,10 @@ def _main_v2():
               f"{', '.join('--' + b for b in sorted(bad))}", file=sys.stderr)
         sys.exit(2)
 
-    selected = _resolve_family_selection(args.family, picked, args.in_target)
+    selected = _resolve_family_selection(args.family, picked, args.target)
     if not selected:
         print("check: that selection matched no checks "
-              f"(family={args.family}, --in={args.in_target}).", file=sys.stderr)
+              f"(family={args.family}, --target={args.target}).", file=sys.stderr)
         sys.exit(2)
 
     ok = _run_selected(selected, args.verbose, glossary)

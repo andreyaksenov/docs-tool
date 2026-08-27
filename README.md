@@ -76,7 +76,7 @@ Either way, `./docs_tool.py <TAB>` completes the subcommands and, within `check`
 Run `./docs_tool.py` from the repo root, followed by one of:
 
 ```
-check <family|all> [--<subcheck> ...] [--in <target>] [--lang en|ru] [--verbose]
+check <family|all> [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
                    [--page NAME ...] [--glossary PATH ...]
                    [--external-root NAME=PATH ...]
 
@@ -109,14 +109,14 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py check refs                   # broken-refs + every orphan check
 ./docs_tool.py check all
 
-./docs_tool.py check chars --no-cyrillic --in examples
+./docs_tool.py check chars --no-cyrillic --target examples
 ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
 
 ./docs_tool.py list families                # the map: subchecks, IDs, legacy keys
 ./docs_tool.py explain table-cell-periods   # a check's rationale and exceptions
 ```
 
-Selection rules: `check <family>` runs the whole family across every scan target; adding `--<subcheck>` narrows to one check (target `pages` by default); `--in <target>` picks a different target (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`.
+Selection rules: `check <family>` runs the whole family across every scan target; adding `--<subcheck>` narrows to one check (target `pages` by default); `--target NAME` picks a different one (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`.
 
 `--lang en|ru` restricts the checks that scan both trees (`chars`, `markup`) to one language; inherently single- or bi-lingual checks ignore it.
 
@@ -193,10 +193,10 @@ File and directory forms can be mixed across repeated `--page` flags:
 ./docs_tool.py check l10n --untranslated --verbose --page reference/sql_commands
 ```
 
-`check refs --orphaned --in tags` and `check refs --orphaned --in partials` also honor `--page`, but only to narrow *which files get reported on* — the usage scan (which file includes what) still covers the whole site regardless, since a tag or whole-file partial defined in the filtered-in file can be pulled in from any other page:
+`check refs --orphaned --target tags` and `check refs --orphaned --target partials` also honor `--page`, but only to narrow *which files get reported on* — the usage scan (which file includes what) still covers the whole site regardless, since a tag or whole-file partial defined in the filtered-in file can be pulled in from any other page:
 
 ```bash
-./docs_tool.py check refs --orphaned --in tags --page external_data_formats.adoc
+./docs_tool.py check refs --orphaned --target tags --page external_data_formats.adoc
 ```
 
 The rest of the `refs` family (`--broken`, and orphan checks for pages / examples / images) builds a site-wide corpus (nav links, partial includers) before reporting, so `--page` doesn't narrow it at all — it always scans and reports on everything regardless.
@@ -209,20 +209,20 @@ This is what the [pre-commit hook](#pre-commit-hook) below uses, so a commit onl
 
 Checks are grouped into six **families** — `chars`, `markup`, `refs`, `style`, `terms`, `l10n` — ordered by where a rule's authority comes from (see [`docs/proposals/cli-redesign.md`](docs/proposals/cli-redesign.md)).
 Run a whole family (`./docs_tool.py check chars`) or one check (`./docs_tool.py check chars --dashes`).
-`--in <target>` (default `pages`, which covers `pages/` + `partials/`; also `partials`, `examples`, `images`, `tags`, `nav`, or `all`) picks the scan target for a check that has more than one.
+`--target NAME` (default `pages`, which covers `pages/` + `partials/`; also `partials`, `examples`, `images`, `tags`, `nav`, or `all`) picks the scan target for a check that has more than one.
 
 Every check runs across all discovered modules automatically (`./docs_tool.py list modules`), even though the descriptions below say "EN"/"RU" for brevity.
 Every check has a stable rule ID (shown below and by `./docs_tool.py list families`); `./docs_tool.py explain <subcheck-or-ID>` prints one check's full rationale, exceptions, and the false positives it was tuned against — the same text lives in that `check_*` function's docstring in `docs_tool.py`.
 
 ### `chars` — Unicode / encoding
 
-- **`check chars --no-cyrillic`** · `CH01` (`--in examples` → `CH02`)  
+- **`check chars --no-cyrillic`** · `CH01` (`--target examples` → `CH02`)  
   No `.adoc` file under `en/modules/` may contain Cyrillic characters (catches RU text left in an EN file).
-  `--in examples` runs the same check over each module's `examples/` (all file types).
+  `--target examples` runs the same check over each module's `examples/` (all file types).
 
   ```bash
   ./docs_tool.py check chars --no-cyrillic
-  ./docs_tool.py check chars --no-cyrillic --in examples
+  ./docs_tool.py check chars --no-cyrillic --target examples
   ./docs_tool.py check chars --no-cyrillic --page resource_groups.adoc
   ```
 
@@ -276,7 +276,7 @@ Both `--lang`-aware.
 
 ### `refs` — Antora reference resolution
 
-Always scans the whole site: `--page` narrows only *which files are reported* for the `--in tags` / `--in partials` orphan checks, never the usage scan; `--broken` and the pages/examples/images orphan checks ignore `--page` entirely.
+Always scans the whole site: `--page` narrows only *which files are reported* for the `--target tags` / `--target partials` orphan checks, never the usage scan; `--broken` and the pages/examples/images orphan checks ignore `--page` entirely.
 `check refs` with no subcheck runs `--broken` plus every orphan target.
 
 - **`check refs --broken`** · `RF01`  
@@ -292,9 +292,9 @@ Always scans the whole site: `--page` narrows only *which files are reported* fo
   Run from docs-adb, the second form is what actually resolves `xref:ADCM:ROOT:some-page.adoc[]`/`include::ADCM:ROOT:partial$...[]`-style references written in docs-adb's own content that point at ADCM's repo — without it they're silently left unchecked, not reported broken, since the tool can't tell a genuine typo apart from a real cross-repo reference it just hasn't been shown the target for.
 
 - **`check refs --orphaned`** · `RF02`–`RF06`  
-  Nothing under `pages/`, `partials/`, `examples/`, `images/`, or any `tag::`/`end::` region is defined but never used. `check refs --orphaned` runs all five; `--in <target>` picks one:
+  Nothing under `pages/`, `partials/`, `examples/`, `images/`, or any `tag::`/`end::` region is defined but never used. `check refs --orphaned` runs all five; `--target NAME` picks one:
 
-  | `--in` | ID | Rule |
+  | `--target` value | ID | Rule |
   |--------|----|------|
   | `pages`    | `RF02` | every `pages/*.adoc` reachable from some `nav.adoc` (nav's own `include::partial$...[]` and cross-module links counted); the site's `start_page` is exempt |
   | `partials` | `RF03` | every tag-less `partials/` file pulled in whole by a plain/wildcarded `include::...[]` |
@@ -304,13 +304,13 @@ Always scans the whole site: `--page` narrows only *which files are reported* fo
 
   ```bash
   ./docs_tool.py check refs --orphaned                 # all five targets
-  ./docs_tool.py check refs --orphaned --in tags --page external_data_formats.adoc
+  ./docs_tool.py check refs --orphaned --target tags --page external_data_formats.adoc
   ```
 
-  For `--in partials` and `--in tags`, pass `--external-root NAME=PATH` (repeatable) to recognize a partial or tag that's only ever consumed from a sibling Antora component's repo — e.g. run from docs-adcm, whose own `et`/`monitoring` partials render only inside docs-adb/docs-adh/docs-adpg/docs-adqm's install docs, not from anything in docs-adcm itself:
+  For `--target partials` and `--target tags`, pass `--external-root NAME=PATH` (repeatable) to recognize a partial or tag that's only ever consumed from a sibling Antora component's repo — e.g. run from docs-adcm, whose own `et`/`monitoring` partials render only inside docs-adb/docs-adh/docs-adpg/docs-adqm's install docs, not from anything in docs-adcm itself:
 
   ```bash
-  ./docs_tool.py check refs --orphaned --in partials \
+  ./docs_tool.py check refs --orphaned --target partials \
     --external-root ADB=../docs-adb --external-root ADH=../docs-adh \
     --external-root ADPG=../docs-adpg --external-root ADQM=../docs-adqm
   ```
