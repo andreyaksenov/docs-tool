@@ -1,17 +1,18 @@
 # Proposal: regroup the `docs_tool` CLI around the writing-quality pyramid
 
 **Status:** implemented on branch `cli-redesign` for review · legacy `--check-*` flags kept working
-**Scope:** CLI surface + config file + rule IDs + `--lang`/`--fix` — no check *logic* changes
+**Scope:** CLI surface + config file + rule IDs + `--lang` — no check *logic* changes
 **Visual version:** [artifact](https://claude.ai/code/artifact/17a8e6b6-e251-411d-adf8-8e726809df3c)
 
 New design proposals for this tool go in `docs/proposals/`.
 
 **On this branch:** the `check`/`sync`/`list`/`explain` surface, six families, `--in`, `--profile`,
-a `.docs_tool.ini` config file, stable rule IDs (`CH01`…, surfaced by `list`/`explain`), a
-`--lang en|ru` filter for the both-tree checks, and `--fix` for the three deterministic char rules.
+a `.docs_tool.ini` config file, stable rule IDs (`CH01`…, surfaced by `list`/`explain`), and a
+`--lang en|ru` filter for the both-tree checks.
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
-findings, a large separate change (see §6).
+findings, a large separate change (see §6). `--fix` (in-place autofix) was prototyped and
+dropped: a check that reports shouldn't also mutate files.
 
 ---
 
@@ -180,10 +181,10 @@ Done on this branch:
 - **Config file** — `.docs_tool.ini` (`external_root`, `glossary`, `[profile:*]`), see §3.
 - **`--in`** scan-target flag instead of `pages-` vs `examples-` prefixes.
 - **`--lang en|ru`** — restricts the both-tree checks (`chars`, `markup`) to one language.
-- **`--fix`** — in-place rewrite for `--dashes` (`–`/`—`→`--`), `--no-invisible` (strip), and
-  `--no-yo` (`ё`→`е`, `:page-author:` lines exempt).
 - **`explain`** — surfaces the check docstring; keyed on subcheck name or rule ID.
 - **Severity as exit code** — `0` clean · `1` warn · `2` block, for `--profile` runs.
+- **`--all-checks` / `check all` no longer abort** when `terms` is swept in without a glossary —
+  it's dropped with a note; a bare `check terms` still errors.
 
 Deferred — each needs every check refactored to *return* structured `Finding` objects instead
 of `print()`ing, a large change that also rewrites the output-assertion tests (the safety net)
@@ -195,8 +196,10 @@ and bloats the branch:
 - **Inline suppressions** — `// docs_tool-ignore: CH04` in the `.adoc`. Biggest usability win
   for the beta checks.
 - **Baseline file** — `docs_tool baseline` snapshots findings; later runs report only new ones.
-- **`--fix` for more rules**, a `--fix -n` dry-run, `--lang` for more checks.
-- **Fix the `--all-checks` footgun** — a missing glossary should skip-with-note, not abort.
+
+Considered and rejected: **`--fix`** (in-place autofix for the deterministic char rules). A
+check's job is to report; having it also rewrite files is surprising. If autofix is wanted
+later it should be a separate `docs_tool fix` verb, not a flag on `check`.
 
 ## 7. Migration & compatibility
 
@@ -221,7 +224,7 @@ config file (zero-config `check all` still works); the 0/1/2 exit contract only 
 | 2 | Subcommand restructure with back-compat aliases | **this branch** |
 | 3 | Config file + profiles → shrink the pre-commit hook | **this branch** (`.docs_tool.ini`) |
 | 4 | Inline suppressions + baseline → promote betas to blocking | deferred (needs the findings refactor) |
-| — | `--lang`, `--fix` (extras) | **this branch** |
+| — | `--lang` filter (extra) | **this branch** |
 
 ## Open questions
 

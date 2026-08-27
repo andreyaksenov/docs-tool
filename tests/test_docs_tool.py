@@ -2204,37 +2204,5 @@ class LangFilterTests(FixtureTestCase):
         self.assertIn("/en/", out)
 
 
-class FixModeTests(FixtureTestCase):
-    def test_fix_rewrites_dashes_and_yo(self):
-        self.antora_yml("en", "T")
-        self.antora_yml("ru", "T")
-        self.write("en/modules/ROOT/pages/p.adoc", "A – b — c.\n")
-        ru = self.write("ru/modules/ROOT/pages/p.adoc", "Ещё текст.\n")
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            self.assertTrue(dt._fix_selected(["pages-no-unicode-dashes", "pages-no-yo"], verbose=False))
-        self.assertEqual((self.root / "en/modules/ROOT/pages/p.adoc").read_text(), "A -- b -- c.\n")
-        self.assertEqual(ru.read_text(), "Еще текст.\n")  # ё -> е
-        # files now pass their checks
-        self.assertTrue(self.run_check(dt.check_pages_no_unicode_dashes)[0])
-        self.assertTrue(self.run_check(dt.check_pages_no_yo)[0])
-
-    def test_fix_rejects_a_non_fixable_selection(self):
-        with self.assertRaises(SystemExit) as ctx:
-            with contextlib.redirect_stderr(io.StringIO()):
-                dt._fix_selected(["pages-broken-refs"], verbose=False)
-        self.assertEqual(ctx.exception.code, 2)
-
-    def test_page_author_line_keeps_its_yo(self):
-        self.antora_yml("ru", "T")
-        p = self.write("ru/modules/ROOT/pages/p.adoc",
-                       ":page-author: Фёдоров\n\nЕщё текст.\n")
-        with contextlib.redirect_stdout(io.StringIO()):
-            dt._fix_selected(["pages-no-yo"], verbose=False)
-        text = p.read_text()
-        self.assertIn(":page-author: Фёдоров", text)  # ё kept
-        self.assertIn("Еще текст.", text)        # ё -> е in body
-
-
 if __name__ == "__main__":
     unittest.main()

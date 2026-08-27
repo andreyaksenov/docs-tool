@@ -10,7 +10,7 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [--<subcheck> ...] [--in <target>]
-    ./docs_tool.py check <family|all> [--lang en|ru] [--fix] [-v]
+    ./docs_tool.py check <family|all> [--lang en|ru] [-v]
     ./docs_tool.py check --profile <name> [--page NAME ...]
     ./docs_tool.py sync <path/to/en/file.adoc> [-n] [--since REF]
     ./docs_tool.py list [families|checks|modules]
@@ -25,7 +25,7 @@ Examples:
     ./docs_tool.py check chars
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure -v --page resource_groups.adoc
-    ./docs_tool.py check chars --dashes --fix
+    ./docs_tool.py check markup --lang ru
     ./docs_tool.py check --profile pre-commit --page UNCOMMITTED
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc -n
 
@@ -3788,7 +3788,7 @@ def _effective_profiles(config):
 
 
 # --------------------------------------------------------------------------
-# --lang / --fix support
+# --lang support
 # --------------------------------------------------------------------------
 
 # None | "en" | "ru" -- restricts the checks that scan both trees
@@ -3802,84 +3802,6 @@ def _lang_roots(en_root, ru_root):
     if _LANG_FILTER == "ru":
         return (ru_root,)
     return (en_root, ru_root)
-
-
-# Checks a deterministic character rule can rewrite in place. transform() is
-# applied line by line; a line it returns unchanged is left alone.
-_FIXERS = {
-    "pages-no-unicode-dashes":  lambda l: EN_EM_DASH_RE.sub("--", l),
-    "pages-no-invisible-chars": lambda l: _INVISIBLE_RE.sub("", l),
-    "pages-no-yo": (lambda l: l if l.startswith(":page-author:")
-                    else _YO_RE.sub(lambda m: "Е" if m.group(0) == "Ё" else "е", l)),
-}
-_FIX_SCOPE = {
-    "pages-no-unicode-dashes": "both",
-    "pages-no-invisible-chars": "both",
-    "pages-no-yo": "ru",
-}
-
-
-def _rewrite_lines(path: Path, transform):
-    """Apply transform() to every line of `path`, preserving its trailing
-    newline (or absence). Returns the number of lines changed; only writes
-    if something changed."""
-    text = _read_text(path)
-    if text is None:
-        return 0
-    had_final_nl = text.endswith("\n")
-    lines = text.split("\n")
-    if had_final_nl:
-        lines.pop()
-    changed = 0
-    for i, l in enumerate(lines):
-        new = transform(l)
-        if new != l:
-            lines[i] = new
-            changed += 1
-    if changed:
-        path.write_text("\n".join(lines) + ("\n" if had_final_nl else ""), encoding="utf-8")
-    return changed
-
-
-def _fix_selected(selected, verbose):
-    """Run the in-place fixers for every fixable check in `selected`.
-    Exits 2 if nothing in the selection is fixable. Returns True."""
-    fixable = [k for k in selected if k in _FIXERS]
-    if not fixable:
-        print("check --fix: nothing in this selection is auto-fixable "
-              "(fixable: --dashes, --no-invisible, --no-yo).", file=sys.stderr)
-        sys.exit(2)
-    for key in fixable:
-        transform = _FIXERS[key]
-        scope = _FIX_SCOPE[key]
-        n_files = n_lines = 0
-        for _, en_root, ru_root in module_roots():
-            if scope == "ru":
-                roots = _lang_roots(en_root, ru_root)
-                roots = (ru_root,) if ru_root in roots else ()
-            else:
-                roots = _lang_roots(en_root, ru_root)
-            for root in roots:
-                for f in (list(_iter_files(root / "pages", ".adoc"))
-                          + list(_iter_files(root / "partials", ".adoc"))):
-                    if not _page_allowed(f):
-                        continue
-                    c = _rewrite_lines(f, transform)
-                    if c:
-                        n_files += 1
-                        n_lines += c
-                        if verbose:
-                            print(f"  {f}: {c} line(s)")
-        print(f"{RULE_IDS[key]} {key}: fixed {n_lines} line(s) in {n_files} file(s)")
-    skipped = [k for k in selected if k not in _FIXERS]
-    if skipped:
-        if verbose:
-            for key in skipped:
-                print(f"{RULE_IDS[key]} {key}: not auto-fixable", file=sys.stderr)
-        else:
-            print(f"({len(skipped)} check(s) in the selection are not auto-fixable -- "
-                  f"run without --fix to report them)", file=sys.stderr)
-    return True
 
 
 # ==========================================================================
@@ -4782,9 +4704,6 @@ def _build_v2_parser():
     c.add_argument("--lang", choices=("en", "ru"),
                    help="Restrict the both-tree checks (chars, markup) to one "
                         "language. Ignored by inherently single- or bi-lingual checks.")
-    c.add_argument("--fix", action="store_true",
-                   help="Rewrite files in place for the deterministic char rules "
-                        "(--dashes, --no-invisible, --no-yo) instead of reporting.")
     c.add_argument("--profile", metavar="NAME",
                    help="Run a named profile instead of a family (built-in: %s; "
                         "plus any [profile:NAME] in .docs_tool.ini). Exit 2 on a "
@@ -4840,20 +4759,14 @@ def _v2_list(what):
         return
     # families
     tier_of = {f: t for t, fams in TIERS.items() for f in fams}
-    fixable = set(_FIXERS)
     for fam, subs in FAMILIES.items():
         print(f"{fam}  ({tier_of.get(fam, '?')})")
         for sc, targets in subs.items():
             ids = " ".join(RULE_IDS[k] for k in targets.values())
             keys = ", ".join(sorted(set(targets.values())))
-            flags = []
-            if any(k in BETA_CHECKS for k in targets.values()):
-                flags.append("beta")
-            if any(k in fixable for k in targets.values()):
-                flags.append("--fix")
-            fl = "  (" + ", ".join(flags) + ")" if flags else ""
+            beta = "  (beta)" if any(k in BETA_CHECKS for k in targets.values()) else ""
             tlist = "" if list(targets) == ["pages"] else "  --in " + "|".join(targets)
-            print(f"    --{sc}{tlist}{fl}    [{ids}]")
+            print(f"    --{sc}{tlist}{beta}    [{ids}]")
             print(f"        {keys}")
     profs = _effective_profiles(_load_config())
     print("\nprofiles: " + ", ".join(profs))
@@ -4883,12 +4796,7 @@ def _v2_explain(name):
         print(f"unknown check: {name}  (try 'docs_tool list checks')", file=sys.stderr)
         sys.exit(2)
     doc = (CHECKS[key].__doc__ or "(no description)").strip()
-    flags = []
-    if key in BETA_CHECKS:
-        flags.append("beta -- heuristic, treat findings as a review list")
-    if key in _FIXERS:
-        flags.append("auto-fixable with --fix")
-    tag = "  [" + "; ".join(flags) + "]" if flags else ""
+    tag = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
     print(f"{RULE_IDS[key]}  {_subcheck_of(key)}  ({key}){tag}\n")
     print("\n".join(line.strip() for line in doc.splitlines()))
 
@@ -4921,9 +4829,6 @@ def _main_v2():
     if args.profile:
         if args.family:
             print("check: pass a family or --profile, not both.", file=sys.stderr)
-            sys.exit(2)
-        if args.fix:
-            print("check: --fix and --profile don't combine (a profile only reports).", file=sys.stderr)
             sys.exit(2)
         profs = _effective_profiles(config)
         if args.profile not in profs:
@@ -4958,10 +4863,6 @@ def _main_v2():
         print("check: that selection matched no checks "
               f"(family={args.family}, --in={args.in_target}).", file=sys.stderr)
         sys.exit(2)
-
-    if args.fix:
-        _fix_selected(selected, args.verbose)
-        sys.exit(0)
 
     ok = _run_selected(selected, args.verbose, glossary)
     sys.exit(0 if ok else 1)

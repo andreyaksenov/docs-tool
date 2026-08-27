@@ -76,8 +76,7 @@ Either way, `./docs_tool.py <TAB>` completes the subcommands and, within `check`
 Run `./docs_tool.py` from the repo root, followed by one of:
 
 ```
-check <family|all> [--<subcheck> ...] [--in <target>]
-                   [--lang en|ru] [--fix] [-v]
+check <family|all> [--<subcheck> ...] [--in <target>] [--lang en|ru] [-v]
                    [--page NAME ...] [--glossary PATH ...]
                    [--external-root NAME=PATH ...]
 
@@ -107,7 +106,6 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py check style                  # every style check
 ./docs_tool.py check style --no-yo          # just one
 ./docs_tool.py check markup --lang ru       # both-tree checks, RU only
-./docs_tool.py check chars --dashes --fix   # rewrite –/— to -- in place
 ./docs_tool.py check refs                   # broken-refs + every orphan check
 ./docs_tool.py check all
 
@@ -120,7 +118,7 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 
 Selection rules: `check <family>` runs the whole family across every scan target; adding `--<subcheck>` narrows to one check (target `pages` by default); `--in <target>` picks a different target (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`.
 
-`--lang en|ru` restricts the checks that scan both trees (`chars`, `markup`) to one language; inherently single- or bi-lingual checks ignore it. `--fix` rewrites files in place for the three deterministic character rules — `--dashes` (`–`/`—` → `--`), `--no-invisible` (strip), `--no-yo` (`ё` → `е`, `:page-author:` lines exempt) — instead of reporting; it errors if nothing in the selection is fixable.
+`--lang en|ru` restricts the checks that scan both trees (`chars`, `markup`) to one language; inherently single- or bi-lingual checks ignore it.
 
 Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) shown by `list` and accepted by `explain`.
 
@@ -246,21 +244,19 @@ Every check has a stable rule ID (shown below and by `./docs_tool.py list famili
   ./docs_tool.py check chars --no-cyrillic --page resource_groups.adoc
   ```
 
-- **`check chars --no-invisible`** · `CH03` · `--fix`  
+- **`check chars --no-invisible`** · `CH03`  
   No `pages/`/`partials/` `.adoc` file may contain zero-width or other invisible/formatting Unicode characters.
   `-v` also prints each hit line with the invisible character swapped for a visible `⟦U+XXXX⟧` marker.
 
   ```bash
   ./docs_tool.py check chars --no-invisible -v
-  ./docs_tool.py check chars --no-invisible --fix
   ```
 
-- **`check chars --dashes`** · `CH04` · `--fix`  
+- **`check chars --dashes`** · `CH04`  
   No `pages/`/`partials/` `.adoc` file may contain a literal en dash (`–`) or em dash (`—`); house style uses `--` instead.
 
   ```bash
   ./docs_tool.py check chars --dashes
-  ./docs_tool.py check chars --dashes --fix            # rewrite –/— to -- in place
   ./docs_tool.py check chars --dashes --lang ru        # RU tree only
   ```
 
@@ -343,13 +339,13 @@ Always scans the whole site: `--page` narrows only *which files are reported* fo
 
 Heuristic family — treat findings as a review list, not a hard gate.
 
-- **`check style --no-yo`** · `ST01` · `--fix`  
+- **`check style --no-yo`** · `ST01`  
   No `ru/` `pages/`/`partials/` `.adoc` file may contain `ё`/`Ё`; house style spells it out as `е` instead.
-  The `:page-author:` attribute is exempt, since a real person's name can legitimately contain `ё` (and `--fix` leaves those lines alone).
+  The `:page-author:` attribute is exempt, since a real person's name can legitimately contain `ё`.
 
   ```bash
   ./docs_tool.py check style --no-yo
-  ./docs_tool.py check style --no-yo --fix
+  ./docs_tool.py check style --no-yo --page resource_groups.adoc
   ```
 
 - **`check style --file-path-italics`** · `ST02` · beta  
