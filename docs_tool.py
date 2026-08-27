@@ -10,8 +10,8 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [--<subcheck> ...] [--target NAME]
-    ./docs_tool.py check <family> [<family> ...] [--lang en|ru] [--verbose]
-    ./docs_tool.py check all [--page NAME ...]
+    ./docs_tool.py check <family> [<family> ...] [--verbose] [--page NAME ...]
+    ./docs_tool.py check all
     ./docs_tool.py sync <path/to/en/file.adoc> [--dry-run] [--since REF]
     ./docs_tool.py list                        -- the family/check map
     ./docs_tool.py list <subcheck|rule-id>     -- one check's full rationale
@@ -25,7 +25,6 @@ Examples:
     ./docs_tool.py check chars
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
-    ./docs_tool.py check markup --lang ru
     ./docs_tool.py check chars markup --page UNCOMMITTED
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
@@ -1721,7 +1720,7 @@ def check_pages_no_invisible_chars(verbose=False) -> bool:
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
-        for root in _lang_roots(en_root, ru_root):
+        for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
                 if not _page_allowed(f):
                     continue
@@ -1750,7 +1749,7 @@ def check_pages_no_unicode_dashes(verbose=False) -> bool:
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
-        for root in _lang_roots(en_root, ru_root):
+        for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
                 if not _page_allowed(f):
                     continue
@@ -1828,7 +1827,7 @@ def check_pages_stray_backticks(verbose=False) -> bool:
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
-        for root in _lang_roots(en_root, ru_root):
+        for root in (en_root, ru_root):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
                 if not _page_allowed(f):
                     continue
@@ -2097,10 +2096,7 @@ def check_pages_unbalanced_delimiters(verbose=False) -> bool:
     en_module_roots = {name: en_root for name, en_root, _ in modules}
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
 
-    _langs = (("en", en_module_roots), ("ru", ru_module_roots))
-    if _LANG_FILTER:
-        _langs = tuple(t for t in _langs if t[0] == _LANG_FILTER)
-    for lang, lang_module_roots in _langs:
+    for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
         own_name = _own_component_name(lang)
         visited = set()
         for root in lang_module_roots.values():
@@ -3725,23 +3721,6 @@ def _resolve_family_selection(family, picked_subchecks, target):
     return [k for k in out if k and not (k in seen or seen.add(k))]
 
 
-# --------------------------------------------------------------------------
-# --lang support
-# --------------------------------------------------------------------------
-
-# None | "en" | "ru" -- restricts the checks that scan both trees
-# (no-invisible, dashes, backticks, delimiters) to one language.
-_LANG_FILTER = None
-
-
-def _lang_roots(en_root, ru_root):
-    if _LANG_FILTER == "en":
-        return (en_root,)
-    if _LANG_FILTER == "ru":
-        return (ru_root,)
-    return (en_root, ru_root)
-
-
 # ==========================================================================
 # SYNC: align a RU page's structure/content with its EN counterpart after an
 # EN edit. Ported from sync_pages_from_en.py -- see that tool's original
@@ -4638,9 +4617,6 @@ def _build_v2_parser():
                    choices=_SCAN_TARGETS + ("all",),
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
-    c.add_argument("--lang", choices=("en", "ru"),
-                   help="Restrict the both-tree checks (chars, markup) to one "
-                        "language. Ignored by inherently single- or bi-lingual checks.")
     c.add_argument("--verbose", action="store_true",
                    help="Show diffs / enable the stricter translation heuristic.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
@@ -4779,7 +4755,7 @@ def _list_one_check(name):
 
 
 def _main_v2():
-    global EXTERNAL_COMPONENTS, _LANG_FILTER
+    global EXTERNAL_COMPONENTS
     parser = _build_v2_parser()
     if not sys.argv[1:]:                 # bare `docs_tool.py` -> full help, exit 0
         parser.print_help()
@@ -4795,7 +4771,6 @@ def _main_v2():
     # verb == "check"
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
     glossary = args.glossary
-    _LANG_FILTER = args.lang
     _apply_page_filter(args.page)
 
     families = list(dict.fromkeys(args.families))   # de-dup, keep order

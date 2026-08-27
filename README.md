@@ -75,7 +75,7 @@ Either way, `./docs_tool.py <TAB>` completes the subcommands and, within `check`
 Run `./docs_tool.py` from the repo root, followed by one of:
 
 ```
-check <family> [<family> ...]  [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
+check <family> [<family> ...]  [--<subcheck> ...] [--target NAME] [--verbose]
                                [--page NAME ...] [--glossary PATH ...]
                                [--external-root NAME=PATH ...]
 
@@ -103,7 +103,6 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ./docs_tool.py check style                  # every style check
 ./docs_tool.py check style --no-yo          # just one
 ./docs_tool.py check chars markup           # two families at once
-./docs_tool.py check markup --lang ru       # both-tree checks, RU only
 ./docs_tool.py check refs                   # broken-refs + every orphan check
 ./docs_tool.py check all
 
@@ -115,8 +114,6 @@ Checks are grouped into six **families**, ordered by where a rule's authority co
 ```
 
 Selection rules: `check <family> [<family> ...]` runs those whole families (`check all` for every family); adding a single `--<subcheck>` narrows to one check (target `pages` by default); `--target NAME` picks a different one (`pages`, `partials`, `examples`, `images`, `tags`, `nav`, or `all`). `refs` always scans the whole site regardless of `--page`. Exit `0` if everything passed, `1` if any check found something.
-
-`--lang en|ru` restricts the checks that scan both trees (`chars`, `markup`) to one language; inherently single- or bi-lingual checks ignore it.
 
 Every check has a stable **rule ID** (`CH01`, `MK02`, `RF03`, `ST01`, `TM01`, `LN02`, …) — shown by `list`, and `list <ID>` prints that check's full rationale.
 
@@ -237,7 +234,6 @@ Every check has a stable rule ID (shown below and by `./docs_tool.py list`); `./
 
   ```bash
   ./docs_tool.py check chars --dashes
-  ./docs_tool.py check chars --dashes --lang ru        # RU tree only
   ```
 
 - **`check chars --homoglyphs`** · `CH05` · beta  
@@ -249,11 +245,7 @@ Every check has a stable rule ID (shown below and by `./docs_tool.py list`); `./
   ./docs_tool.py check chars --homoglyphs --verbose --page resource_groups.adoc
   ```
 
-`--lang en|ru` restricts `--no-invisible` and `--dashes` (the checks that scan both trees) to one language; `--no-cyrillic` (EN-only) and `--homoglyphs` (RU-only) ignore it.
-
 ### `markup` — AsciiDoc spec
-
-Both `--lang`-aware.
 
 - **`check markup --backticks`** · `MK01`  
   No `pages/`/`partials/` `.adoc` line may have an odd number of backticks (almost always a missing or stray `` ` `` around an inline monospace span).

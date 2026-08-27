@@ -1,19 +1,20 @@
 # Proposal: regroup the `docs_tool` CLI around the writing-quality pyramid
 
 **Status:** implemented on branch `cli-redesign` for review · legacy `--check-*` flags kept working
-**Scope:** CLI surface + rule IDs + `--lang` — no check *logic* changes
+**Scope:** CLI surface + rule IDs — no check *logic* changes
 **Visual version:** [artifact](https://claude.ai/code/artifact/17a8e6b6-e251-411d-adf8-8e726809df3c)
 
 New design proposals for this tool go in `docs/proposals/`.
 
 **On this branch:** the `check`/`sync`/`list` surface, six families, `--target`,
-multi-family `check chars markup`, stable rule IDs (`CH01`…, shown by `list`; `list <id>`
-prints one check's full rationale), and a `--lang en|ru` filter for the both-tree checks.
+multi-family `check chars markup`, and stable rule IDs (`CH01`…, shown by `list`; `list <id>`
+prints one check's full rationale).
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
 findings, a large separate change (see §6).
-**Prototyped and dropped:** `--fix` (a check that reports shouldn't also mutate files) and a
-`.docs_tool.ini` config file (flags are enough).
+**Prototyped and dropped:** `--fix` (a check that reports shouldn't also mutate files), a
+`.docs_tool.ini` config file (flags are enough), `--profile` (one hardcoded value), and
+`--lang en|ru` (`--page` covers "check what I touched" for all checks, not just the 4 both-tree ones).
 
 ---
 
@@ -65,7 +66,7 @@ monolingual and `--page`-scopeable, and terminology breaks both.
 ## 3. The command surface
 
 ```
-docs_tool check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--lang en|ru] [--verbose]
+docs_tool check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose]
                                         [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
 docs_tool sync <en-file> [--dry-run] [--since REF]
 docs_tool list                    # the family/check map, one line per check
@@ -174,7 +175,6 @@ Done on this branch:
 
 - **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`, shown by `list`.
 - **`--target`** scan-target flag instead of `pages-` vs `examples-` prefixes.
-- **`--lang en|ru`** — restricts the both-tree checks (`chars`, `markup`) to one language.
 - **`list`** — one-line-per-check family map (a `SUMMARIES` blurb each), and `list <subcheck|id>`
   prints that check's full docstring. Replaces a separate `explain` verb.
 - **multi-family `check`** — `check chars markup` runs both; `check all` runs everything.
@@ -226,7 +226,7 @@ plain `0` clean / `1` findings everywhere — no severity tiers in the exit code
 | 2 | Subcommand restructure with back-compat aliases | **this branch** |
 | 3 | ~~Named profiles~~ → hook expresses block/warn in shell | reverted; `--profile` dropped |
 | 4 | Inline suppressions + baseline → promote betas to blocking | deferred (needs the findings refactor) |
-| — | `--lang` filter, multi-family `check` (extras) | **this branch** |
+| — | multi-family `check` (extra) | **this branch** |
 
 ## Open questions
 

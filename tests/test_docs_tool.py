@@ -38,13 +38,11 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_external = dt.EXTERNAL_COMPONENTS
         self._orig_page_filter = dt._PAGE_FILTER
         self._orig_glossary = dt.GLOSSARY
-        self._orig_lang_filter = dt._LANG_FILTER
         dt.EN_MODULES_ROOT = self.root / "en" / "modules"
         dt.RU_MODULES_ROOT = self.root / "ru" / "modules"
         dt.EXTERNAL_COMPONENTS = {}
         dt._PAGE_FILTER = None
         dt.GLOSSARY = {}
-        dt._LANG_FILTER = None
         dt._OWN_COMPONENT_NAME_CACHE.clear()
 
     def tearDown(self):
@@ -53,7 +51,6 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = self._orig_external
         dt._PAGE_FILTER = self._orig_page_filter
         dt.GLOSSARY = self._orig_glossary
-        dt._LANG_FILTER = self._orig_lang_filter
         dt._OWN_COMPONENT_NAME_CACHE.clear()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
@@ -2010,13 +2007,12 @@ class FamilySelectionTests(unittest.TestCase):
 
 
 class CliV2RoutingTests(unittest.TestCase):
-    """main() dispatch: `check|sync|list|explain` route to the new surface,
+    """main() dispatch: `check|sync|list` route to the new surface,
     everything else stays on the legacy --check-* parser."""
 
     def setUp(self):
         self._argv = sys.argv
         self._pf = dt._PAGE_FILTER
-        self._lang = dt._LANG_FILTER
         self._tmp = tempfile.mkdtemp(prefix="docs_tool_cli_")
         self._cwd = os.getcwd()
         os.chdir(self._tmp)
@@ -2024,7 +2020,6 @@ class CliV2RoutingTests(unittest.TestCase):
     def tearDown(self):
         sys.argv = self._argv
         dt._PAGE_FILTER = self._pf
-        dt._LANG_FILTER = self._lang
         os.chdir(self._cwd)
         shutil.rmtree(self._tmp, ignore_errors=True)
 
@@ -2162,29 +2157,6 @@ class RuleIdRegistryTests(unittest.TestCase):
         self.assertEqual(dt._resolve_check_name("LN02"), "pages-structure-parity")
         self.assertEqual(dt._resolve_check_name("examples-orphaned"), "examples-orphaned")
         self.assertIsNone(dt._resolve_check_name("nonsense"))
-
-
-class LangFilterTests(FixtureTestCase):
-    def _tree_with_dash_in_both(self):
-        self.antora_yml("en", "T")
-        self.antora_yml("ru", "T")
-        self.write("en/modules/ROOT/pages/p.adoc", "Text with an — em dash.\n")
-        self.write("ru/modules/ROOT/pages/p.adoc", "Текст — тире.\n")
-
-    def test_lang_ru_skips_en_tree(self):
-        self._tree_with_dash_in_both()
-        dt._LANG_FILTER = "ru"
-        ok, out = self.run_check(dt.check_pages_no_unicode_dashes)
-        self.assertFalse(ok)
-        self.assertIn("/ru/", out)
-        self.assertNotIn("/en/", out)
-
-    def test_no_filter_scans_both(self):
-        self._tree_with_dash_in_both()
-        ok, out = self.run_check(dt.check_pages_no_unicode_dashes)
-        self.assertFalse(ok)
-        self.assertIn("/ru/", out)
-        self.assertIn("/en/", out)
 
 
 if __name__ == "__main__":
