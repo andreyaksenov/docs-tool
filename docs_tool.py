@@ -3586,6 +3586,7 @@ LINK_INSECURE = False           # skip TLS verification without the per-run note
 LINK_SHOW_UNVERIFIED = False    # list the couldn't-check links, not just count them
 LINK_MAX_WORKERS = 8
 _LINK_CACHE_TTL = 7 * 24 * 3600          # results older than a week are re-probed
+_LINK_PROGRESS_THRESHOLD = 8            # show a progress line past this many fresh fetches
 # At most a few requests in flight per host: fanning all 8 workers at one
 # host (github.com carries most links in these docs) earns a 429 that is
 # our fault. A semaphore rather than a hard lock -- strict serialisation
@@ -3616,12 +3617,14 @@ _GEO_SENSITIVE_SUFFIXES = (
     "cbr.ru",
 )
 
-# A trailing `^` on an autolink is AsciiDoc's "open in a new window" shorthand
-# (`https://x^[label]`), not part of the URL -- excluded from the bare-URL
-# sweep and from a macro target.
-_LINK_MACRO_RE = re.compile(r'\b(?:link|image):{1,2}(https?://[^\[\]\s^]+)\^?\[')
-_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|)^]+(?:\([^\s\[\]<>"`|)^]*\))?[^\s\[\]<>"`|)^.,;:!?]')
-_URL_TRAILING_JUNK = '.,;:!?"\'»<>^'
+# AsciiDoc decorations that cling to a URL but aren't part of it: a trailing
+# `^` ("open in a new window": `https://x^[label]`) and a `++...++` /
+# `+...+` passthrough wrapper (`link:++https://x++[label]`, used to stop
+# attribute substitution). Both are stripped from the bare-URL sweep and
+# from a macro target.
+_LINK_MACRO_RE = re.compile(r'\b(?:link|image):{1,2}\+*(https?://[^\[\]\s^+]+)[+^]*\[')
+_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|)^]+(?:\([^\s\[\]<>"`|)^]*\))?[^\s\[\]<>"`|)^.,;:!?+]')
+_URL_TRAILING_JUNK = '.,;:!?"\'»<>^+'
 _URL_SKIP_HOSTS = {"example.com", "example.org", "example.net", "example.edu",
                    "localhost", "127.0.0.1", "0.0.0.0", "::1"}
 _URL_PLACEHOLDER_RE = re.compile(r'(?i)(?:\bTODO\b|\bFIXME\b|\bXXX\b|CHANGEME|'
@@ -3819,12 +3822,53 @@ def _probe_url(url, timeout=None):
         return _Probe(url, error=("other", f"{e.__class__.__name__}: {e}"))
 
 
-def _probe_many(urls):
+def _probe_many(urls, on_done=None):
+    """Probe every URL concurrently. `on_done(n_completed, total, last_probe)`
+    is called (under a lock, from worker threads) after each result, for
+    progress reporting."""
     if not urls:
         return []
     workers = max(1, min(LINK_MAX_WORKERS, len(urls)))
+    total = len(urls)
+    counter = {"n": 0}
+    lock = threading.Lock()
+
+    def one(u):
+        probe = _probe_url(u)
+        if on_done is not None:
+            with lock:
+                counter["n"] += 1
+                on_done(counter["n"], total, probe)
+        return probe
+
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(zip(urls, ex.map(_probe_url, urls)))
+        return list(zip(urls, ex.map(one, urls)))
+
+
+class _LinkProgress:
+    """Live 'checked k/N' line on a TTY; a periodic one-liner otherwise so a
+    CI log still shows the run is moving. Everything goes to stderr, clear of
+    the findings on stdout."""
+
+    def __init__(self, total):
+        self.total = total
+        self.tty = sys.stderr.isatty()
+        self.start = time.monotonic()
+        self._last_line = 0
+
+    def __call__(self, n, total, probe):
+        host = _host_of(probe.url)[:38]
+        if self.tty:
+            print(f"\r  checking links: {n}/{total}  {host:<38}",
+                  end="", file=sys.stderr, flush=True)
+        elif n == total or n - self._last_line >= 20:
+            self._last_line = n
+            print(f"  checking links: {n}/{total} "
+                  f"({time.monotonic() - self.start:.0f}s)", file=sys.stderr, flush=True)
+
+    def done(self):
+        if self.tty:
+            print(f"\r{' ' * 64}\r", end="", file=sys.stderr, flush=True)
 
 
 def _trivial_redirect(a, b):
@@ -3916,7 +3960,8 @@ def check_links_external(verbose=False) -> bool:
     per distinct URL, at most a few concurrent per host) and cached for a
     week in .docs_tool_link_cache.json (--link-cache to move it,
     --refresh-links to ignore it). --offline skips fetching and just lists
-    the links found. Honours --page.
+    the links found. Honours --page. Once there are more than a handful to
+    fetch, a "checking k/N" progress line is written to stderr.
 
     Hosts whose TLS certificate the local trust store can't validate (a
     missing CA bundle, a MITM proxy) are retried once without verification
@@ -3961,7 +4006,18 @@ def check_links_external(verbose=False) -> bool:
 
     cache = _load_link_cache()
     fresh_urls = [u for u in sorted(sites) if u not in cache]
-    fresh = _probe_many(fresh_urls)
+    # Progress reporting kicks in only once there's enough work to wonder
+    # whether it's stuck -- a handful of links resolve before you'd look.
+    if len(fresh_urls) >= _LINK_PROGRESS_THRESHOLD:
+        cached_n = len(sites) - len(fresh_urls)
+        note = f" ({cached_n} already cached)" if cached_n else ""
+        print(f"checking {len(fresh_urls)} external link(s){note}, "
+              f"timeout {LINK_TIMEOUT:.0f}s each ...", file=sys.stderr, flush=True)
+        progress = _LinkProgress(len(fresh_urls))
+        fresh = _probe_many(fresh_urls, on_done=progress)
+        progress.done()
+    else:
+        fresh = _probe_many(fresh_urls)
 
     if fresh and len(fresh) >= 5 and all(
             p.error is not None and p.error[0] != "dns-nxdomain" for _, p in fresh):

@@ -320,7 +320,9 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   This is the only check that touches the network — slow, non-deterministic, and
   connectivity-dependent — so it only runs when you name it (`check links`), on its
   own schedule (a nightly job, not a pre-commit hook). The legacy `--all-checks`
-  sweep skips it too.
+  sweep skips it too. A big doc set can carry many hundreds of external links (a
+  first, uncached run then takes minutes); a `checking k/N` line on stderr tracks
+  progress, and the cache makes every run after the first quick.
 
   **Two classes print by default**, because they're the two you fix in the source:
 

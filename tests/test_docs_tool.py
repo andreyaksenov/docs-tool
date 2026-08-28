@@ -2794,6 +2794,20 @@ class ExternalLinkExtractionTests(unittest.TestCase):
         self.assertEqual(dt._extract_urls_from_line("link:https://docker.com^[Docker]"),
                          ["https://docker.com"])
 
+    def test_passthrough_plus_wrapper_stripped(self):
+        # `link:++URL++[text]` -- the ++ stops attribute substitution, not part of the URL
+        self.assertEqual(
+            dt._extract_urls_from_line("link:++https://tez.apache.org/releases/0.10.3/rel.txt++[0.10.3^]"),
+            ["https://tez.apache.org/releases/0.10.3/rel.txt"])
+        self.assertEqual(
+            dt._extract_urls_from_line("bare https://trino.io/docs/release-481.html++[x]"),
+            ["https://trino.io/docs/release-481.html"])
+
+    def test_internal_plus_in_url_is_kept(self):
+        self.assertEqual(
+            dt._extract_urls_from_line("https://api.example.com/search?q=a+b next"),
+            ["https://api.example.com/search?q=a+b"])
+
     def test_attribute_value_url_is_caught(self):
         self.assertEqual(dt._extract_urls_from_line(":page-source: https://repo.example/tree/main"),
                          ["https://repo.example/tree/main"])
@@ -2997,6 +3011,13 @@ class ProbeOrchestrationTests(unittest.TestCase):
         list(dt._probe_many([f"https://h{i}.example/x" for i in range(5)]))
         self.assertGreater(peak[0], 1)   # one lock per host, so no global bottleneck
 
+    def test_on_done_callback_fires_once_per_url(self):
+        dt._http_attempt = lambda *a, **k: dt._Probe(a[0], status=200)
+        seen = []
+        dt._probe_many([f"https://h{i}.example/x" for i in range(4)],
+                       on_done=lambda n, total, probe: seen.append((n, total)))
+        self.assertEqual(sorted(seen), [(1, 4), (2, 4), (3, 4), (4, 4)])
+
 
 class ExternalLinkCheckTests(FixtureTestCase):
     def _page(self, body):
@@ -3057,6 +3078,21 @@ class ExternalLinkCheckTests(FixtureTestCase):
         ok, out = self.run_check(dt.check_links_external)
         self.assertTrue(ok)
         self.assertEqual(out.strip(), "OK: all 1 external link(s) resolve.")
+
+    def test_progress_line_appears_past_the_threshold(self):
+        body = "".join(f"https://h{i}.example/p\n" for i in range(dt._LINK_PROGRESS_THRESHOLD + 2))
+        self._page(body)
+        dt._probe_url = _probe_table({"*": 200})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertIn(f"checking {dt._LINK_PROGRESS_THRESHOLD + 2} external link(s)", out)
+        self.assertRegex(out, r"checking links: \d+/")
+
+    def test_no_progress_line_for_a_few_links(self):
+        self._page("https://a.example/1\nhttps://b.example/2\nhttps://c.example/3\n")
+        dt._probe_url = _probe_table({"*": 200})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertNotIn("checking", out)
 
     def test_urls_in_code_blocks_are_skipped(self):
         self._page("----\nsee https://ignored.example/x\n----\n")
