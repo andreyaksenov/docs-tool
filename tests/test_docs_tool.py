@@ -13,11 +13,13 @@ independent of whatever docs currently exist here.
 """
 import contextlib
 import io
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -38,11 +40,20 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_external = dt.EXTERNAL_COMPONENTS
         self._orig_page_filter = dt._PAGE_FILTER
         self._orig_glossary = dt.GLOSSARY
+        self._orig_links = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
+                            dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH, dt._probe_url,
+                            dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED)
         dt.EN_MODULES_ROOT = self.root / "en" / "modules"
         dt.RU_MODULES_ROOT = self.root / "ru" / "modules"
         dt.EXTERNAL_COMPONENTS = {}
         dt._PAGE_FILTER = None
         dt.GLOSSARY = {}
+        dt.LINK_OFFLINE = False
+        dt.LINK_ALLOW_DOMAINS = set()
+        dt.LINK_CACHE_REFRESH = False
+        dt.LINK_INSECURE = False
+        dt.LINK_SHOW_UNVERIFIED = False
+        dt.LINK_CACHE_PATH = str(self.root / ".link_cache.json")
         dt._OWN_COMPONENT_NAME_CACHE.clear()
 
     def tearDown(self):
@@ -51,6 +62,9 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = self._orig_external
         dt._PAGE_FILTER = self._orig_page_filter
         dt.GLOSSARY = self._orig_glossary
+        (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
+         dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH, dt._probe_url,
+         dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED) = self._orig_links
         dt._OWN_COMPONENT_NAME_CACHE.clear()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
@@ -2467,7 +2481,7 @@ class FamilySelectionTests(unittest.TestCase):
                 for key in targets.values():
                     self.assertIn(key, dt.CHECKS, f"{fam} --{rule} -> {key}")
 
-    def test_all_22_checks_are_reachable_through_some_family(self):
+    def test_every_check_is_reachable_through_some_family(self):
         reachable = {k for subs in dt.FAMILIES.values()
                      for t in subs.values() for k in t.values()}
         self.assertEqual(reachable, set(dt.CHECKS))
@@ -2511,11 +2525,17 @@ class FamilySelectionTests(unittest.TestCase):
             ["images-orphaned"],
         )
 
-    def test_family_all_spans_every_family(self):
+    def test_family_all_spans_every_non_network_family(self):
         self.assertEqual(
             set(dt._resolve_family_selection("all", None, None)),
-            set(dt.CHECKS),
+            set(dt.CHECKS) - dt._NETWORK_ONLY_CHECKS,
         )
+
+    def test_all_excludes_network_families_but_naming_one_still_works(self):
+        self.assertNotIn("links-external", dt._resolve_family_selection("all", None, None))
+        self.assertEqual(dt._resolve_family_selection("links", None, None), ["links-external"])
+        self.assertEqual(
+            dt._resolve_family_selection("links", {"external"}, None), ["links-external"])
 
     def test_no_matching_target_yields_empty(self):
         self.assertEqual(dt._resolve_family_selection("style", None, "images"), [])
@@ -2696,7 +2716,7 @@ class RuleIdRegistryTests(unittest.TestCase):
 
     def test_ids_are_family_prefixed(self):
         prefix = {"chars": "CH", "markup": "MK", "refs": "RF",
-                  "style": "ST", "terms": "TM", "l10n": "LN"}
+                  "style": "ST", "terms": "TM", "l10n": "LN", "links": "LK"}
         for fam, subs in dt.FAMILIES.items():
             for targets in subs.values():
                 for key in targets.values():
@@ -2714,6 +2734,454 @@ class RuleIdRegistryTests(unittest.TestCase):
         self.assertEqual(dt._resolve_check_name("LN02"), "pages-structure-parity")
         self.assertEqual(dt._resolve_check_name("examples-orphaned"), "examples-orphaned")
         self.assertIsNone(dt._resolve_check_name("nonsense"))
+
+
+# ==========================================================================
+# check links --external  (LK01)
+# ==========================================================================
+
+@contextlib.contextmanager
+def mock_sleep():
+    real = dt.time.sleep
+    dt.time.sleep = lambda *a, **k: None
+    try:
+        yield
+    finally:
+        dt.time.sleep = real
+
+
+def _probe_table(table, calls=None):
+    """A stand-in for dt._probe_url. `table` maps url -> one of: an int
+    status, a dict of _Probe kwargs, or ("err", kind, text). "*" is the
+    fallback. If `calls` is a list, every probed url is appended to it."""
+    def fake(url, timeout=None):
+        if calls is not None:
+            calls.append(url)
+        spec = table.get(url, table.get("*", 200))
+        if isinstance(spec, dict):
+            return dt._Probe(url, **spec)
+        if isinstance(spec, tuple):
+            return dt._Probe(url, error=(spec[1], spec[2]))
+        return dt._Probe(url, status=spec, final_url=url)
+    return fake
+
+
+class ExternalLinkExtractionTests(unittest.TestCase):
+    def test_link_and_image_macros(self):
+        self.assertEqual(
+            dt._extract_urls_from_line("See link:https://a.example/x[here] and image:https://b.example/i.png[]"),
+            ["https://a.example/x", "https://b.example/i.png"])
+
+    def test_bare_url(self):
+        self.assertEqual(dt._extract_urls_from_line("visit https://ex.example/page for more"),
+                         ["https://ex.example/page"])
+
+    def test_macro_url_not_double_counted(self):
+        self.assertEqual(dt._extract_urls_from_line("link:https://x.example/p[label]"),
+                         ["https://x.example/p"])
+
+    def test_trailing_punctuation_stripped(self):
+        self.assertEqual(dt._trim_url("https://x.example/p."), "https://x.example/p")
+        self.assertEqual(dt._trim_url("https://x.example/p),"), "https://x.example/p")
+
+    def test_balanced_parens_kept(self):
+        self.assertEqual(dt._trim_url("https://en.wikipedia.org/wiki/Foo_(bar)"),
+                         "https://en.wikipedia.org/wiki/Foo_(bar)")
+
+    def test_new_window_caret_stripped(self):
+        self.assertEqual(dt._extract_urls_from_line("see https://docker.com^[Docker] now"),
+                         ["https://docker.com"])
+        self.assertEqual(dt._extract_urls_from_line("link:https://docker.com^[Docker]"),
+                         ["https://docker.com"])
+
+    def test_attribute_value_url_is_caught(self):
+        self.assertEqual(dt._extract_urls_from_line(":page-source: https://repo.example/tree/main"),
+                         ["https://repo.example/tree/main"])
+
+    def test_should_probe_filters(self):
+        self.assertFalse(dt._should_probe("https://example.com/x"))
+        self.assertFalse(dt._should_probe("http://localhost:8080/"))
+        self.assertFalse(dt._should_probe("https://{host}/page"))
+        self.assertFalse(dt._should_probe("https://host.example/TODO"))
+        self.assertFalse(dt._should_probe("https://github.com/org/repo.git"))
+        self.assertTrue(dt._should_probe("https://docs.example.org/guide"))
+
+    def test_allow_domain_suffix_match(self):
+        dt.LINK_ALLOW_DOMAINS = {"intranet.example"}
+        try:
+            self.assertFalse(dt._should_probe("https://wiki.intranet.example/x"))
+            self.assertTrue(dt._should_probe("https://intranet.example.org/x"))
+        finally:
+            dt.LINK_ALLOW_DOMAINS = set()
+
+    def test_geo_sensitive_suffix(self):
+        self.assertTrue(dt._is_geo_sensitive("publication.pravo.gov.ru"))
+        self.assertFalse(dt._is_geo_sensitive("github.com"))
+
+
+class ExternalLinkClassifyTests(unittest.TestCase):
+    def _c(self, **kw):
+        return dt._classify_probe(dt._Probe("https://h.example/p", **kw))
+
+    def test_2xx_is_ok(self):
+        self.assertEqual(self._c(status=200)[0], "OK")
+
+    def test_404_is_a_finding(self):
+        label, _, finding = self._c(status=404)
+        self.assertEqual(label, "BROKEN")
+        self.assertTrue(finding)
+
+    def test_permanent_redirect_in_chain(self):
+        label, detail, finding = dt._classify_probe(
+            dt._Probe("https://h.example/p", status=200,
+                      redirects=((301, "https://h.example/new"),),
+                      final_url="https://h.example/new"))
+        self.assertEqual(label, "REDIRECT")
+        self.assertFalse(finding)
+        self.assertIn("https://h.example/new", detail)
+
+    def test_trailing_slash_redirect_is_not_flagged(self):
+        label, _, _ = dt._classify_probe(dt._Probe(
+            "https://h.example/docs", status=200,
+            redirects=((301, "https://h.example/docs/"),),
+            final_url="https://h.example/docs/"))
+        self.assertEqual(label, "OK")
+
+    def test_https_upgrade_redirect_is_not_flagged(self):
+        label, _, _ = dt._classify_probe(dt._Probe(
+            "http://h.example/p", status=301, final_url="https://h.example/p"))
+        self.assertEqual(label, "OK")
+
+    def test_temporary_redirect_is_ok(self):
+        self.assertEqual(dt._classify_probe(
+            dt._Probe("https://h.example/p", status=200,
+                      redirects=((302, "https://h.example/x"),)))[0], "OK")
+
+    def test_403_is_blocked_not_a_finding(self):
+        label, _, finding = self._c(status=403)
+        self.assertEqual(label, "BLOCKED")
+        self.assertFalse(finding)
+
+    def test_5xx_is_server_err(self):
+        self.assertEqual(self._c(status=503)[0], "SERVER-ERR")
+
+    def test_timeout_is_unreachable_not_a_finding(self):
+        label, _, finding = self._c(error=("timeout", "no response in 10s"))
+        self.assertEqual(label, "UNREACHABLE")
+        self.assertFalse(finding)
+
+    def test_nxdomain_is_a_finding(self):
+        label, _, finding = self._c(error=("dns-nxdomain", "host does not resolve"))
+        self.assertEqual(label, "BROKEN")
+        self.assertTrue(finding)
+
+    def test_geo_sensitive_failure_is_vpn_not_a_finding(self):
+        label, _, finding = dt._classify_probe(
+            dt._Probe("https://x.gov.ru/doc", error=("timeout", "no response")))
+        self.assertEqual(label, "VPN?")
+        self.assertFalse(finding)
+
+    def test_geo_sensitive_nxdomain_still_downgraded(self):
+        label, _, finding = dt._classify_probe(
+            dt._Probe("https://x.gov.ru/doc", error=("dns-nxdomain", "no")))
+        self.assertEqual(label, "VPN?")
+        self.assertFalse(finding)
+
+
+class ProbeOrchestrationTests(unittest.TestCase):
+    """_probe_url's retry/back-off logic, with the single HTTP call
+    (_http_attempt) faked so nothing touches the network."""
+
+    def setUp(self):
+        self._orig = (dt._http_attempt, dt._LINK_PER_HOST_CONCURRENCY)
+        dt._LINK_HOST_SEMAPHORES.clear()
+        self.calls = []
+
+    def tearDown(self):
+        dt._http_attempt, dt._LINK_PER_HOST_CONCURRENCY = self._orig
+        dt._LINK_HOST_SEMAPHORES.clear()
+
+    def _sequence(self, *probes):
+        it = iter(probes)
+
+        def fake(url, method, timeout, context=None):
+            self.calls.append((method, context is not None))
+            try:
+                return next(it)
+            except StopIteration:
+                return probes[-1]
+        dt._http_attempt = fake
+
+    def test_429_is_retried_once(self):
+        self._sequence(
+            dt._Probe("https://h/x", status=429),   # HEAD
+            dt._Probe("https://h/x", status=200),   # back-off GET retry
+        )
+        with mock_sleep():
+            p = dt._probe_url("https://h/x")
+        self.assertEqual(p.status, 200)
+
+    def test_429_that_stays_429_is_reported(self):
+        self._sequence(dt._Probe("https://h/x", status=429))
+        with mock_sleep():
+            p = dt._probe_url("https://h/x")
+        self.assertEqual(p.status, 429)
+
+    def test_head_403_falls_back_to_get(self):
+        self._sequence(
+            dt._Probe("https://h/x", status=403),
+            dt._Probe("https://h/x", status=200),
+        )
+        with mock_sleep():
+            p = dt._probe_url("https://h/x")
+        self.assertEqual(p.status, 200)
+        self.assertEqual(self.calls[0][0], "HEAD")
+        self.assertEqual(self.calls[1][0], "GET")
+
+    def test_transient_error_retried_once(self):
+        self._sequence(
+            dt._Probe("https://h/x", error=("timeout", "t")),
+            dt._Probe("https://h/x", error=("timeout", "t")),
+            dt._Probe("https://h/x", status=200),
+        )
+        with mock_sleep():
+            p = dt._probe_url("https://h/x")
+        self.assertEqual(p.status, 200)
+
+    def test_insecure_mode_uses_unverified_context_upfront(self):
+        self._sequence(dt._Probe("https://h/x", status=200))
+        dt.LINK_INSECURE = True
+        try:
+            with mock_sleep():
+                dt._probe_url("https://h/x")
+        finally:
+            dt.LINK_INSECURE = False
+        self.assertTrue(self.calls[0][1])   # context passed on the first call
+
+    def test_per_host_concurrency_is_capped(self):
+        dt._LINK_PER_HOST_CONCURRENCY = 2
+        dt._LINK_HOST_SEMAPHORES.clear()
+        active = []
+        peak = [0]
+        lock = __import__("threading").Lock()
+
+        def fake(url, method, timeout, context=None):
+            with lock:
+                active.append(1)
+                peak[0] = max(peak[0], len(active))
+            time.sleep(0.02)
+            with lock:
+                active.pop()
+            return dt._Probe(url, status=200)
+        dt._http_attempt = fake
+        same = [f"https://one.example/{i}" for i in range(6)]
+        list(dt._probe_many(same))
+        self.assertLessEqual(peak[0], 2)
+
+    def test_different_hosts_run_in_parallel(self):
+        dt._LINK_PER_HOST_CONCURRENCY = 1
+        dt._LINK_HOST_SEMAPHORES.clear()
+        active = []
+        peak = [0]
+        lock = __import__("threading").Lock()
+
+        def fake(url, method, timeout, context=None):
+            with lock:
+                active.append(1)
+                peak[0] = max(peak[0], len(active))
+            time.sleep(0.02)
+            with lock:
+                active.pop()
+            return dt._Probe(url, status=200)
+        dt._http_attempt = fake
+        list(dt._probe_many([f"https://h{i}.example/x" for i in range(5)]))
+        self.assertGreater(peak[0], 1)   # one lock per host, so no global bottleneck
+
+
+class ExternalLinkCheckTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_all_links_ok(self):
+        self._page("a link:https://ok.example/1[x] and https://ok.example/2\n")
+        dt._probe_url = _probe_table({"*": 200})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertIn("all 2 external link(s) resolve", out)
+
+    def test_404_fails_the_run(self):
+        self._page("dead: https://dead.example/gone\n")
+        dt._probe_url = _probe_table({"https://dead.example/gone": 404})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertFalse(ok)
+        self.assertIn("BROKEN", out)
+        self.assertIn("https://dead.example/gone", out)
+
+    def test_redirect_reported_but_passes(self):
+        self._page("moved: https://old.example/p\n")
+        dt._probe_url = _probe_table({"https://old.example/p": dict(
+            status=200, redirects=((301, "https://new.example/p"),),
+            final_url="https://new.example/p")})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertIn("REDIRECT", out)
+        self.assertIn("https://new.example/p", out)
+
+    def test_unverifiable_is_collapsed_by_default(self):
+        self._page("slow: https://slow.example/p\nblock: https://wall.example/q\n")
+        dt._probe_url = _probe_table({
+            "https://slow.example/p": ("err", "timeout", "no response in 10s"),
+            "https://wall.example/q": 403})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertNotIn("https://slow.example/p", out)   # not listed line-by-line
+        self.assertNotIn("UNREACHABLE", out)
+        self.assertIn("2 link(s) could not be verified", out)
+        self.assertIn("1 unreachable", out)
+        self.assertIn("1 blocked", out)
+        self.assertIn("--show-unverified", out)
+
+    def test_show_unverified_lists_them(self):
+        self._page("slow: https://slow.example/p\n")
+        dt._probe_url = _probe_table({"https://slow.example/p": ("err", "timeout", "gone")})
+        dt.LINK_SHOW_UNVERIFIED = True
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertIn("UNREACHABLE", out)
+        self.assertIn("https://slow.example/p", out)
+
+    def test_clean_run_is_one_line(self):
+        self._page("https://ok.example/1\n")
+        dt._probe_url = _probe_table({"*": 200})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok)
+        self.assertEqual(out.strip(), "OK: all 1 external link(s) resolve.")
+
+    def test_urls_in_code_blocks_are_skipped(self):
+        self._page("----\nsee https://ignored.example/x\n----\n")
+        calls = []
+        dt._probe_url = _probe_table({"*": 200}, calls)
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertIn("no external links found", out)
+        self.assertEqual(calls, [])
+
+    def test_same_url_probed_once_reported_per_site(self):
+        self._page("https://dup.example/p\n")
+        self.write("en/modules/ROOT/pages/q.adoc", "also https://dup.example/p\n")
+        calls = []
+        dt._probe_url = _probe_table({"https://dup.example/p": 404}, calls)
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertEqual(calls, ["https://dup.example/p"])
+        self.assertIn("p.adoc", out)
+        self.assertIn("q.adoc", out)
+
+    def test_page_filter_is_honoured(self):
+        self._page("https://a.example/1\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "https://b.example/2\n")
+        dt._PAGE_FILTER = {"names": {("other",)}, "dirs": set()}
+        calls = []
+        dt._probe_url = _probe_table({"*": 200}, calls)
+        self.run_check(dt.check_links_external)
+        self.assertEqual(calls, ["https://b.example/2"])
+
+    def test_offline_lists_without_probing(self):
+        self._page("https://x.example/1\nlink:https://y.example/2[k]\n")
+        dt.LINK_OFFLINE = True
+        calls = []
+        dt._probe_url = _probe_table({"*": 200}, calls)
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok)
+        self.assertEqual(calls, [])
+        self.assertIn("https://x.example/1", out)
+        self.assertIn("https://y.example/2", out)
+
+    def test_total_network_failure_aborts(self):
+        body = "".join(f"https://h{i}.example/p\n" for i in range(6))
+        self._page(body)
+        dt._probe_url = _probe_table({"*": ("err", "refused", "connection refused")})
+        with self.assertRaises(SystemExit):
+            self.run_check(dt.check_links_external)
+
+
+class ExternalLinkCacheTests(FixtureTestCase):
+    def test_cached_result_is_not_re_probed(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", "https://c.example/p\n")
+
+        dt._probe_url = _probe_table({"https://c.example/p": 200})
+        ok, _ = self.run_check(dt.check_links_external)
+        self.assertTrue(ok)
+        self.assertTrue(Path(dt.LINK_CACHE_PATH).is_file())
+
+        calls = []
+        dt._probe_url = _probe_table({"*": 500}, calls)
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertEqual(calls, [])
+
+    def test_refresh_links_ignores_cache(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", "https://c.example/p\n")
+        dt._probe_url = _probe_table({"https://c.example/p": 200})
+        self.run_check(dt.check_links_external)
+
+        dt.LINK_CACHE_REFRESH = True
+        calls = []
+        dt._probe_url = _probe_table({"https://c.example/p": 404}, calls)
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertFalse(ok)
+        self.assertEqual(calls, ["https://c.example/p"])
+
+    def test_expired_entry_is_re_probed(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", "https://c.example/p\n")
+        stale = {"https://c.example/p": {"label": "OK", "detail": "200",
+                                        "finding": False,
+                                        "checked_at": 0}}
+        Path(dt.LINK_CACHE_PATH).write_text(json.dumps(stale), encoding="utf-8")
+        calls = []
+        dt._probe_url = _probe_table({"https://c.example/p": 200}, calls)
+        self.run_check(dt.check_links_external)
+        self.assertEqual(calls, ["https://c.example/p"])
+
+
+class ExternalLinkWiringTests(unittest.TestCase):
+    def test_links_family_is_registered(self):
+        self.assertIn("links", dt.FAMILIES)
+        self.assertEqual(dt.RULE_IDS["links-external"], "LK01")
+        self.assertIn("links-external", dt.BETA_CHECKS)
+        self.assertEqual(dt._check_command("links-external"), "check links")
+
+    def test_links_excluded_from_legacy_all_checks(self):
+        parser = dt.build_parser()
+        args = parser.parse_args(["--all-checks"])
+        selected = [k for k in dt.CHECKS if k not in dt._NETWORK_ONLY_CHECKS]
+        self.assertNotIn("links-external", selected)
+
+    def test_link_args_parse_and_configure(self):
+        p = dt._build_v2_parser()
+        args = p.parse_args(["check", "links", "--offline", "--timeout", "5",
+                             "--allow-domain", "x.example", "--refresh-links",
+                             "--link-cache", "/tmp/lc.json"])
+        _orig = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
+                 dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH)
+        try:
+            dt._configure_links_from_args(args)
+            self.assertEqual(dt.LINK_TIMEOUT, 5.0)
+            self.assertTrue(dt.LINK_OFFLINE)
+            self.assertEqual(dt.LINK_ALLOW_DOMAINS, {"x.example"})
+            self.assertEqual(dt.LINK_CACHE_PATH, "/tmp/lc.json")
+            self.assertTrue(dt.LINK_CACHE_REFRESH)
+        finally:
+            (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
+             dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH) = _orig
+
+    def test_help_lists_lk01(self):
+        help_text = dt._build_v2_parser().format_help()
+        self.assertIn("LK01", help_text)
+        self.assertIn("check links", help_text)
 
 
 if __name__ == "__main__":

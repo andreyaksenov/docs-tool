@@ -22,6 +22,8 @@ the `chmod` and run `python docs_tool.py …`.
 ./docs_tool.py check <family> [<family> ...] [--<rule> ...]
                      [--target NAME] [--verbose] [--page NAME ...]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
+                     [--offline] [--timeout N] [--show-unverified]        # check links
+                     [--allow-domain HOST ...] [--insecure] [--refresh-links]
 
 ./docs_tool.py show <rule|rule-id>            # one rule's rationale + examples
 ./docs_tool.py show all                       # every rule, with examples
@@ -35,7 +37,7 @@ passed, `1` if any rule found something, `2` on a usage error. `list` labels eac
 family `suggest: block` / `suggest: warn` — that's advice for your pre-commit hook,
 not something the tool enforces; the exit code is the same for every family.
 
-Rules are grouped into six **families**:
+Rules are grouped into seven **families**:
 
 | Family   | Covers                                                                                   |
 |----------|------------------------------------------------------------------------------------------|
@@ -45,12 +47,14 @@ Rules are grouped into six **families**:
 | `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods                                    |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
 | `l10n`   | line-count / structure / nav parity, untranslated lines, `examples/` parity              |
+| `links`  | external `http(s)` links — `404`, permanent redirect, dead host (network; opt-in)        |
 
 ```bash
 ./docs_tool.py check style                   # the whole style family
 ./docs_tool.py check style --no-yo           # narrow to one rule
 ./docs_tool.py check chars markup            # several families
-./docs_tool.py check all
+./docs_tool.py check all                     # every family except links (network)
+./docs_tool.py check links                   # external links, on their own
 ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
 ```
 
@@ -127,6 +131,10 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `LN03` | `check l10n --untranslated` | RU line still English |
 | `LN04` | `check l10n --examples` | EN/RU examples differ |
 | `LN05` | `check l10n --nav` | EN/RU nav differs |
+| `LK01` | `check links` | dead / redirected external links |
+
+`check all` runs every family **except `links`** — that one reaches the network,
+so it only runs when you name it.
 
 ### `chars` — Unicode / encoding
 
@@ -299,10 +307,53 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ./docs_tool.py check l10n --nav --verbose
   ```
 
+### `links` — external URL health
+
+- **`LK01` · `check links`** · beta — fetches every `http(s)` link in `pages/` and
+  `partials/` (both languages). De-duplicates site-wide (one request per distinct
+  URL, a few concurrent per host) and caches results for a week in
+  `.docs_tool_link_cache.json` (git-ignore it). Honours `--page`.
+
+  This is the only check that touches the network — slow, non-deterministic, and
+  connectivity-dependent — so **`check all` never includes it**; run it explicitly,
+  on its own schedule (a nightly job, not a pre-commit hook).
+
+  **Two classes print by default**, because they're the two you fix in the source:
+
+  | Label | Means | Fails the run? |
+  |-------|-------|:--:|
+  | `BROKEN` | `404` / `410`, or a host that doesn't resolve | **yes** |
+  | `REDIRECT` | permanent `301`/`308` to a genuinely different URL | no |
+
+  Everything else — `403` anti-bot walls, `429`s, `5xx`, timeouts, DNS failures,
+  region-locked hosts — is collapsed into a **one-line count** (a `403` from a
+  datacenter IP or a timeout from a CI box says more about the route than the
+  page). `--show-unverified` (or `--verbose`) lists those too. A trailing-slash or
+  `http`→`https` redirect is treated as clean.
+
+  A separate one-line note flags any host whose TLS certificate the local trust
+  store couldn't validate (a missing CA bundle, not a bad site) — `--insecure`
+  makes unverified TLS the default and drops the note.
+
+  Skipped: comment lines and `----`/`....` blocks, RFC 2606 example hosts,
+  `localhost`, `*.git` clone URLs, unresolved `{attributes}`, and any host passed
+  to `--allow-domain`.
+
+  ```bash
+  ./docs_tool.py check links
+  ./docs_tool.py check links --offline                       # just list the links, don't fetch
+  ./docs_tool.py check links --show-unverified                # list the couldn't-check links too
+  ./docs_tool.py check links --page install.adoc
+  ./docs_tool.py check links --timeout 5                     # per-request, default 10s
+  ./docs_tool.py check links --allow-domain intranet.example # skip a host you know is fine
+  ./docs_tool.py check links --insecure                      # skip TLS verification + its note
+  ./docs_tool.py check links --refresh-links                 # ignore the 7-day cache
+  ```
+
 ## Scoping with `--page`
 
 By default, every per-file rule scans the whole site. `--page NAME` (repeatable)
-limits `chars`, `markup`, `style`, `terms`, and `l10n` to matching files:
+limits `chars`, `markup`, `style`, `terms`, `l10n`, and `links` to matching files:
 
 ```bash
 ./docs_tool.py check l10n --untranslated --page resource_groups.adoc   # one file (must end .adoc)

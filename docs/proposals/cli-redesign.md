@@ -6,7 +6,7 @@
 
 New design proposals for this tool go in `docs/proposals/`.
 
-**On this branch:** the `check`/`show`/`list`/`sync` surface, six families, `--target`,
+**On this branch:** the `check`/`show`/`list`/`sync` surface, seven families, `--target`,
 multi-family `check chars markup`, and stable rule IDs (`CH01`…, shown by `list`; `show <id>`
 prints one rule's full rationale).
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
@@ -34,7 +34,7 @@ The useful axis is **where a rule's authority comes from**. That also predicts h
 deterministic a check is, whether it is safe to hard-block, its language scope, and whether
 `--page` can narrow it.
 
-## 2. The model — a six-level pyramid
+## 2. The model — a seven-level pyramid
 
 | Lvl | Family | Tier | Authority | Checks it holds today | Default |
 |----:|--------|------|-----------|-----------------------|---------|
@@ -44,6 +44,7 @@ deterministic a check is, whether it is safe to hard-block, its language scope, 
 | L3 | `style`  | house      | Arenadata style guide | no-yo, file-path-italics, table-cell-periods | warn |
 | L4 | `terms`  | house      | controlled vocabulary (glossary) | pages-terminology *(+ future monolingual term rules)* | warn |
 | L5 | `l10n`   | relational | "RU must mirror EN" | line-parity, structure-parity, translation, examples-parity, nav-structure-parity | warn |
+| L6 | `links`  | external   | the open web | links-external (`LK01`) | warn |
 
 Each level assumes the ones below it hold — there is no point flagging a terminology drift
 in a file whose markup does not parse.
@@ -51,6 +52,11 @@ in a file whose markup does not parse.
 - **universal** (chars, markup, refs) — deterministic, language-agnostic → block by default
 - **house** (style, terms) — per-vendor rules → warn by default
 - **relational** (l10n) — needs both trees aligned → warn by default
+- **external** (links) — reaches the network: slow, non-deterministic, connectivity-dependent →
+  warn, and **excluded from `check all` / `--all-checks`**. Added after the initial six
+  families; runs only when named explicitly (`check links`), on its own schedule (a nightly
+  job, never a pre-commit hook). Only a hard `404`/`410` or a non-resolving host fails the
+  run; redirects, `403`s, timeouts, and geo/VPN-blocked hosts are reported as a review list.
 
 ### Why `terms` is its own family
 
@@ -85,7 +91,7 @@ Selection rules:
 | Invocation | Runs |
 |---|---|
 | `check <family> [<family> ...]` | every rule in each family, all scan targets |
-| `check all` | every family |
+| `check all` | every family except `links` (network) |
 | `check <family> --<rule>` | that rule, target `pages` (or its sole target) — one family only |
 | `check <family> --<rule> --target X` | that rule, target `X` |
 | `check <family> --target X` | every rule in the family that has a target `X` |
@@ -104,12 +110,13 @@ docs_tool check refs --orphaned --target all   # every orphan target, no broken-
 docs_tool check style              # the Arenadata house-style set
 docs_tool check terms              # glossary check (needs a *-glossary.psv)
 docs_tool check l10n               # all EN<->RU drift checks
-docs_tool check all                # everything
+docs_tool check all                # every family except links (network)
+docs_tool check links              # external URL health — opt-in, run on its own
 ```
 
 ### The `--page` paragraph shrinks to one sentence
 
-> `--page` narrows `chars`, `markup`, `style`, `terms`, and `l10n`; `refs` always scans site-wide.
+> `--page` narrows `chars`, `markup`, `style`, `terms`, `l10n`, and `links`; `refs` always scans site-wide.
 
 ### The pre-commit hook, before → after
 
@@ -160,6 +167,10 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 | 20 | `--check-pages-unbalanced-delimiters`   | `docs_tool check markup --delimiters` |
 | 21 | `--check-partials-orphaned`             | `docs_tool check refs --orphaned --target partials` |
 | 22 | `--check-tags-orphaned`                 | `docs_tool check refs --orphaned --target tags` |
+
+`links-external` (`LK01`) was added later and has no legacy predecessor in the original 22.
+The generated `--check-links-external` flag exists for symmetry, but the surface is
+`docs_tool check links`. It is the one check `--all-checks` / `check all` skips.
 
 ## 5. `sync`
 

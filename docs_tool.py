@@ -14,9 +14,11 @@ Commands:
     ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
 
-Rules are grouped into six families, ordered by where a rule's authority
+Rules are grouped into seven families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
-resolution), style (house style), terms (glossary), l10n (EN<->RU parity).
+resolution), style (house style), terms (glossary), l10n (EN<->RU parity),
+links (external URL health). `links` reaches the network, so it runs only
+when named -- `check all` never includes it.
 
 %RULES%
 "docs_tool.py show <id>" explains one rule and gives runnable examples for it;
@@ -27,6 +29,7 @@ Examples:
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
     ./docs_tool.py check chars markup --page UNCOMMITTED
+    ./docs_tool.py check links --offline
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
@@ -37,12 +40,21 @@ legitimate content -- treat their output as a review list, not a hard gate.
 """
 import argparse
 import difflib
+import json
 import os
 import re
+import socket
+import ssl
 import subprocess
 import sys
+import threading
+import time
 import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
@@ -3548,6 +3560,489 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
 
 
 # --------------------------------------------------------------------------
+# LINKS: external URL health
+# --------------------------------------------------------------------------
+#
+# The one check in this file that touches the network: every http(s) link in
+# pages/ and partials/ is fetched and its status classified (404, redirect,
+# unreachable host, ...). Because it is slow, non-deterministic, and needs
+# connectivity, it is deliberately kept OUT of `check all` / `--all-checks`
+# (see _NETWORK_ONLY_CHECKS) -- it only ever runs on an explicit
+# `check links`. Findings are advisory (marked [beta]): a link that 403s a
+# datacenter IP or times out from a CI box is far more often the network in
+# between than a genuinely dead page, so only a hard 404/410 (or an NXDOMAIN
+# host) is counted as a failure; everything else is reported for a human to
+# eyeball, and a footer spells out why a "could not verify" list is expected.
+
+# Knobs, set from argv by _configure_links_from_args (same module-global
+# pattern as EXTERNAL_COMPONENTS / GLOSSARY). Defaults chosen so a bare
+# `check links` just works.
+LINK_TIMEOUT = 10.0
+LINK_OFFLINE = False
+LINK_ALLOW_DOMAINS = set()
+LINK_CACHE_PATH = ".docs_tool_link_cache.json"
+LINK_CACHE_REFRESH = False
+LINK_INSECURE = False           # skip TLS verification without the per-run note
+LINK_SHOW_UNVERIFIED = False    # list the couldn't-check links, not just count them
+LINK_MAX_WORKERS = 8
+_LINK_CACHE_TTL = 7 * 24 * 3600          # results older than a week are re-probed
+# At most a few requests in flight per host: fanning all 8 workers at one
+# host (github.com carries most links in these docs) earns a 429 that is
+# our fault. A semaphore rather than a hard lock -- strict serialisation
+# turned a 13s run into 90s once one host owned a third of the links.
+_LINK_HOST_SEMAPHORES = {}
+_LINK_HOST_SEM_GUARD = threading.Lock()
+_LINK_PER_HOST_CONCURRENCY = 3
+
+# A real browser UA: a bare "Python-urllib/3.x" is 403'd or tar-pitted by a
+# large fraction of sites (Cloudflare, AWS WAF, ...), which would otherwise
+# show up as a wall of false BLOCKED findings.
+_LINK_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+# Host suffixes known to refuse traffic from outside a region or from
+# datacenter IP ranges. A failure to reach one of these is relabelled
+# "VPN?" and never counted as a finding -- from most machines it says more
+# about the route than the page. Matched as a dotted-suffix on the
+# hostname ("pravo.gov.ru" matches "publication.pravo.gov.ru"). Keep this
+# list short and evidence-based: add a domain only after it has actually
+# produced a false BROKEN/UNREACHABLE that a VPN then fixed.
+_GEO_SENSITIVE_SUFFIXES = (
+    "gov.ru",
+    "gosuslugi.ru",
+    "nalog.ru",
+    "cbr.ru",
+)
+
+# A trailing `^` on an autolink is AsciiDoc's "open in a new window" shorthand
+# (`https://x^[label]`), not part of the URL -- excluded from the bare-URL
+# sweep and from a macro target.
+_LINK_MACRO_RE = re.compile(r'\b(?:link|image):{1,2}(https?://[^\[\]\s^]+)\^?\[')
+_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|)^]+(?:\([^\s\[\]<>"`|)^]*\))?[^\s\[\]<>"`|)^.,;:!?]')
+_URL_TRAILING_JUNK = '.,;:!?"\'»<>^'
+_URL_SKIP_HOSTS = {"example.com", "example.org", "example.net", "example.edu",
+                   "localhost", "127.0.0.1", "0.0.0.0", "::1"}
+_URL_PLACEHOLDER_RE = re.compile(r'(?i)(?:\bTODO\b|\bFIXME\b|\bXXX\b|CHANGEME|'
+                                 r'your[-_]|<[^>]+>|\.\.\.)')
+
+
+def _trim_url(url):
+    """Strip trailing sentence punctuation a bare URL picked up from prose,
+    and an unbalanced closing paren (the `(https://x)` case) -- while
+    leaving a balanced one alone, since Wikipedia et al. put parens in
+    real paths (`/wiki/Foo_(disambiguation)`)."""
+    url = url.rstrip(_URL_TRAILING_JUNK)
+    while url.endswith(")") and url.count("(") < url.count(")"):
+        url = url[:-1].rstrip(_URL_TRAILING_JUNK)
+    return url
+
+
+def _extract_urls_from_line(line):
+    """Every distinct http(s) URL on one already comment/code-filtered line.
+    Macro targets (`link:URL[..]`, `image:URL[..]`) are read first and
+    masked out so the bare-URL sweep doesn't double-count them."""
+    urls = []
+    masked = line
+    for m in _LINK_MACRO_RE.finditer(line):
+        urls.append(_trim_url(m.group(1)))
+        masked = masked[:m.start(1)] + " " * (m.end(1) - m.start(1)) + masked[m.end(1):]
+    for m in _BARE_URL_RE.finditer(masked):
+        urls.append(_trim_url(m.group(0)))
+    # de-dup within the line, preserve order
+    seen = set()
+    return [u for u in urls if u and not (u in seen or seen.add(u))]
+
+
+def _host_of(url):
+    try:
+        return (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _host_suffix_match(host, suffix):
+    return host == suffix or host.endswith("." + suffix)
+
+
+def _is_geo_sensitive(host):
+    return any(_host_suffix_match(host, s) for s in _GEO_SENSITIVE_SUFFIXES)
+
+
+def _should_probe(url):
+    """Skip URLs that can't or shouldn't be fetched: RFC-2606 example
+    hosts, localhost, an unsubstituted `{attribute}`, an obvious
+    placeholder, or a host the caller allow-listed with --allow-domain."""
+    if "{" in url or "}" in url:
+        return False
+    if url.endswith(".git"):
+        return False  # a VCS clone remote (git clone URL.git), not a web page
+    if _URL_PLACEHOLDER_RE.search(url):
+        return False
+    host = _host_of(url)
+    if not host or host in _URL_SKIP_HOSTS or host.endswith(".local"):
+        return False
+    if any(_host_suffix_match(host, d) for d in LINK_ALLOW_DOMAINS):
+        return False
+    return True
+
+
+class _Probe:
+    """Outcome of one URL fetch. `error` is None on any HTTP response
+    (even a 500), else an (kind, text) tuple where kind is one of
+    dns-nxdomain / dns / timeout / refused / reset / ssl / other."""
+    __slots__ = ("url", "status", "final_url", "redirects", "error")
+
+    def __init__(self, url, status=None, final_url=None, redirects=(), error=None):
+        self.url = url
+        self.status = status
+        self.final_url = final_url or url
+        self.redirects = tuple(redirects)
+        self.error = error
+
+
+class _ChainRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self):
+        self.chain = []
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self.chain.append((code, newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _describe_neterror(reason):
+    if isinstance(reason, socket.timeout) or "timed out" in str(reason).lower():
+        return ("timeout", f"no response in {LINK_TIMEOUT:.0f}s")
+    if isinstance(reason, socket.gaierror):
+        txt = str(reason).lower()
+        if reason.args and reason.args[0] in (socket.EAI_NONAME, getattr(socket, "EAI_NODATA", None)) \
+                or "name or service not known" in txt or "nodename nor servname" in txt \
+                or "no address associated" in txt:
+            return ("dns-nxdomain", "host does not resolve")
+        return ("dns", "DNS lookup failed")
+    txt = str(reason).lower()
+    if "refused" in txt:
+        return ("refused", "connection refused")
+    if "reset" in txt:
+        return ("reset", "connection reset")
+    if "ssl" in txt or "certificate" in txt:
+        return ("ssl", str(reason))
+    return ("other", str(reason).strip() or reason.__class__.__name__)
+
+
+_UNVERIFIED_TLS_CTX = ssl._create_unverified_context()
+# Hosts where cert verification failed and we fell back to an unverified
+# connection -- almost always a missing local CA bundle (a fresh macOS
+# python that never ran "Install Certificates.command") or a MITM proxy,
+# not a real problem with the site. Reported once as a footer note.
+_LINK_TLS_FELL_BACK = set()
+
+
+def _is_cert_error(reason):
+    return isinstance(reason, ssl.SSLCertVerificationError) or \
+        "CERTIFICATE_VERIFY_FAILED" in str(reason)
+
+
+def _host_gate(host):
+    with _LINK_HOST_SEM_GUARD:
+        return _LINK_HOST_SEMAPHORES.setdefault(
+            host, threading.Semaphore(_LINK_PER_HOST_CONCURRENCY))
+
+
+def _http_attempt(url, method, timeout, context=None):
+    """One HTTP request. Returns a _Probe. On a local cert-verification
+    failure (missing CA bundle / MITM proxy), retries once unverified and
+    records the host in _LINK_TLS_FELL_BACK. The single seam most probe
+    tests patch."""
+    handler = _ChainRedirectHandler()
+    handlers = [handler]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
+    req = urllib.request.Request(
+        url, method=method,
+        headers={"User-Agent": _LINK_BROWSER_UA, "Accept": "*/*"})
+    if method == "GET":
+        req.add_header("Range", "bytes=0-0")
+    try:
+        resp = opener.open(req, timeout=timeout)
+        code = getattr(resp, "status", None) or resp.getcode()
+        final = resp.geturl()
+        resp.close()
+        return _Probe(url, status=code, final_url=final, redirects=handler.chain)
+    except urllib.error.HTTPError as e:
+        return _Probe(url, status=e.code, final_url=getattr(e, "url", url),
+                      redirects=handler.chain)
+    except (urllib.error.URLError, socket.timeout, OSError) as e:
+        reason = getattr(e, "reason", e)
+        if context is None and not LINK_INSECURE and _is_cert_error(reason):
+            retry = _http_attempt(url, method, timeout, context=_UNVERIFIED_TLS_CTX)
+            if retry.error is None:
+                _LINK_TLS_FELL_BACK.add(_host_of(url))
+                return retry
+        return _Probe(url, error=_describe_neterror(reason))
+
+
+def _probe_url(url, timeout=None):
+    """Fetch one URL and classify the transport outcome. This is the
+    network seam -- tests monkeypatch it wholesale. Tries HEAD first,
+    falls back to a ranged GET when a server rejects or mishandles HEAD,
+    and retries a transient failure or a 429/503 once with a short
+    back-off. No more than _LINK_PER_HOST_CONCURRENCY requests to one host
+    run at once, so our own fan-out doesn't earn the rate limiting."""
+    timeout = LINK_TIMEOUT if timeout is None else timeout
+    ctx = _UNVERIFIED_TLS_CTX if LINK_INSECURE else None
+
+    def run():
+        probe = _http_attempt(url, "HEAD", timeout, ctx)
+        if probe.error is not None or probe.status in (403, 405, 501, 400):
+            alt = _http_attempt(url, "GET", timeout, ctx)
+            if alt.error is None or probe.error is not None:
+                probe = alt
+        if probe.error is not None and probe.error[0] in ("timeout", "reset", "other"):
+            time.sleep(0.4)
+            retry = _http_attempt(url, "GET", timeout, ctx)
+            if retry.error is None:
+                probe = retry
+        if probe.status in (429, 503):
+            time.sleep(1.0)
+            retry = _http_attempt(url, "GET", timeout, ctx)
+            if retry.error is None and retry.status not in (429, 503):
+                probe = retry
+        return probe
+
+    try:
+        with _host_gate(_host_of(url)):
+            return run()
+    except Exception as e:   # a malformed URL etc. must not kill the whole run
+        return _Probe(url, error=("other", f"{e.__class__.__name__}: {e}"))
+
+
+def _probe_many(urls):
+    if not urls:
+        return []
+    workers = max(1, min(LINK_MAX_WORKERS, len(urls)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(zip(urls, ex.map(_probe_url, urls)))
+
+
+def _trivial_redirect(a, b):
+    """A 301 that only appends a trailing slash or upgrades http->https is
+    not something to go and edit in the source -- treat it as clean."""
+    norm = lambda u: u.rstrip("/").replace("https://", "http://", 1)
+    return norm(a) == norm(b)
+
+
+def _classify_probe(probe):
+    """(label, detail, is_finding). Only a hard 404/410 or a non-resolving
+    host is a finding; every other non-OK outcome is reported but does not
+    fail the run."""
+    host = _host_of(probe.url)
+    if probe.error is not None:
+        kind, text = probe.error
+        if _is_geo_sensitive(host):
+            return ("VPN?", f"{text} -- host is often region-locked", False)
+        if kind == "dns-nxdomain":
+            return ("BROKEN", "host does not resolve", True)
+        return ("UNREACHABLE", text, False)
+
+    s = probe.status
+    if s is None:
+        return ("UNREACHABLE", "no response", False)
+    if 200 <= s < 300:
+        perm = [c for c, _ in probe.redirects if c in (301, 308)]
+        if perm and not _trivial_redirect(probe.url, probe.final_url):
+            return ("REDIRECT", f"{perm[0]} -> {probe.final_url}", False)
+        return ("OK", str(s), False)
+    if s in (301, 308):
+        if _trivial_redirect(probe.url, probe.final_url):
+            return ("OK", str(s), False)
+        return ("REDIRECT", f"{s} -> {probe.final_url}", False)
+    if s in (302, 303, 307):
+        return ("OK", f"{s} -> {probe.final_url}", False)
+    if s in (404, 410):
+        return ("BROKEN", str(s), True)
+    if s in (401, 403):
+        if _is_geo_sensitive(host):
+            return ("VPN?", f"{s} -- host is often region-locked", False)
+        return ("BLOCKED", f"{s} (auth or anti-bot wall)", False)
+    if s == 429:
+        return ("RATELIMIT", "429 (too many requests)", False)
+    if 500 <= s < 600:
+        return ("SERVER-ERR", f"{s} (server-side, likely transient)", False)
+    return ("BLOCKED", str(s), False)
+
+
+def _load_link_cache():
+    if LINK_CACHE_REFRESH or not LINK_CACHE_PATH:
+        return {}
+    try:
+        data = json.loads(Path(LINK_CACHE_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    now = time.time()
+    return {u: v for u, v in data.items()
+            if isinstance(v, dict) and now - v.get("checked_at", 0) < _LINK_CACHE_TTL}
+
+
+def _save_link_cache(cache):
+    if not LINK_CACHE_PATH:
+        return
+    try:
+        Path(LINK_CACHE_PATH).write_text(
+            json.dumps(cache, indent=1, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def check_links_external(verbose=False) -> bool:
+    """Fetch every http(s) link in pages/ and partials/ (both languages).
+
+    Two classes are printed by default, because they are the two you can act
+    on in the source:
+
+        BROKEN     404 / 410, or a host that does not resolve  -- fails the run
+        REDIRECT   permanent (301/308) to a genuinely different URL
+
+    Everything else -- 401/403 anti-bot walls, 429s, 5xx, timeouts, DNS
+    failures, region-locked hosts -- is collapsed into a one-line count,
+    since from any given machine it says more about the route than the page.
+    --show-unverified (or --verbose) lists those too.
+
+    Only BROKEN fails the run. Links are de-duplicated site-wide (one fetch
+    per distinct URL, at most a few concurrent per host) and cached for a
+    week in .docs_tool_link_cache.json (--link-cache to move it,
+    --refresh-links to ignore it). --offline skips fetching and just lists
+    the links found. Honours --page.
+
+    Hosts whose TLS certificate the local trust store can't validate (a
+    missing CA bundle, a MITM proxy) are retried once without verification
+    and noted -- pass --insecure to make that the default and drop the note.
+
+    Comment lines and ---- / .... blocks are skipped, as are RFC-2606
+    example hosts, localhost, *.git remotes, and any host passed to
+    --allow-domain."""
+    _LINK_TLS_FELL_BACK.clear()
+    _LINK_HOST_SEMAPHORES.clear()
+    sites = {}
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for sub in ("pages", "partials"):
+                for f in _iter_files(root / sub, ".adoc"):
+                    if not _page_allowed(f):
+                        continue
+                    lines = _read_lines(f)
+                    if lines is None:
+                        continue
+                    excluded = _excluded_ref_lines(f)
+                    for lineno, line in enumerate(lines, 1):
+                        if lineno in excluded:
+                            continue
+                        for url in _extract_urls_from_line(line):
+                            if _should_probe(url):
+                                sites.setdefault(url, []).append((f, lineno))
+
+    if not sites:
+        print("OK: no external links found.")
+        return True
+
+    if LINK_OFFLINE:
+        print(f"{len(sites)} distinct external link(s) found "
+              f"(--offline: not fetched):\n")
+        for url in sorted(sites):
+            print(f"  {url}")
+            if verbose:
+                for f, ln in sites[url]:
+                    print(f"        {f}:{ln}")
+        return True
+
+    cache = _load_link_cache()
+    fresh_urls = [u for u in sorted(sites) if u not in cache]
+    fresh = _probe_many(fresh_urls)
+
+    if fresh and len(fresh) >= 5 and all(
+            p.error is not None and p.error[0] != "dns-nxdomain" for _, p in fresh):
+        sys.exit(
+            f"error: all {len(fresh)} freshly-checked links failed to connect -- "
+            f"this looks like no network / blocked egress, not {len(fresh)} dead "
+            f"links. Re-run with network access, or 'check links --offline' to "
+            f"just list them.")
+
+    results = {}
+    for url, probe in fresh:
+        label, detail, finding = _classify_probe(probe)
+        results[url] = (label, detail, finding)
+        cache[url] = {"label": label, "detail": detail, "finding": finding,
+                      "checked_at": time.time()}
+    for url in sites:
+        if url not in results:
+            c = cache[url]
+            results[url] = (c["label"], c["detail"], c["finding"])
+    _save_link_cache(cache)
+
+    total = len(sites)
+    actionable = []      # (label, detail, url) -- BROKEN + REDIRECT, always printed
+    unverified = []      # (label, detail, url) -- couldn't-check, listed only on request
+    for url in sorted(sites):
+        label, detail, finding = results[url]
+        if label == "OK":
+            continue
+        if label in ("BROKEN", "REDIRECT"):
+            actionable.append((label, detail, url))
+        else:
+            unverified.append((label, detail, url))
+
+    def _print_hit(label, detail, url):
+        print(f"{label:<9} {url}  ({detail})")
+        refs = sites[url]
+        for f, ln in (refs if verbose else refs[:3]):
+            print(f"        {f}:{ln}")
+        if not verbose and len(refs) > 3:
+            print(f"        ... and {len(refs) - 3} more (--verbose for all)")
+
+    for label, detail, url in actionable:
+        _print_hit(label, detail, url)
+
+    show_unverified = verbose or LINK_SHOW_UNVERIFIED
+    if unverified and show_unverified:
+        if actionable:
+            print()
+        for label, detail, url in unverified:
+            _print_hit(label, detail, url)
+
+    findings = sum(1 for lbl, _, _ in actionable if lbl == "BROKEN")
+    redirects = sum(1 for lbl, _, _ in actionable if lbl == "REDIRECT")
+
+    if not actionable and not unverified:
+        print(f"OK: all {total} external link(s) resolve.")
+    else:
+        print(f"\nTotal: {findings} broken, {redirects} redirect(s), "
+              f"of {total} external link(s).")
+
+    if unverified and not show_unverified:
+        by_label = Counter(lbl for lbl, _, _ in unverified)
+        pretty = {"BLOCKED": "blocked", "RATELIMIT": "rate-limited",
+                  "SERVER-ERR": "server error", "UNREACHABLE": "unreachable",
+                  "VPN?": "maybe VPN-only"}
+        breakdown = ", ".join(f"{n} {pretty.get(lbl, lbl.lower())}"
+                              for lbl, n in by_label.most_common())
+        print(f"{len(unverified)} link(s) could not be verified from here "
+              f"({breakdown}) -- pass --show-unverified to list them.\n"
+              f"A proxy, a datacenter-IP block, or a regional restriction here "
+              f"reads the same as a dead link; a VPN often clears it.")
+
+    if _LINK_TLS_FELL_BACK:
+        print(f"{len(_LINK_TLS_FELL_BACK)} host(s) were checked without TLS "
+              f"verification (local trust store can't validate them --\n"
+              f"usually a missing CA bundle: on macOS run \"Install "
+              f"Certificates.command\", or pass --insecure to silence this).")
+    return findings == 0
+
+
+# --------------------------------------------------------------------------
 # CHECK REGISTRY
 # --------------------------------------------------------------------------
 
@@ -3574,6 +4069,7 @@ CHECKS = {
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
     "partials-orphaned": check_partials_orphaned,
     "tags-orphaned": check_tags_orphaned,
+    "links-external": check_links_external,
 }
 
 # Checks whose logic is heuristic (no real AsciiDoc parser behind it) and can
@@ -3586,7 +4082,15 @@ BETA_CHECKS = {
     "pages-table-cell-periods",
     "pages-terminology",
     "pages-translation",
+    "links-external",   # not heuristic parsing, but network flakiness makes it advisory
 }
+
+# Checks that reach the network. Excluded from `check all` / `--all-checks`
+# (a pre-commit hook or CI sweep must not fan out hundreds of HTTP requests
+# just because it asked for "everything") -- they only run when named
+# explicitly, e.g. `check links`.
+_NETWORK_ONLY_CHECKS = {"links-external"}
+_NETWORK_FAMILIES = {"links"}
 
 
 # --------------------------------------------------------------------------
@@ -3647,12 +4151,16 @@ FAMILIES = {
         "examples":     {"examples": "examples-parity"},
         "nav":          {"nav": "nav-structure-parity"},
     },
+    "links": {                        # L6 -- the open web (network; opt-in, not in `check all`)
+        "external": {"pages": "links-external"},
+    },
 }
 
 TIERS = {
     "universal": ("chars", "markup", "refs"),   # deterministic  -> block by default
     "house":     ("style", "terms"),            # per-vendor      -> warn by default
     "relational": ("l10n",),                    # needs both trees -> warn by default
+    "external":  ("links",),                    # network, non-deterministic -> warn
 }
 
 _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
@@ -3698,6 +4206,7 @@ RULE_IDS = {
     "pages-translation":          "LN03",
     "examples-parity":            "LN04",
     "nav-structure-parity":       "LN05",
+    "links-external":             "LK01",
 }
 _ID_TO_KEY = {v: k for k, v in RULE_IDS.items()}
 
@@ -3726,6 +4235,7 @@ SUMMARIES = {
     "pages-translation":           "RU line still identical to EN, or carrying English stopwords",
     "examples-parity":             "EN and RU examples/ must match (byte / comment-stripped)",
     "nav-structure-parity":        "EN and RU nav.adoc structure must match",
+    "links-external":              "every http(s) link resolves (no 404, dead host, or permanent redirect)",
 }
 
 # Short label per family for `list`; tier -> commit disposition.
@@ -3736,8 +4246,10 @@ FAMILY_DESC = {
     "style":  "Arenadata house style",
     "terms":  "controlled vocabulary",
     "l10n":   "EN<->RU parity",
+    "links":  "external URL health (network; run explicitly)",
 }
-_TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"}
+_TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn",
+                     "external": "warn"}
 
 # Which optional flags actually do something for a given rule, so `show` can
 # offer examples that work instead of a generic list. Derived from the check
@@ -3768,6 +4280,7 @@ RULE_FLAGS = {
     "pages-translation":           "RU line still English",
     "examples-parity":             "EN/RU examples differ",
     "nav-structure-parity":        "EN/RU nav differs",
+    "links-external":              "dead / redirected external links",
 }
 
 
@@ -3801,7 +4314,7 @@ _RULES_IGNORING_PAGE = {
 _RULES_WITH_VERBOSE = {
     "pages-no-invisible-chars", "pages-ru-latin-homoglyphs", "pages-structure-parity",
     "pages-translation", "examples-parity", "nav-structure-parity",
-    "pages-file-path-italics", "pages-terminology",
+    "pages-file-path-italics", "pages-terminology", "links-external",
 }
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-broken-refs", "partials-orphaned",
@@ -3846,6 +4359,14 @@ def _rule_examples(key):
     if key in _RULES_WITH_EXTERNAL_ROOT:
         out.append((f"./docs_tool.py {cmd} --external-root ADCM=../docs-adcm",
                     "resolve cross-repo refs"))
+    if key == "links-external":
+        out.append((f"./docs_tool.py {cmd} --offline", "just list the links, don't fetch"))
+        out.append((f"./docs_tool.py {cmd} --show-unverified", "list the couldn't-check links too"))
+        out.append((f"./docs_tool.py {cmd} --timeout 5", "shorter per-request timeout (default 10s)"))
+        out.append((f"./docs_tool.py {cmd} --allow-domain intranet.example.com",
+                    "skip a host you know is fine"))
+        out.append((f"./docs_tool.py {cmd} --insecure", "skip TLS verification (missing local CA bundle)"))
+        out.append((f"./docs_tool.py {cmd} --refresh-links", "ignore the 7-day result cache"))
     return out
 
 
@@ -3862,8 +4383,15 @@ def _resolve_family_selection(family, picked_rules, target):
     """Map a `check` invocation to an ordered, de-duplicated list of CHECKS
     keys. `family` may be None/"all" for every family; `picked_rules` is
     a set (empty = whole family); `target` is a scan target, "all", or None.
-    See the selection rules above FAMILIES."""
-    fams = list(FAMILIES) if family in (None, "all") else [family]
+    See the selection rules above FAMILIES.
+
+    `all` deliberately skips the network families (see _NETWORK_FAMILIES):
+    a sweep that asked for "everything" must not silently start making HTTP
+    requests -- `check links` is always explicit."""
+    if family in (None, "all"):
+        fams = [f for f in FAMILIES if f not in _NETWORK_FAMILIES]
+    else:
+        fams = [family]
     picked = set(picked_rules or ())
     out = []
     for fam in fams:
@@ -4656,6 +5184,7 @@ def build_parser():
                              "pages/partials against. Repeatable -- entries from every file "
                              "passed are merged. If omitted, defaults to every *-glossary.psv "
                              "file found directly under the current directory.")
+    _add_link_args(parser)
 
     sync_group = parser.add_argument_group("sync")
     sync_action = sync_group.add_argument("--sync", metavar="EN_FILE",
@@ -4806,6 +5335,7 @@ def _main_legacy():
         argcomplete.autocomplete(parser, print_suppressed=True)
     args = parser.parse_args()
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
+    _configure_links_from_args(args)
 
     if args.list_checks:
         for name in CHECKS:
@@ -4826,7 +5356,7 @@ def _main_legacy():
         run_sync(args.sync, dry_run=args.dry_run)
         return
 
-    selected = list(CHECKS) if args.all_checks else [
+    selected = [k for k in CHECKS if k not in _NETWORK_ONLY_CHECKS] if args.all_checks else [
         name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
     ]
 
@@ -4846,6 +5376,42 @@ def _main_legacy():
 # --------------------------------------------------------------------------
 
 _V2_VERBS = ("check", "sync", "list", "show")
+
+
+def _add_link_args(parser):
+    """The `check links` knobs. Shared by both surfaces so
+    `--check-links-external --timeout 5` works on the legacy one too."""
+    parser.add_argument("--timeout", type=float, metavar="SECONDS",
+                        help="Per-request timeout for 'check links' (default 10).")
+    parser.add_argument("--offline", action="store_true",
+                        help="'check links': list the external links found, don't fetch them.")
+    parser.add_argument("--allow-domain", action="append", metavar="HOST",
+                        help="'check links': skip this host (suffix match). Repeatable.")
+    parser.add_argument("--link-cache", metavar="PATH",
+                        help="'check links': result cache file "
+                             "(default .docs_tool_link_cache.json; empty string disables).")
+    parser.add_argument("--refresh-links", action="store_true",
+                        help="'check links': ignore the cache and re-fetch every link.")
+    parser.add_argument("--show-unverified", action="store_true",
+                        help="'check links': list the couldn't-verify links, not just count them.")
+    parser.add_argument("--insecure", action="store_true",
+                        help="'check links': skip TLS certificate verification (and its note).")
+
+
+def _configure_links_from_args(args):
+    """Push the `check links` knobs into the module globals check_links_external
+    reads (same pattern as EXTERNAL_COMPONENTS / GLOSSARY)."""
+    global LINK_TIMEOUT, LINK_OFFLINE, LINK_ALLOW_DOMAINS
+    global LINK_CACHE_PATH, LINK_CACHE_REFRESH, LINK_INSECURE, LINK_SHOW_UNVERIFIED
+    if getattr(args, "timeout", None) is not None:
+        LINK_TIMEOUT = args.timeout
+    LINK_OFFLINE = bool(getattr(args, "offline", False))
+    LINK_ALLOW_DOMAINS = {d.lower() for d in (getattr(args, "allow_domain", None) or [])}
+    if getattr(args, "link_cache", None) is not None:
+        LINK_CACHE_PATH = args.link_cache
+    LINK_CACHE_REFRESH = bool(getattr(args, "refresh_links", False))
+    LINK_SHOW_UNVERIFIED = bool(getattr(args, "show_unverified", False))
+    LINK_INSECURE = bool(getattr(args, "insecure", False))
 
 
 def _build_v2_parser():
@@ -4889,6 +5455,7 @@ def _build_v2_parser():
     c.add_argument("--glossary", action="append", metavar="PATH",
                    help="Glossary file(s) for 'check terms'. Repeatable. "
                         "Defaults to *-glossary.psv in the current directory.")
+    _add_link_args(c)
 
     sh = sub.add_parser("show", help="One rule's rationale + examples, or 'show all' for every rule.")
     sh.add_argument("name", metavar="RULE", help="e.g. 'no-yo', 'ST01', or 'all'.")
@@ -5000,7 +5567,7 @@ def _v2_list(what):
     print()
     print("check <family> [<family> ...]  run those families")
     print("check <family> --<rule>        run just one rule")
-    print("check all                      run everything")
+    print("check all                      every family except links (network)")
     print("show <rule|rule-id>            one rule's rationale + examples")
     print("show all                       every rule, with examples")
     print("list rules | list targets      flat rule list · --target values")
@@ -5045,7 +5612,7 @@ def _v2_show(name):
         sys.exit(2)
     fam = _family_of(_rule_of(key)) or "?"
     disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
-    beta = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
+    beta = "  [beta -- treat findings as a review list, not a hard gate]" if key in BETA_CHECKS else ""
     print(f"{RULE_IDS[key]}  {_check_command(key)}   (suggest: {disp}){beta}\n")
     print(SUMMARIES.get(key, ""))
     doc = (CHECKS[key].__doc__ or "").strip()
@@ -5074,6 +5641,7 @@ def _main_v2():
 
     # verb == "check"
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
+    _configure_links_from_args(args)
     glossary = args.glossary
 
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
