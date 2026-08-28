@@ -62,25 +62,25 @@ Every rule has a stable **rule ID**. `list` prints this section as a tree;
 rationale, exceptions, and the false positives it was tuned against. `beta` rules
 are heuristics — treat their output as a review list, not a hard gate.
 
-| ID | Command |
-|----|---------|
-| `CH01` | `check chars --no-cyrillic` |
-| `CH03` | `check chars --no-invisible` |
-| `CH04` | `check chars --dashes` |
-| `CH05` | `check chars --homoglyphs` |
-| `MK01` | `check markup --backticks` |
-| `MK02` | `check markup --delimiters` |
-| `RF01` | `check refs --broken` |
-| `RF02`–`RF06` | `check refs --orphaned [--target …]` |
-| `ST01` | `check style --no-yo` |
-| `ST02` | `check style --file-path-italics` |
-| `ST03` | `check style --table-cell-periods` |
-| `TM01` | `check terms` |
-| `LN01` | `check l10n --lines` |
-| `LN02` | `check l10n --structure` |
-| `LN03` | `check l10n --untranslated` |
-| `LN04` | `check l10n --examples` |
-| `LN05` | `check l10n --nav` |
+| ID | Command | Flags |
+|----|---------|-------|
+| `CH01` | `check chars --no-cyrillic` | Cyrillic in EN files |
+| `CH03` | `check chars --no-invisible` | zero-width characters |
+| `CH04` | `check chars --dashes` | literal en/em dashes |
+| `CH05` | `check chars --homoglyphs` | Latin letters in RU prose |
+| `MK01` | `check markup --backticks` | odd backtick count |
+| `MK02` | `check markup --delimiters` | unclosed block delimiter |
+| `RF01` | `check refs --broken` | dead xref / include / image |
+| `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
+| `ST01` | `check style --no-yo` | `ё` in RU files |
+| `ST02` | `check style --file-path-italics` | file path not in italics |
+| `ST03` | `check style --table-cell-periods` | table cell ending in a period |
+| `TM01` | `check terms` | off-glossary RU translation |
+| `LN01` | `check l10n --lines` | EN/RU line counts differ |
+| `LN02` | `check l10n --structure` | EN/RU skeletons differ |
+| `LN03` | `check l10n --untranslated` | RU line still English |
+| `LN04` | `check l10n --examples` | EN/RU examples differ |
+| `LN05` | `check l10n --nav` | EN/RU nav differs |
 
 ### `chars` — Unicode / encoding
 
