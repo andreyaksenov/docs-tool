@@ -1886,6 +1886,47 @@ class CompletePageNameTests(FixtureTestCase):
         })
 
 
+@unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
+class CheckRuleCompletionTests(unittest.TestCase):
+    """`check <family> <TAB>` should offer that one family's --<rule> flags
+    (which are help=SUPPRESS, so otherwise hidden), and nothing from other
+    families."""
+
+    DT = str(Path(__file__).resolve().parent.parent / "docs_tool.py")
+
+    def _complete(self, line):
+        tmp = tempfile.mktemp()
+        env = {**os.environ, "_ARGCOMPLETE": "1", "_ARGCOMPLETE_SHELL": "zsh",
+               "_ARGCOMPLETE_SUPPRESS_SPACE": "1", "ARGCOMPLETE_USE_TEMPFILES": "1",
+               "_ARGCOMPLETE_STDOUT_FILENAME": tmp,
+               "COMP_LINE": line, "COMP_POINT": str(len(line))}
+        subprocess.run([sys.executable, self.DT], env=env, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            raw = Path(tmp).read_text()
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+        return {c.split(":", 1)[0] for c in raw.split("\013") if c}
+
+    def test_family_scopes_rule_flags(self):
+        comps = self._complete("docs_tool.py check l10n ")
+        self.assertLessEqual({"--lines", "--structure", "--untranslated",
+                              "--examples", "--nav"}, comps)
+        self.assertNotIn("--no-yo", comps)      # a style rule
+        self.assertNotIn("--backticks", comps)  # a markup rule
+
+    def test_no_rule_flags_before_a_family_is_chosen(self):
+        comps = self._complete("docs_tool.py check ")
+        self.assertNotIn("--structure", comps)
+        self.assertIn("l10n", comps)            # families still offered
+
+    def test_no_rule_flags_with_two_families(self):
+        comps = self._complete("docs_tool.py check chars markup ")
+        self.assertNotIn("--no-cyrillic", comps)
+        self.assertNotIn("--backticks", comps)
+
+
 class RunSyncGitRewordTests(unittest.TestCase):
     """Integration test for the git-backed reworded-paragraph detection in
     run_sync: an EN paragraph reworded (not just extended) since RU was last

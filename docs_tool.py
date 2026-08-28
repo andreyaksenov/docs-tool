@@ -4430,6 +4430,29 @@ def _complete_family(prefix="", **kwargs):
     return {k: v for k, v in items.items() if k.startswith(prefix)}
 
 
+if argcomplete:
+    class _CheckCompletionFinder(argcomplete.CompletionFinder):
+        """The --<rule> flags are registered with help=SUPPRESS (so `check -h`
+        stays short), which also hides them from completion. Re-offer them
+        here, but only the ones that belong to the single family already on
+        the line -- `check l10n <TAB>` should suggest --lines/--structure/...,
+        not --no-yo."""
+
+        def collect_completions(self, active_parsers, parsed_args, cword_prefix):
+            comps = super().collect_completions(active_parsers, parsed_args, cword_prefix)
+            fams = [f for f in (getattr(parsed_args, "families", None) or []) if f in FAMILIES]
+            if len(fams) == 1:
+                for rule, targets in FAMILIES[fams[0]].items():
+                    flag = "--" + rule
+                    if flag.startswith(cword_prefix) and flag not in comps:
+                        comps.append(flag)
+                        primary = targets.get("pages") or next(iter(targets.values()))
+                        self._display_completions[flag] = SUMMARIES.get(primary, "")
+            return comps
+else:
+    _CheckCompletionFinder = None
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="docs_tool.py",
@@ -4670,7 +4693,7 @@ def _build_v2_parser():
                    help="Print the diff instead of writing the RU file.")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
-        argcomplete.autocomplete(p)
+        _CheckCompletionFinder()(p)
     return p
 
 
