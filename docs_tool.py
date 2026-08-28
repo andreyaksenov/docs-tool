@@ -1,35 +1,36 @@
 #!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
 """
-docs_tool.py -- unified consistency-check and EN->RU sync utility for
-Antora documentation trees laid out as en/modules/<module>/... and
-ru/modules/<module>/... (single-module sites with just a ROOT module work
-the same way -- there's simply one module to discover).
+docs_tool.py -- consistency checks and EN->RU sync for Antora documentation
+trees laid out as en/modules/<module>/... and ru/modules/<module>/...
+(single-module sites with just a ROOT module work the same way).
 
-This replaces the standalone scripts/check_*.sh scripts and
-scripts/sync_pages_from_en.py with a single shareable tool.
+Run from the repo root (use "python docs_tool.py ..." on Windows). Every
+check scans all discovered modules automatically.
 
-Usage:
-    ./docs_tool.py --check-<name> [--check-<name> ...] [-v]
-    ./docs_tool.py --all-checks [-v]
-    ./docs_tool.py --sync <path/to/en/file.adoc> [-n] [--since REF]
-    ./docs_tool.py --list-checks
-    ./docs_tool.py --list-modules
+Commands:
+    ./docs_tool.py check <family> [<family> ...] [--<rule> ...] [--target NAME] [--verbose] [--page NAME ...]
+    ./docs_tool.py show  <rule|rule-id>         -- one rule's full rationale
+    ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
+    ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
 
-Run from the repo root (use "python docs_tool.py ..." if it isn't marked
-executable, e.g. on Windows). Every check scans all discovered modules
-(every directory under en/modules/ and ru/modules/) automatically -- no
-flag needed. Examples:
+Checks are grouped into six families, ordered by where a rule's authority
+comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
+resolution), style (house style), terms (glossary), l10n (EN<->RU parity).
+Run "docs_tool.py list" for the full map.
 
-    ./docs_tool.py --check-pages-no-cyrillic
-    ./docs_tool.py --check-pages-broken-refs --check-pages-orphaned
-    ./docs_tool.py --all-checks -v
-    ./docs_tool.py --sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc -n
-    ./docs_tool.py --sync en/modules/how-to/pages/manage-cluster/pam.adoc -n
+Examples:
+    ./docs_tool.py check chars
+    ./docs_tool.py check style --no-yo
+    ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
+    ./docs_tool.py check chars markup --page UNCOMMITTED
+    ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
---sync and the checks --list-checks marks (beta) rely on heuristics rather
-than a real AsciiDoc parser and can misfire on legitimate content -- treat
-their output as a review list, not a hard gate.
+The legacy flag interface -- --check-<name>, --all-checks, --sync,
+--list-checks, --list-modules -- still works; see "docs_tool.py --list-checks".
+
+Heuristic checks (marked "beta" by "list") and sync can misfire on
+legitimate content -- treat their output as a review list, not a hard gate.
 """
 import argparse
 import difflib
@@ -80,6 +81,13 @@ _INVISIBLE_RE = re.compile('[' + ''.join(
 # targets are silently treated as pointing outside anything this tool can
 # see, and left unchecked. {component_name: {"en": {module: root}, "ru": {module: root}}}
 EXTERNAL_COMPONENTS = {}
+
+# Component/module names a reference pointed at that couldn't be resolved
+# against this repo or any --external-root, filled in by _resolve_module_ref
+# and reported by _report_skipped_components. Those references are left
+# unchecked, so without this a run that never looked at a whole component
+# is indistinguishable from one that verified it.
+_SKIPPED_COMPONENTS = set()
 
 
 # --------------------------------------------------------------------------
@@ -652,8 +660,8 @@ _INCLUDE_PARTIAL_RE = re.compile(r'include::partial\$([^\[]+\.adoc)')
 
 def _nav_skeleton(path: Path):
     """Structural skeleton of a nav file: list depth + xref/include target,
-    or an <svg:...>/<text> placeholder. Numbered lines (1-based) for -v
-    lookup; caller strips the number prefix for the plain equality check."""
+    or an <svg:...>/<text> placeholder. Numbered lines (1-based) for
+    --verbose lookup; caller strips the number prefix for the plain equality check."""
     lines = _read_lines(path)
     if lines is None:
         return []
@@ -675,6 +683,10 @@ def _nav_skeleton(path: Path):
         if m:
             out.append((lineno, f"include::{m.group(1)}"))
     return out
+
+
+# How many skeleton-diff lines to show before truncating; --verbose shows all.
+_SKELETON_DIFF_PREVIEW = 20
 
 
 def _skeleton_diff_lines(en_skel, ru_skel, en_label, ru_label):
@@ -706,15 +718,14 @@ def _compare_skeleton_pair(en_file: Path, ru_file: Path, skeleton_fn, verbose) -
         return True
     print(f"DIFF     {en_file}")
     print(f"         {ru_file}")
-    if verbose:
-        print("\n".join(_skeleton_diff_lines(en_skel, ru_skel, en_file, ru_file)))
-        print()
+    diff = _skeleton_diff_lines(en_skel, ru_skel, en_file, ru_file)
+    if verbose or len(diff) <= _SKELETON_DIFF_PREVIEW:
+        print("\n".join(diff))
     else:
-        i = next((i for i in range(min(len(en_plain), len(ru_plain))) if en_plain[i] != ru_plain[i]),
-                 min(len(en_plain), len(ru_plain)))
-        en_lineno = en_skel[i][0] if i < len(en_skel) else "EOF"
-        ru_lineno = ru_skel[i][0] if i < len(ru_skel) else "EOF"
-        print(f"         first difference: {en_file}:{en_lineno}  vs  {ru_file}:{ru_lineno}  (rerun with -v for the full diff)")
+        print("\n".join(diff[:_SKELETON_DIFF_PREVIEW]))
+        print(f"         ... {len(diff) - _SKELETON_DIFF_PREVIEW} more diff line(s); "
+              f"rerun with --verbose for the full diff")
+    print()
     return False
 
 
@@ -860,6 +871,12 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
     if modules is None and name == own_name:
         modules = lang_module_roots
     if modules is None:
+        # Not a module here, not a registered --external-root, not our own
+        # component name: nothing to resolve against, so the reference is
+        # left unchecked rather than reported broken. Record the name --
+        # a run that silently skips a whole component otherwise looks
+        # exactly like one that verified it (see _report_skipped_components).
+        _SKIPPED_COMPONENTS.add(name)
         return None
     if rest.startswith(":"):
         # Antora's explicit-empty-module form (`component::page`) means the
@@ -1211,12 +1228,30 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     return includers
 
 
+def _report_skipped_components():
+    """Name the components whose references this run left unchecked. The
+    counterpart to the --external-root warning in _load_external_components:
+    that catches a *wrong* path, this catches an *omitted* one -- the more
+    common case, since nobody passes a flag they've forgotten they need.
+    Not a finding (nothing is known to be broken), so it doesn't fail the
+    run -- but silence here means an unverified component reads exactly
+    like a verified one."""
+    skipped = sorted(_SKIPPED_COMPONENTS)
+    if not skipped:
+        return
+    print(f"\nnote: {len(skipped)} referenced component(s) left unchecked -- "
+          f"{', '.join(skipped)}", file=sys.stderr)
+    print("      pass --external-root NAME=PATH for each one you have "
+          "checked out locally", file=sys.stderr)
+
+
 def check_pages_broken_refs(verbose=False) -> bool:
     """Port of check_pages_broken_refs.sh, extended to resolve
     component-prefixed xrefs against sibling modules of the same language
     when the component name matches a discovered module."""
     ok = True
     broken_count = 0
+    _SKIPPED_COMPONENTS.clear()   # report only what this scan itself skipped
 
     def report(file, lineno, msg):
         nonlocal ok, broken_count
@@ -1244,6 +1279,7 @@ def check_pages_broken_refs(verbose=False) -> bool:
         print("OK: no broken xref/include/image references found.")
     else:
         print(f"\nTotal: {broken_count} broken reference(s).")
+    _report_skipped_components()
     return ok
 
 
@@ -2525,7 +2561,7 @@ def _strip_noise(line: str) -> str:
     return s
 
 
-def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_header):
+def _check_translation_pair(en_file: Path, ru_file: Path, verbose: bool, report_header):
     """Returns the number of UNTRANSLATED/SUSPECT lines flagged."""
     en_lines = _read_lines(en_file)
     ru_lines = _read_lines(ru_file)
@@ -2593,20 +2629,23 @@ def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_h
             ensure_header()
             finding_count += 1
             print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_text}")
-        elif strict and not _HEADING_RE.match(en_text):
+        elif not _HEADING_RE.match(en_text):
             candidate = _strip_noise(ru_text).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
-            if _STOPWORDS_RE.search(candidate):
+            hits = _STOPWORDS_RE.findall(candidate)
+            if hits:
                 ensure_header()
                 finding_count += 1
-                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_text}")
+                marker = f" [{', '.join(sorted(set(hits)))}]" if verbose else ""
+                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_text}{marker}")
 
     return finding_count
 
 
 def check_pages_translation(verbose=False) -> bool:
-    """Port of check_pages_translation.sh. `verbose` enables the stricter
-    stopword-based heuristic (the script's `-v` flag)."""
+    """Port of check_pages_translation.sh. Flags RU lines byte-identical to EN
+    (UNTRANSLATED) and RU lines carrying English stopwords (SUSPECT); --verbose
+    appends the matched stopword(s) to each SUSPECT line."""
     ok = True
     total_hits = 0
 
@@ -2648,8 +2687,8 @@ def check_pages_translation(verbose=False) -> bool:
 # "wiki.deb") with the same low collision risk as the original list --
 # "tar.gz" doesn't need special-casing: "tar" alone is in the list, so
 # "archive.tar.gz" already matches on "...gz6.tar" (stopping at the "tar"
-# segment, not continuing through ".gz") -- a good enough anchor for -v
-# to show the full line, without needing a two-extension pattern.
+# segment, not continuing through ".gz") -- a good enough anchor for
+# --verbose to show the full line, without needing a two-extension pattern.
 # xml added later: real Hadoop config files (hive-site.xml, hdfs-site.xml,
 # core-site.xml, ...) turned up ~13 times in docs-adh, almost all already
 # italicized correctly, with one confirmed miss in backticks
@@ -3547,6 +3586,191 @@ BETA_CHECKS = {
 }
 
 
+# --------------------------------------------------------------------------
+# CHECK FAMILIES  (the `docs_tool check <family>` surface)
+# --------------------------------------------------------------------------
+#
+# The 22 flat CHECKS keys above stay the source of truth -- every check
+# function, its behaviour, and the legacy `--check-<key>` flag are unchanged.
+# FAMILIES is a routing layer on top: it groups the same checks by where a
+# rule's authority comes from (the "writing-quality pyramid" -- see
+# docs/proposals/cli-redesign.md), which also predicts how deterministic a
+# check is and whether it should block a commit.
+#
+#   FAMILIES[family][rule] = {scan-target: CHECKS-key}
+#
+# Selection rules (see _resolve_family_selection):
+#   check <family>                       -> every rule in the family, all targets
+#   check <family> --<rule>              -> that rule, target "pages" (or its
+#                                           sole target)
+#   check <family> --<rule> --target X   -> that rule, target X
+#   check <family> --target X            -> every rule in the family that has
+#                                           a target X
+#   --target all                            -> every target of whatever is selected
+#
+# TIERS is advisory and display-only: `list`/`show` render it as
+# "suggest: block"/"suggest: warn", a hint for what a pre-commit hook should
+# hard-fail on vs. just report. Nothing here changes how the tool exits --
+# every run is 0 clean / 1 on findings regardless of family.
+FAMILIES = {
+    "chars": {                        # L0 -- Unicode / encoding
+        "no-cyrillic":  {"pages": "pages-no-cyrillic", "examples": "examples-no-cyrillic"},
+        "no-invisible": {"pages": "pages-no-invisible-chars"},
+        "dashes":       {"pages": "pages-no-unicode-dashes"},
+        "homoglyphs":   {"pages": "pages-ru-latin-homoglyphs"},
+    },
+    "markup": {                       # L1 -- AsciiDoc spec
+        "backticks":  {"pages": "pages-stray-backticks"},
+        "delimiters": {"pages": "pages-unbalanced-delimiters"},
+    },
+    "refs": {                         # L2 -- Antora reference resolution
+        "broken":   {"pages": "pages-broken-refs"},
+        "orphaned": {"pages": "pages-orphaned", "partials": "partials-orphaned",
+                     "examples": "examples-orphaned", "images": "images-orphaned",
+                     "tags": "tags-orphaned"},
+    },
+    "style": {                        # L3 -- Arenadata style guide
+        "no-yo":              {"pages": "pages-no-yo"},
+        "file-path-italics":  {"pages": "pages-file-path-italics"},
+        "table-cell-periods": {"pages": "pages-table-cell-periods"},
+    },
+    "terms": {                        # L4 -- controlled vocabulary (glossary)
+        "terminology": {"pages": "pages-terminology"},
+    },
+    "l10n": {                         # L5 -- "RU mirrors EN"
+        "lines":        {"pages": "pages-line-parity"},
+        "structure":    {"pages": "pages-structure-parity"},
+        "untranslated": {"pages": "pages-translation"},
+        "examples":     {"examples": "examples-parity"},
+        "nav":          {"nav": "nav-structure-parity"},
+    },
+}
+
+TIERS = {
+    "universal": ("chars", "markup", "refs"),   # deterministic  -> block by default
+    "house":     ("style", "terms"),            # per-vendor      -> warn by default
+    "relational": ("l10n",),                    # needs both trees -> warn by default
+}
+
+_SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
+
+# `--target` values, for the two rules that have more than one target
+# (chars --no-cyrillic, refs --orphaned). Shown by `list targets`.
+TARGET_DESC = {
+    "pages":    "pages/ + partials/  (the default)",
+    "partials": "partials/ only",
+    "examples": "examples/",
+    "images":   "images/",
+    "tags":     "tag:: / end:: regions (in pages/, partials/, examples/)",
+    "nav":      "nav.adoc",
+    "all":      "every target above",
+}
+
+_ALL_RULES = tuple(sorted({rule for fam in FAMILIES.values() for rule in fam}))
+
+# Stable per-check identifiers, family-prefixed. The user-facing handle for a
+# check: accepted by `show <id>`, printed by `list`. (Decoupling the selector
+# from the Python function name; inline-suppression / JSON keying will build
+# on these -- see cli-redesign.md phase 1/4.)
+RULE_IDS = {
+    "pages-no-cyrillic":          "CH01",
+    "examples-no-cyrillic":       "CH02",
+    "pages-no-invisible-chars":   "CH03",
+    "pages-no-unicode-dashes":    "CH04",
+    "pages-ru-latin-homoglyphs":  "CH05",
+    "pages-stray-backticks":      "MK01",
+    "pages-unbalanced-delimiters": "MK02",
+    "pages-broken-refs":          "RF01",
+    "pages-orphaned":             "RF02",
+    "partials-orphaned":          "RF03",
+    "examples-orphaned":          "RF04",
+    "images-orphaned":            "RF05",
+    "tags-orphaned":              "RF06",
+    "pages-no-yo":                "ST01",
+    "pages-file-path-italics":    "ST02",
+    "pages-table-cell-periods":   "ST03",
+    "pages-terminology":          "TM01",
+    "pages-line-parity":          "LN01",
+    "pages-structure-parity":     "LN02",
+    "pages-translation":          "LN03",
+    "examples-parity":            "LN04",
+    "nav-structure-parity":       "LN05",
+}
+_ID_TO_KEY = {v: k for k, v in RULE_IDS.items()}
+
+# One-line "what it does" for `docs_tool list`. The full rationale/exceptions
+# stay in each check_* function's docstring (docs_tool show <rule>).
+SUMMARIES = {
+    "pages-no-cyrillic":           "no Cyrillic characters in en/ files (RU text left in EN)",
+    "examples-no-cyrillic":        "same check, over examples/ (all file types)",
+    "pages-no-invisible-chars":    "no zero-width / invisible / bidi-control characters",
+    "pages-no-unicode-dashes":     "no literal en/em dash -- house style uses --",
+    "pages-ru-latin-homoglyphs":   "Latin letters in ru/ prose that should be Cyrillic",
+    "pages-stray-backticks":       "no line with an odd number of backticks",
+    "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
+    "pages-broken-refs":           "every xref: / include:: / image: target resolves",
+    "pages-orphaned":              "every pages/*.adoc reachable from some nav.adoc",
+    "partials-orphaned":           "every tag-less partial pulled in by some include::",
+    "examples-orphaned":           "every examples/ file pulled in by include::example$",
+    "images-orphaned":             "every images/ file the target of an image: macro",
+    "tags-orphaned":               "every tag::/end:: region pulled in by an include tag=",
+    "pages-no-yo":                 "no ё/Ё in ru/ files (:page-author: exempt)",
+    "pages-file-path-italics":     "file / directory names in prose need _italics_",
+    "pages-table-cell-periods":    "a table cell's last sentence shouldn't end with a period",
+    "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
+    "pages-line-parity":           "EN file and its RU counterpart have the same line count",
+    "pages-structure-parity":      "EN and RU structural skeletons must match",
+    "pages-translation":           "RU line still identical to EN, or carrying English stopwords",
+    "examples-parity":             "EN and RU examples/ must match (byte / comment-stripped)",
+    "nav-structure-parity":        "EN and RU nav.adoc structure must match",
+}
+
+# Short label per family for `list`; tier -> commit disposition.
+FAMILY_DESC = {
+    "chars":  "Unicode / encoding",
+    "markup": "AsciiDoc syntax",
+    "refs":   "Antora reference resolution",
+    "style":  "Arenadata house style",
+    "terms":  "controlled vocabulary",
+    "l10n":   "EN<->RU parity",
+}
+_TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"}
+
+
+def _family_of(rule):
+    """The family a rule name belongs to (rule names are unique
+    across families), or None."""
+    for fam, rules in FAMILIES.items():
+        if rule in rules:
+            return fam
+    return None
+
+
+def _resolve_family_selection(family, picked_rules, target):
+    """Map a `check` invocation to an ordered, de-duplicated list of CHECKS
+    keys. `family` may be None/"all" for every family; `picked_rules` is
+    a set (empty = whole family); `target` is a scan target, "all", or None.
+    See the selection rules above FAMILIES."""
+    fams = list(FAMILIES) if family in (None, "all") else [family]
+    picked = set(picked_rules or ())
+    out = []
+    for fam in fams:
+        for rule, targets in FAMILIES[fam].items():
+            if picked and rule not in picked:
+                continue
+            if target == "all":
+                out.extend(targets.values())
+            elif target:
+                if target in targets:
+                    out.append(targets[target])
+            elif picked:
+                out.append(targets.get("pages") or next(iter(targets.values())))
+            else:
+                out.extend(targets.values())
+    seen = set()
+    return [k for k in out if k and not (k in seen or seen.add(k))]
+
+
 # ==========================================================================
 # SYNC: align a RU page's structure/content with its EN counterpart after an
 # EN edit. Ported from sync_pages_from_en.py -- see that tool's original
@@ -3925,8 +4149,8 @@ def _git_diff_hunks(ref: str, path: Path):
     return hunks
 
 
-def find_reworded_lines(en_path: Path, ru_path: Path, en_lines, ru_lines, pairs, force_synced, since: str = None):
-    ref = since or _last_commit_touching(ru_path)
+def find_reworded_lines(en_path: Path, ru_path: Path, en_lines, ru_lines, pairs, force_synced, ref: str = None):
+    ref = ref or _last_commit_touching(ru_path)
     if not ref:
         return None, []
 
@@ -4035,7 +4259,7 @@ def _resolve_page_stem(name_parts):
     return matches
 
 
-def run_sync(en_file: str, dry_run: bool, since: str = None):
+def run_sync(en_file: str, dry_run: bool):
     if not en_file.endswith(".adoc"):
         sys.exit(f"error: --sync {en_file!r} must end with .adoc -- "
                   f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
@@ -4068,7 +4292,7 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
     ref = None
     old_en_lines = None
     if ru_existed:
-        ref = since or _last_commit_touching(ru_path)
+        ref = _last_commit_touching(ru_path)
         if ref:
             old_en_text = _git_show(ref, en_path)
             if old_en_text is not None:
@@ -4078,7 +4302,7 @@ def run_sync(en_file: str, dry_run: bool, since: str = None):
 
     reworded, marked = [], 0
     if ru_existed:
-        ref, reworded = find_reworded_lines(en_path, ru_path, en_lines, ru_lines, pairs, force_synced, since=ref)
+        ref, reworded = find_reworded_lines(en_path, ru_path, en_lines, ru_lines, pairs, force_synced, ref=ref)
         if reworded:
             ru_lines_marked, marked = apply_stale_markers(ru_lines, reworded)
             if marked:
@@ -4230,9 +4454,46 @@ def _complete_page_or_dir_name(**kwargs):
     return sorted(names | dirs)
 
 
+def _complete_family(prefix="", **kwargs):
+    """argcomplete completer for the 'check' FAMILY positional. Returns an
+    ordered {name: description} map so the shell lists the families in
+    writing-quality-pyramid order (chars -> l10n), not sorted, and shows
+    each one's one-liner instead of a shared blob."""
+    items = dict(FAMILY_DESC)
+    items["all"] = "every family"
+    return {k: v for k, v in items.items() if k.startswith(prefix)}
+
+
+if argcomplete:
+    class _CheckCompletionFinder(argcomplete.CompletionFinder):
+        """The --<rule> flags are registered with help=SUPPRESS (so `check -h`
+        stays short), which also hides them from completion. Re-offer them
+        here, but only the ones that belong to the single family already on
+        the line -- `check l10n <TAB>` should suggest --lines/--structure/...,
+        not --no-yo."""
+
+        def collect_completions(self, active_parsers, parsed_args, cword_prefix):
+            comps = super().collect_completions(active_parsers, parsed_args, cword_prefix)
+            fams = [f for f in (getattr(parsed_args, "families", None) or []) if f in FAMILIES]
+            if len(fams) == 1:
+                for rule, targets in FAMILIES[fams[0]].items():
+                    flag = "--" + rule
+                    if flag.startswith(cword_prefix) and flag not in comps:
+                        comps.append(flag)
+                        primary = targets.get("pages") or next(iter(targets.values()))
+                        self._display_completions[flag] = SUMMARIES.get(primary, "")
+            return comps
+else:
+    _CheckCompletionFinder = None
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
-        description=__doc__,
+        prog="docs_tool.py",
+        description="Legacy flag interface (--check-<name>, --all-checks, --sync, "
+                    "--list-checks, --list-modules). Still supported. The current "
+                    "surface is 'docs_tool.py check <family>' -- run 'docs_tool.py --help' "
+                    "(no other args) or 'docs_tool.py list' for it.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     check_group = parser.add_argument_group("checks")
@@ -4243,9 +4504,9 @@ def build_parser():
     parser.add_argument("--list-checks", action="store_true", help="List available --check-* flags and exit.")
     parser.add_argument("--list-modules", action="store_true",
                         help="List every discovered module (under en/modules/ and ru/modules/) and exit.")
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="Verbose mode: show diffs (parity checks) or enable the stricter "
-                             "stopword heuristic (--check-pages-translation).")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Verbose mode: show full diffs on the parity checks (instead of "
+                             "a truncated preview) and per-hit detail on the heuristic checks.")
     page_action = parser.add_argument("--page", action="append", metavar="NAME",
                         help="Limit the per-file en/ru checks (translation, line-parity, "
                              "structure-parity, no-cyrillic, no-unicode-dashes, no-yo, "
@@ -4297,16 +4558,130 @@ def build_parser():
                                  "Heuristic aligner, not a semantic merge -- review its output before "
                                  "trusting it.")
     sync_action.completer = _complete_page_name
-    sync_group.add_argument("-n", "--dry-run", action="store_true",
+    sync_group.add_argument("--dry-run", action="store_true",
                             help="With --sync: print the diff instead of writing the RU file.")
-    sync_group.add_argument("--since", metavar="REF",
-                            help="With --sync: git ref to diff the EN file against when looking for "
-                                 "reworded (not just added) lines (default: the last commit that touched the RU file).")
     return parser
 
 
-def main():
-    global EXTERNAL_COMPONENTS, GLOSSARY, _PAGE_FILTER
+def _require_a_docs_tree():
+    """Abort unless this looks like a docs repo root. Without it, running
+    from the wrong directory scans nothing and every check reports "OK:" --
+    a clean pass over content that was never read, which is worse than an
+    error (same reasoning as the --external-root warning above)."""
+    if discover_module_names():
+        return
+    sys.exit(f"error: no {EN_MODULES_ROOT}/ or {RU_MODULES_ROOT}/ found in "
+             f"{Path.cwd()} -- run docs_tool from the docs repo root")
+
+
+def _reject_unmatched_page_filters(page_args):
+    """Abort on a --page NAME that matched no file. Running the remaining
+    rules would report "OK:" for a page that was never read, and exit 0 --
+    so a typo'd filename in a CI invocation would pass as a green run.
+    A usage error (exit 2), like a bad --target: nothing was checked, so
+    this is not a finding. UNCOMMITTED is exempt -- resolving to nothing
+    there is the normal "no .adoc changes" case, handled by the caller."""
+    explicit = [n for n in page_args if n != "UNCOMMITTED"]
+    if not explicit:
+        return
+    matched_names, matched_dirs = set(), set()
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for subdir in ("pages", "partials"):
+                for path in _iter_files(root / subdir, ".adoc"):
+                    relparts = _content_relparts_stem(path)
+                    if relparts is None:
+                        continue
+                    matched_names |= {n for n in _PAGE_FILTER["names"]
+                                      if _ends_with_parts(relparts, n)}
+                    matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
+                                     if relparts[:len(d)] == d}
+    unmatched = []
+    for name in explicit:
+        if name.endswith(".adoc"):
+            key = tuple(p for p in name[:-len(".adoc")].split("/") if p)
+            hit = key in matched_names
+        else:
+            key = tuple(p for p in name.split("/") if p)
+            hit = key in matched_dirs
+        if not hit:
+            unmatched.append(name)
+    if unmatched:
+        # Every unmatched value at once: a run with several --page typos
+        # shouldn't take one re-run per typo to discover them all.
+        for name in unmatched:
+            kind = "file" if name.endswith(".adoc") else "file under that directory"
+            print(f"error: --page {name} matched no {kind}", file=sys.stderr)
+        print("aborting -- a --page value that matches nothing would report a "
+              "clean run over a page that was never read", file=sys.stderr)
+        sys.exit(2)
+
+
+def _apply_page_filter(page_args):
+    """Turn --page NAME values into the _PAGE_FILTER global (shared by both
+    the legacy and the `check` surface). Exits 0 immediately if --page
+    UNCOMMITTED resolved to nothing, same as before."""
+    global _PAGE_FILTER
+    if not page_args:
+        return
+    names, dirs = set(), set()
+    for name in page_args:
+        if name == "UNCOMMITTED":
+            names |= {(s,) for s in _git_uncommitted_adoc_stems()}
+        elif name.endswith(".adoc"):
+            names.add(tuple(p for p in name[:-len(".adoc")].split("/") if p))
+        else:
+            dirs.add(tuple(p for p in name.split("/") if p))
+    if not names and not dirs:
+        print("OK: no uncommitted .adoc changes to check.")
+        sys.exit(0)
+    _PAGE_FILTER = {"names": names, "dirs": dirs}
+    _reject_unmatched_page_filters(page_args)
+
+
+def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):
+    """Run an ordered list of CHECKS keys, printing a header between them
+    when more than one is selected. Loads the glossary lazily if a
+    terminology check is in the set. Returns True if every check passed."""
+    global GLOSSARY
+    selected = list(selected)
+    if "pages-terminology" in selected:
+        paths = glossary_paths or _discover_default_glossaries()
+        if not paths and len(selected) > 1:
+            # Swept in as part of a multi-check run (a family, `check all`,
+            # `--all-checks`) with no glossary available -- skip it with a note
+            # rather than aborting (a bare `check terms` still errors, in the check).
+            print("note: skipping terminology check -- no --glossary and no "
+                  "*-glossary.psv in the current directory", file=sys.stderr)
+            selected = [k for k in selected if k != "pages-terminology"]
+        else:
+            if paths and not glossary_paths:
+                print(f"info: --glossary not passed -- defaulting to discovered "
+                      f"{', '.join(paths)}", file=sys.stderr)
+            GLOSSARY = _load_glossary(paths)
+
+    overall_ok = True
+    for i, name in enumerate(selected):
+        if len(selected) > 1:
+            if i:
+                print()
+            # The `check` surface labels each section the way the user would
+            # re-run it (rule ID + command); the legacy surface keeps naming
+            # the --check-* flag that selected it.
+            header = f"--check-{name}" if legacy_headers else \
+                f"{RULE_IDS[name]}  {_check_command(name)}"
+            print(f"=== {header} ===")
+        if not CHECKS[name](verbose=verbose):
+            overall_ok = False
+    return overall_ok
+
+
+def _main_legacy():
+    """The pre-subcommand CLI: `docs_tool.py --check-<name> ...`,
+    `--all-checks`, `--sync`, `--list-checks`, `--list-modules`. Still
+    supported; `docs_tool.py check <family>` is the current surface (see
+    docs/proposals/cli-redesign.md)."""
+    global EXTERNAL_COMPONENTS
     parser = build_parser()
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         # Blank out the SUPPRESS sentinel so it doesn't leak into the completion
@@ -4335,23 +4710,9 @@ def main():
         return
 
     if args.sync:
-        run_sync(args.sync, dry_run=args.dry_run, since=args.since)
+        _require_a_docs_tree()
+        run_sync(args.sync, dry_run=args.dry_run)
         return
-
-    if args.page:
-        names = set()
-        dirs = set()
-        for name in args.page:
-            if name == "UNCOMMITTED":
-                names |= {(s,) for s in _git_uncommitted_adoc_stems()}
-            elif name.endswith(".adoc"):
-                names.add(tuple(p for p in name[:-len(".adoc")].split("/") if p))
-            else:
-                dirs.add(tuple(p for p in name.split("/") if p))
-        if not names and not dirs:
-            print("OK: no uncommitted .adoc changes to check.")
-            sys.exit(0)
-        _PAGE_FILTER = {"names": names, "dirs": dirs}
 
     selected = list(CHECKS) if args.all_checks else [
         name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
@@ -4361,25 +4722,260 @@ def main():
         parser.print_help()
         sys.exit(2)
 
-    if "pages-terminology" in selected:
-        glossary_paths = args.glossary
-        if not glossary_paths:
-            glossary_paths = _discover_default_glossaries()
-            if glossary_paths:
-                print(f"info: --glossary not passed -- defaulting to discovered "
-                      f"{', '.join(glossary_paths)}", file=sys.stderr)
-        GLOSSARY = _load_glossary(glossary_paths)
+    _require_a_docs_tree()
+    _apply_page_filter(args.page)
 
-    overall_ok = True
-    for i, name in enumerate(selected):
-        if len(selected) > 1:
-            if i:
-                print()
-            print(f"=== --check-{name} ===")
-        if not CHECKS[name](verbose=args.verbose):
-            overall_ok = False
-
+    overall_ok = _run_selected(selected, args.verbose, args.glossary, legacy_headers=True)
     sys.exit(0 if overall_ok else 1)
+
+
+# --------------------------------------------------------------------------
+# `docs_tool check|show|list|sync` -- the family-based surface
+# --------------------------------------------------------------------------
+
+_V2_VERBS = ("check", "sync", "list", "show")
+
+
+def _build_v2_parser():
+    p = argparse.ArgumentParser(
+        prog="docs_tool.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = p.add_subparsers(dest="verb", required=True, metavar="{check,show,list,sync}")
+
+    c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
+                       epilog="Each family has --<rule> flags (e.g. --no-yo, --structure) "
+                              "and, where relevant, --target NAME. Run 'docs_tool list' "
+                              "for the full map.")
+    fam = c.add_argument("families", nargs="+", metavar="FAMILY",
+                   choices=list(FAMILIES) + ["all"],
+                   help="one or more of: chars, markup, refs, style, terms, l10n, all. "
+                        "--<rule> flags need exactly one family.")
+    fam.completer = _complete_family
+    for rule in _ALL_RULES:
+        c.add_argument(f"--{rule}", dest=rule.replace("-", "_"), action="store_true",
+                       help=argparse.SUPPRESS)
+    c.add_argument("--target", metavar="NAME",
+                   choices=_SCAN_TARGETS + ("all",),
+                   help="Restrict to one scan target: %s, or 'all' "
+                        "(default: pages)." % ", ".join(_SCAN_TARGETS))
+    c.add_argument("--verbose", action="store_true",
+                   help="Show full diffs and per-hit detail on the heuristic checks.")
+    pa = c.add_argument("--page", action="append", metavar="NAME",
+                        help="Limit per-file EN/RU checks to matching page(s)/"
+                             "partial(s); 'UNCOMMITTED' for the current git diff. "
+                             "Repeatable. refs always scans site-wide.")
+    pa.completer = _complete_page_or_dir_name
+    c.add_argument("--external-root", action="append", metavar="NAME=PATH",
+                   help="Resolve cross-repo refs against a local checkout, e.g. "
+                        "--external-root ADCM=../docs-adcm. Repeatable.")
+    c.add_argument("--glossary", action="append", metavar="PATH",
+                   help="Glossary file(s) for 'check terms'. Repeatable. "
+                        "Defaults to *-glossary.psv in the current directory.")
+
+    sh = sub.add_parser("show", help="One rule's full rationale, by rule name or rule ID.")
+    sh.add_argument("name", metavar="RULE", help="e.g. 'no-yo' or 'ST01'.")
+
+    ls = sub.add_parser("list", help="The family/rule map (also 'list rules' / 'list targets').")
+    ls.add_argument("what", nargs="?", metavar="[rules|targets]",
+                    help="Omit for the family tree; 'rules' / 'targets' for flat lists.")
+
+    s = sub.add_parser("sync", help="Align a RU page to its EN counterpart (beta).")
+    sy = s.add_argument("file", metavar="EN_FILE",
+                        help="EN .adoc file: full path or bare filename (resolved like --page).")
+    sy.completer = _complete_page_name
+    s.add_argument("--dry-run", action="store_true",
+                   help="Print the diff instead of writing the RU file.")
+
+    if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
+        _CheckCompletionFinder()(p)
+    return p
+
+
+def _rule_of(key):
+    """The rule name (e.g. 'no-yo') that resolves to a CHECKS key, or
+    the key itself if none maps to it directly."""
+    for rules in FAMILIES.values():
+        for rule, targets in rules.items():
+            if key in targets.values():
+                return rule
+    return key
+
+
+def _resolve_check_name(name):
+    """A rule name, a legacy CHECKS key, or a rule ID -> CHECKS key
+    (None if it matches nothing)."""
+    fam = _family_of(name)
+    if fam:
+        targets = FAMILIES[fam][name]
+        return targets.get("pages") or next(iter(targets.values()))
+    if name in CHECKS:
+        return name
+    return _ID_TO_KEY.get(name.upper())
+
+
+def _tier_of(fam):
+    return next((t for t, fams in TIERS.items() if fam in fams), None)
+
+
+def _target_of(key):
+    """The non-default scan target `--target` needs to reach a specific
+    CHECKS key (e.g. 'examples' for examples-orphaned), or None. Only
+    rules with more than one target ever need it -- a single-target
+    rule like l10n --examples is unambiguous on its own."""
+    for rules in FAMILIES.values():
+        for targets in rules.values():
+            if key not in targets.values() or len(targets) == 1:
+                continue
+            for t, k in targets.items():
+                if k == key and t != "pages":
+                    return t
+    return None
+
+
+def _check_command(key):
+    """The `check ...` command that runs one CHECKS key -- 'check terms' for
+    a single-rule family, else 'check <fam> --<rule> [--target X]'."""
+    rule = _rule_of(key)
+    fam = _family_of(rule)
+    tgt = _target_of(key)
+    if fam and len(FAMILIES[fam]) == 1:
+        base = f"check {fam}"
+    else:
+        base = f"check {fam} --{rule}"
+    return base + (f" --target {tgt}" if tgt else "")
+
+
+def _v2_list(what):
+    if what == "rules":
+        rows = sorted((RULE_IDS[k], _check_command(k),
+                       "  [beta]" if k in BETA_CHECKS else "") for k in CHECKS)
+        for rid, cmd, beta in rows:
+            print(f"{rid}  {cmd}{beta}")
+        return
+    if what == "targets":
+        print("--target values (for rules that scan more than one place):\n")
+        for t, desc in TARGET_DESC.items():
+            print(f"  {t:<10}{desc}")
+        return
+    if what == "modules":
+        print("list: module discovery moved -- use 'docs_tool.py --list-modules'", file=sys.stderr)
+        sys.exit(2)
+    if what not in (None, "families"):
+        hint = f" -- did you mean 'docs_tool show {what}'?" if _resolve_check_name(what) else ""
+        print(f"list: unknown argument '{what}' (expected: rules, targets){hint}", file=sys.stderr)
+        sys.exit(2)
+
+    for i, (fam, rules) in enumerate(FAMILIES.items()):
+        if i:
+            print()
+        disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
+        print(f"{fam}  —  {FAMILY_DESC.get(fam, '')}  (suggest: {disp})")
+        for rule, targets in rules.items():
+            primary = targets.get("pages") or next(iter(targets.values()))
+            beta = "  [beta]" if primary in BETA_CHECKS else ""
+            print(f"  {RULE_IDS[primary]:<5}--{rule:<21}{SUMMARIES[primary]}{beta}")
+            if len(targets) > 1:
+                others = [t for t in targets if t != "pages"]
+                oids = sorted({RULE_IDS[targets[t]] for t in others})
+                note = f"  [{oids[0]}–{oids[-1]}]" if len(oids) > 1 else f"  [{oids[0]}]"
+                print(f"{'':>7}{'':<21}  --target {'|'.join(others)}{note}")
+    print()
+    print("check <family> [<family> ...]  run those families")
+    print("check <family> --<rule>        run just one rule")
+    print("check all                      run everything")
+    print("show <rule|rule-id>            one rule's full rationale")
+    print("list rules | list targets      flat rule list · --target values")
+    print()
+    print("'suggest:' is advice for your pre-commit hook, not something the tool")
+    print("enforces -- every run exits 0 clean / 1 on findings, whatever the family.")
+
+
+def _v2_show(name):
+    key = _resolve_check_name(name)
+    if key is None:
+        print(f"unknown rule: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
+        sys.exit(2)
+    fam = _family_of(_rule_of(key)) or "?"
+    disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
+    beta = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
+    print(f"{RULE_IDS[key]}  {_check_command(key)}   (suggest: {disp}){beta}\n")
+    print(SUMMARIES.get(key, ""))
+    doc = (CHECKS[key].__doc__ or "").strip()
+    if doc:
+        print("\n" + "\n".join(line.strip() for line in doc.splitlines()))
+
+
+def _main_v2():
+    global EXTERNAL_COMPONENTS
+    parser = _build_v2_parser()
+    if not sys.argv[1:]:                 # bare `docs_tool.py` -> full help, exit 0
+        parser.print_help()
+        return
+    args = parser.parse_args()
+
+    if args.verb == "list":
+        return _v2_list(args.what)
+    if args.verb == "show":
+        return _v2_show(args.name)
+    if args.verb == "sync":
+        _require_a_docs_tree()
+        run_sync(args.file, dry_run=args.dry_run)
+        return
+
+    # verb == "check"
+    EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
+    glossary = args.glossary
+
+    families = list(dict.fromkeys(args.families))   # de-dup, keep order
+    picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
+
+    if picked and (len(families) != 1 or families[0] == "all"):
+        print("check: --<rule> flags need exactly one family "
+              f"(got: {' '.join(families)})", file=sys.stderr)
+        sys.exit(2)
+    bad = {rule for rule in picked if _family_of(rule) != families[0]}
+    if bad:
+        print(f"check {families[0]}: unknown flag(s) for this family: "
+              f"{', '.join('--' + b for b in sorted(bad))}", file=sys.stderr)
+        sys.exit(2)
+
+    selected = []
+    for fam in families:
+        selected += _resolve_family_selection(fam, picked, args.target)
+    seen = set()
+    selected = [k for k in selected if not (k in seen or seen.add(k))]
+    if not selected:
+        print(f"check: that selection matched no rules "
+              f"({' '.join(families)}, --target={args.target}).", file=sys.stderr)
+        sys.exit(2)
+
+    _require_a_docs_tree()
+    _apply_page_filter(args.page)
+
+    ok = _run_selected(selected, args.verbose, glossary)
+    sys.exit(0 if ok else 1)
+
+
+def main():
+    comp_line = os.environ.get("COMP_LINE")
+    if comp_line is not None:
+        # Tab-completion: route on the partial line. Prefer the subcommand
+        # parser while the first token is still empty or could become a verb
+        # (so `docs_tool <TAB>` and `docs_tool che<TAB>` complete the verbs);
+        # fall to the legacy parser only once a `-`-flag is being typed.
+        toks = comp_line.split()
+        first = toks[1] if len(toks) > 1 else ""
+        if not first or any(v.startswith(first) for v in _V2_VERBS) or first in _V2_VERBS:
+            return _main_v2()
+        return _main_legacy()
+    argv = sys.argv[1:]
+    # No args, top-level --help, or a subcommand -> the current surface.
+    # A legacy flag (--check-*, --all-checks, --list-*, --sync, --verbose ...) -> legacy.
+    if not argv or argv[0] in _V2_VERBS or argv[0] in ("-h", "--help"):
+        return _main_v2()
+    return _main_legacy()
 
 
 if __name__ == "__main__":

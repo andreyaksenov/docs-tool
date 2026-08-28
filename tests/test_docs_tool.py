@@ -67,11 +67,13 @@ class FixtureTestCase(unittest.TestCase):
 
     @staticmethod
     def run_check(check_fn, *args, **kwargs):
-        """Runs a check_*() function with stdout captured, returning
-        (ok, output_text) instead of letting findings print to the real
-        terminal."""
+        """Runs a check_*() function with stdout and stderr captured,
+        returning (ok, output_text) instead of letting findings print to
+        the real terminal. Both streams are merged: some advisory output
+        (the unchecked-component note, the glossary fallback) goes to
+        stderr, and a test asserting on it shouldn't have to care which."""
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             ok = check_fn(*args, **kwargs)
         return ok, buf.getvalue()
 
@@ -587,6 +589,138 @@ class TagsOrphanedTests(FixtureTestCase):
             self.assertTrue(ok, output)
         finally:
             shutil.rmtree(external_root, ignore_errors=True)
+
+
+class PagesOrphanedTests(FixtureTestCase):
+    """check_pages_orphaned (RF02). Reachability here means *a nav.adoc
+    entry*, deliberately -- NOT "something, somewhere links to it".
+
+    That distinction is the whole rule, so it is pinned here. Antora
+    publishes a page whether or not the nav lists it, so it is tempting to
+    read a nav-absent-but-xref'd page as a false positive and "fix" the
+    rule to count prose xrefs. Don't: a repo part-way through adding a
+    section relies on this to list what still needs wiring into the nav,
+    and counting xrefs would hide exactly that. A page linked only from
+    body text has no sidebar entry, which is the finding."""
+
+    def test_page_missing_from_nav_is_orphaned(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:listed.adoc[Listed]\n")
+        self.write("en/modules/ROOT/pages/listed.adoc", "= L\n")
+        self.write("en/modules/ROOT/pages/stray.adoc", "= S\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("stray.adoc", out)
+        self.assertNotIn("listed.adoc", out)
+
+    def test_xref_from_another_page_does_not_count_as_reachable(self):
+        """The case most likely to be mistaken for a bug -- see the class
+        docstring. A page linked from prose but absent from the nav is
+        still reported."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:index.adoc[Index]\n")
+        self.write("en/modules/ROOT/pages/index.adoc",
+                   "= I\n\nSee xref:detail.adoc[the detail page].\n")
+        self.write("en/modules/ROOT/pages/detail.adoc", "= D\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("detail.adoc", out)
+
+    def test_nested_page_matched_by_its_path_relative_to_pages(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc",
+                   "* xref:reference/sql/select.adoc[SELECT]\n")
+        self.write("en/modules/ROOT/pages/reference/sql/select.adoc", "= S\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_module_qualified_nav_entry_counts(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:howto:guide.adoc[Guide]\n")
+        self.write("en/modules/howto/pages/guide.adoc", "= G\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_component_qualified_nav_entry_counts(self):
+        """nav.adoc may spell out its own component name instead of using
+        the shorter module-qualified form."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:TEST:howto:guide.adoc[Guide]\n")
+        self.write("en/modules/howto/pages/guide.adoc", "= G\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_a_sibling_modules_nav_can_do_the_linking(self):
+        """Navs are unioned: modules cross-reference each other, so a page
+        need not be listed by its *own* module's nav."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:howto:guide.adoc[Guide]\n")
+        self.write("en/modules/howto/nav.adoc", "* xref:ROOT:index.adoc[Index]\n")
+        self.write("en/modules/howto/pages/guide.adoc", "= G\n")
+        self.write("en/modules/ROOT/pages/index.adoc", "= I\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_nav_entry_inside_an_included_partial_counts(self):
+        """_combined_nav_text flattens include::partial$...[] first."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "include::partial$nav-extra.adoc[]\n")
+        self.write("en/modules/ROOT/partials/nav-extra.adoc", "* xref:deep.adoc[Deep]\n")
+        self.write("en/modules/ROOT/pages/deep.adoc", "= D\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_start_page_is_exempt(self):
+        """antora.yml's start_page is the component's entry point, so it
+        needs no nav entry of its own."""
+        self.write("en/antora.yml",
+                   "name: TEST\nversion: '1.0'\nstart_page: ROOT:home.adoc\n")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:other.adoc[Other]\n")
+        self.write("en/modules/ROOT/pages/home.adoc", "= H\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "= O\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_pdf_glossary_layout_page_is_exempt(self):
+        """:page-layout: pdf-glossary marks a page built for the PDF only,
+        which is intentionally absent from the site nav."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:other.adoc[Other]\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "= O\n")
+        self.write("en/modules/ROOT/pages/glossary.adoc",
+                   "= G\n:page-layout: pdf-glossary\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_a_language_with_no_nav_at_all_is_skipped(self):
+        """No nav to compare against means no evidence either way -- every
+        page would otherwise be reported."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc", "= P\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_en_and_ru_are_both_scanned(self):
+        self.antora_yml("en", "TEST")
+        self.antora_yml("ru", "TEST")
+        for lang in ("en", "ru"):
+            self.write(f"{lang}/modules/ROOT/nav.adoc", "* xref:listed.adoc[L]\n")
+            self.write(f"{lang}/modules/ROOT/pages/listed.adoc", "= L\n")
+        self.write("ru/modules/ROOT/pages/zabytaya.adoc", "= Z\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("zabytaya.adoc", out)
 
 
 class PartialsOrphanedTests(FixtureTestCase):
@@ -1138,9 +1272,9 @@ class PagesTranslationTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_translation)
         self.assertTrue(ok, output)
 
-    def test_verbose_stopword_flagging(self):
-        """A leftover English stopword inside otherwise-Russian text is only
-        flagged under the stricter -v/verbose heuristic."""
+    def test_stopword_flagging_is_always_on(self):
+        """A leftover English stopword inside otherwise-Russian text is
+        flagged on a plain run; --verbose only appends the matched word."""
         self.write(
             "en/modules/ROOT/pages/page.adoc",
             "This paragraph explains the new caching behavior in detail.\n",
@@ -1149,12 +1283,15 @@ class PagesTranslationTests(FixtureTestCase):
             "ru/modules/ROOT/pages/page.adoc",
             "Этот абзац объясняет and новое поведение кэширования.\n",
         )
-        ok, _ = self.run_check(dt.check_pages_translation, verbose=False)
-        self.assertTrue(ok)
+        ok, output = self.run_check(dt.check_pages_translation, verbose=False)
+        self.assertFalse(ok)
+        self.assertIn("SUSPECT", output)
+        self.assertNotIn("[and]", output)
 
         ok, output = self.run_check(dt.check_pages_translation, verbose=True)
         self.assertFalse(ok)
         self.assertIn("SUSPECT", output)
+        self.assertIn("[and]", output)
 
     def test_description_attribute_untranslated_is_flagged(self):
         """:description:/:page-htmltitle: are ":"-prefixed structural
@@ -1372,6 +1509,21 @@ class PagesTerminologyTests(FixtureTestCase):
         dt.GLOSSARY = {}
         with self.assertRaises(SystemExit):
             dt.check_pages_terminology()
+
+    def test_missing_glossary_in_multi_check_run_skips_not_aborts(self):
+        """`check all` / `--all-checks` / a profile sweeps terminology in; with
+        no glossary it must be dropped with a note, not abort the run."""
+        self.write("ru/modules/ROOT/pages/page.adoc", "Обычный текст.\n")
+        cwd = os.getcwd()
+        os.chdir(self._tmpdir)  # away from this repo's own greengagedb-glossary.psv
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                ok = dt._run_selected(["pages-no-yo", "pages-terminology"], False, None)
+        finally:
+            os.chdir(cwd)
+        self.assertTrue(ok)
+        self.assertIn("skipping terminology check", err.getvalue())
 
     def test_correct_translation_passes(self):
         self._set_glossary("host|хост|хост<>")
@@ -1766,14 +1918,16 @@ class MainPageValueFormTests(unittest.TestCase):
     """CLI-level routing in main(): a --page NAME ending in .adoc is a file
     filter, one that doesn't is a directory filter (AsciiDoc/Antora has no
     separate topic-id, so there's no ambiguity to worry about), and
-    UNCOMMITTED is still the special sentinel. This routing happens before
-    any filesystem/module scanning, so no fixture tree is needed -- just
-    isolate real argv/cwd and the _PAGE_FILTER global."""
+    UNCOMMITTED is still the special sentinel. Only the --page parsing is
+    under test, but a bare en/modules/ROOT still has to exist: a check run
+    from a directory with no docs tree is refused outright (see
+    _require_a_docs_tree)."""
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_main_page_")
         self._orig_cwd = os.getcwd()
         os.chdir(self._tmpdir)
+        (Path(self._tmpdir) / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
         self._orig_argv = sys.argv
         self._orig_page_filter = dt._PAGE_FILTER
 
@@ -1786,7 +1940,7 @@ class MainPageValueFormTests(unittest.TestCase):
     def test_name_with_adoc_suffix_becomes_a_file_filter(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups.adoc"]
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 dt.main()
         self.assertEqual(dt._PAGE_FILTER, {"names": {("resource_groups",)}, "dirs": set()})
@@ -1794,7 +1948,7 @@ class MainPageValueFormTests(unittest.TestCase):
     def test_bare_name_becomes_a_directory_filter(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands"]
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 dt.main()
         self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
@@ -1802,7 +1956,7 @@ class MainPageValueFormTests(unittest.TestCase):
     def test_trailing_slash_on_directory_is_ignored(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands/"]
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 dt.main()
         self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
@@ -1868,6 +2022,194 @@ class CompletePageNameTests(FixtureTestCase):
         })
 
 
+class SkippedComponentReportTests(FixtureTestCase):
+    """A reference into a component with no --external-root is left
+    unchecked, not reported broken. Name those components: a run that never
+    looked at one otherwise reads exactly like a run that verified it --
+    the same silent-clean-pass the --external-root warning already guards
+    against for a *wrong* path, here for an *omitted* one."""
+
+    def setUp(self):
+        super().setUp()
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:docs-backup::intro.adoc[Backup]\n"
+                   "xref:blog::post.adoc[Post]\n")
+
+    def test_unregistered_components_are_named(self):
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, out)          # left unchecked, not broken
+        self.assertIn("docs-backup", out)
+        self.assertIn("blog", out)
+        self.assertIn("--external-root", out)
+
+    def test_nothing_reported_when_every_reference_resolves_locally(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "xref:other.adoc[O]\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "= O\n")
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, out)
+        self.assertNotIn("left unchecked", out)
+
+    def test_a_registered_component_is_not_reported(self):
+        ext = Path(self._tmpdir) / "sibling"
+        (ext / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
+        (ext / "en/modules/ROOT/pages/intro.adoc").write_text("= I\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components(
+            [f"docs-backup={ext}"])
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertNotIn("docs-backup", out)
+        self.assertIn("blog", out)        # the still-unregistered one remains
+
+    def test_the_set_does_not_leak_between_runs(self):
+        """Cleared per scan -- otherwise `check all` would attribute one
+        rule's skips to a later rule that never saw them."""
+        self.run_check(dt.check_pages_broken_refs)
+        self.write("en/modules/ROOT/pages/page.adoc", "= no refs here\n")
+        _, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertNotIn("docs-backup", out)
+
+
+class NoDocsTreeTests(unittest.TestCase):
+    """A check run from a directory with no en/modules or ru/modules must
+    refuse to run. Scanning nothing and reporting "OK:" for every rule is a
+    clean pass over content that was never read -- the failure mode that
+    silently green-lights a CI job pointed at the wrong directory."""
+
+    def setUp(self):
+        self._argv, self._cwd = sys.argv, os.getcwd()
+        self._tmp = tempfile.mkdtemp(prefix="docs_tool_notree_")
+        os.chdir(self._tmp)
+
+    def tearDown(self):
+        sys.argv, _ = self._argv, os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _run(self, *args):
+        sys.argv = ["docs_tool.py", *args]
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, out.getvalue() + err.getvalue() + (str(code) if code else "")
+
+    def test_check_refuses_without_a_docs_tree(self):
+        code, out = self._run("check", "all")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("OK:", out)
+
+    def test_legacy_check_refuses_too(self):
+        code, out = self._run("--all-checks")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("OK:", out)
+
+    def test_list_and_show_still_work_anywhere(self):
+        """They describe the rule set, not the content -- no tree needed."""
+        self.assertEqual(self._run("list")[0], 0)
+        self.assertEqual(self._run("show", "ST01")[0], 0)
+
+    def test_usage_errors_still_win_over_the_tree_check(self):
+        """A bad family is a usage error wherever it's typed -- the user
+        should get that, not a complaint about the working directory."""
+        code, out = self._run("check", "nosuchfamily")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuchfamily", out)
+
+
+class UnmatchedPageRejectionTests(FixtureTestCase):
+    """--page NAME that matches nothing aborts the run (exit 2). Letting it
+    through would report "OK:" and exit 0 for a page that was never read,
+    so a typo in a CI invocation would pass as a green run."""
+
+    def setUp(self):
+        super().setUp()
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/reference/vacuum.adoc", "= T\n")
+
+    def _filter(self, *pages):
+        """Returns (exit_code_or_None, stderr) for _apply_page_filter."""
+        err = io.StringIO()
+        code = None
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            try:
+                dt._apply_page_filter(list(pages))
+            except SystemExit as e:
+                code = e.code
+        return code, err.getvalue()
+
+    def test_unknown_filename_aborts(self):
+        code, err = self._filter("nosuch.adoc")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuch.adoc", err)
+
+    def test_unknown_directory_aborts(self):
+        code, err = self._filter("nosuchdir")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuchdir", err)
+
+    def test_real_filename_passes_through(self):
+        self.assertEqual(self._filter("vacuum.adoc"), (None, ""))
+
+    def test_real_directory_passes_through(self):
+        self.assertEqual(self._filter("reference"), (None, ""))
+
+    def test_one_bad_value_aborts_even_alongside_a_good_one(self):
+        code, err = self._filter("vacuum.adoc", "nosuch.adoc")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuch.adoc", err)
+        self.assertNotIn("--page vacuum.adoc", err)
+
+    def test_every_unmatched_value_is_reported_at_once(self):
+        """One re-run per typo would be a poor trade for a one-line loop."""
+        code, err = self._filter("nosuch.adoc", "alsonot.adoc")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuch.adoc", err)
+        self.assertIn("alsonot.adoc", err)
+
+
+@unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
+class CheckRuleCompletionTests(unittest.TestCase):
+    """`check <family> <TAB>` should offer that one family's --<rule> flags
+    (which are help=SUPPRESS, so otherwise hidden), and nothing from other
+    families."""
+
+    DT = str(Path(__file__).resolve().parent.parent / "docs_tool.py")
+
+    def _complete(self, line):
+        tmp = tempfile.mktemp()
+        env = {**os.environ, "_ARGCOMPLETE": "1", "_ARGCOMPLETE_SHELL": "zsh",
+               "_ARGCOMPLETE_SUPPRESS_SPACE": "1", "ARGCOMPLETE_USE_TEMPFILES": "1",
+               "_ARGCOMPLETE_STDOUT_FILENAME": tmp,
+               "COMP_LINE": line, "COMP_POINT": str(len(line))}
+        subprocess.run([sys.executable, self.DT], env=env, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            raw = Path(tmp).read_text()
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+        return {c.split(":", 1)[0] for c in raw.split("\013") if c}
+
+    def test_family_scopes_rule_flags(self):
+        comps = self._complete("docs_tool.py check l10n ")
+        self.assertLessEqual({"--lines", "--structure", "--untranslated",
+                              "--examples", "--nav"}, comps)
+        self.assertNotIn("--no-yo", comps)      # a style rule
+        self.assertNotIn("--backticks", comps)  # a markup rule
+
+    def test_no_rule_flags_before_a_family_is_chosen(self):
+        comps = self._complete("docs_tool.py check ")
+        self.assertNotIn("--structure", comps)
+        self.assertIn("l10n", comps)            # families still offered
+
+    def test_no_rule_flags_with_two_families(self):
+        comps = self._complete("docs_tool.py check chars markup ")
+        self.assertNotIn("--no-cyrillic", comps)
+        self.assertNotIn("--backticks", comps)
+
+
 class RunSyncGitRewordTests(unittest.TestCase):
     """Integration test for the git-backed reworded-paragraph detection in
     run_sync: an EN paragraph reworded (not just extended) since RU was last
@@ -1916,6 +2258,265 @@ class RunSyncGitRewordTests(unittest.TestCase):
         self.assertIn("This paragraph now explains caching in a completely different way.", result)
         self.assertIn("// STALE VERSION:", result)
         self.assertIn("Это оригинальное объяснение поведения кэширования.", result)
+
+
+class FamilySelectionTests(unittest.TestCase):
+    """_resolve_family_selection: the routing layer that maps
+    `check <family> [--rule] [--target]` to legacy CHECKS keys."""
+
+    def test_every_family_and_rule_maps_to_a_real_check(self):
+        for fam, rules in dt.FAMILIES.items():
+            for rule, targets in rules.items():
+                for key in targets.values():
+                    self.assertIn(key, dt.CHECKS, f"{fam} --{rule} -> {key}")
+
+    def test_all_22_checks_are_reachable_through_some_family(self):
+        reachable = {k for subs in dt.FAMILIES.values()
+                     for t in subs.values() for k in t.values()}
+        self.assertEqual(reachable, set(dt.CHECKS))
+
+    def test_rule_names_are_unique_across_families(self):
+        seen = [rule for rules in dt.FAMILIES.values() for rule in rules]
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_whole_family_runs_every_target(self):
+        self.assertEqual(
+            set(dt._resolve_family_selection("style", None, None)),
+            {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods"},
+        )
+        self.assertEqual(
+            set(dt._resolve_family_selection("refs", None, None)),
+            {"pages-broken-refs", "pages-orphaned", "partials-orphaned",
+             "examples-orphaned", "images-orphaned", "tags-orphaned"},
+        )
+
+    def test_rule_without_target_defaults_to_pages(self):
+        self.assertEqual(
+            dt._resolve_family_selection("chars", {"no-cyrillic"}, None),
+            ["pages-no-cyrillic"],
+        )
+
+    def test_rule_with_target_picks_it(self):
+        self.assertEqual(
+            dt._resolve_family_selection("chars", {"no-cyrillic"}, "examples"),
+            ["examples-no-cyrillic"],
+        )
+
+    def test_target_all_expands_every_target(self):
+        self.assertEqual(
+            set(dt._resolve_family_selection("chars", {"no-cyrillic"}, "all")),
+            {"pages-no-cyrillic", "examples-no-cyrillic"},
+        )
+
+    def test_target_filters_whole_family(self):
+        self.assertEqual(
+            dt._resolve_family_selection("refs", None, "images"),
+            ["images-orphaned"],
+        )
+
+    def test_family_all_spans_every_family(self):
+        self.assertEqual(
+            set(dt._resolve_family_selection("all", None, None)),
+            set(dt.CHECKS),
+        )
+
+    def test_no_matching_target_yields_empty(self):
+        self.assertEqual(dt._resolve_family_selection("style", None, "images"), [])
+
+    def test_selection_is_deduplicated_and_ordered(self):
+        got = dt._resolve_family_selection("all", None, None)
+        self.assertEqual(len(got), len(set(got)))
+
+    def test_family_of(self):
+        self.assertEqual(dt._family_of("no-yo"), "style")
+        self.assertEqual(dt._family_of("structure"), "l10n")
+        self.assertIsNone(dt._family_of("nonsense"))
+
+
+class CliV2RoutingTests(unittest.TestCase):
+    """main() dispatch: `check|sync|list` route to the new surface,
+    everything else stays on the legacy --check-* parser."""
+
+    def setUp(self):
+        self._argv = sys.argv
+        self._pf = dt._PAGE_FILTER
+        self._tmp = tempfile.mkdtemp(prefix="docs_tool_cli_")
+        self._cwd = os.getcwd()
+        os.chdir(self._tmp)
+        # Enough of a tree for _require_a_docs_tree to let a check run --
+        # these tests are about routing, not findings, so it stays empty.
+        (Path(self._tmp) / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
+
+    def tearDown(self):
+        sys.argv = self._argv
+        dt._PAGE_FILTER = self._pf
+        os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _run(self, *args):
+        sys.argv = ["docs_tool.py", *args]
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_list_prints_the_family_map(self):
+        code, out, _ = self._run("list")
+        self.assertEqual(code, 0)
+        self.assertIn("chars", out)
+        self.assertIn("--no-yo", out)
+        self.assertIn("CH01", out)
+        self.assertIn("no Cyrillic", out)          # a SUMMARIES blurb
+        self.assertNotIn("pages-no-cyrillic", out) # no legacy-key line in the tree
+
+    def test_show_rule_prints_its_rationale(self):
+        code, out, _ = self._run("show", "no-yo")
+        self.assertEqual(code, 0)
+        self.assertIn("ST01", out)
+        self.assertIn("check style --no-yo", out)
+        self.assertIn("ё", out)                    # from the docstring
+
+    def test_show_rule_id_case_insensitive(self):
+        code, out, _ = self._run("show", "ln02")
+        self.assertEqual(code, 0)
+        self.assertIn("check l10n --structure", out)
+
+    def test_show_unknown_name_errors(self):
+        code, _, err = self._run("show", "not-a-rule")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown rule", err)
+
+    def test_list_with_a_rule_name_hints_at_show(self):
+        code, _, err = self._run("list", "no-yo")
+        self.assertEqual(code, 2)
+        self.assertIn("show no-yo", err)
+
+    def test_list_modules_points_at_legacy_flag(self):
+        code, _, err = self._run("list", "modules")
+        self.assertEqual(code, 2)
+        self.assertIn("--list-modules", err)
+
+    def test_list_targets(self):
+        code, out, _ = self._run("list", "targets")
+        self.assertEqual(code, 0)
+        self.assertIn("pages", out)
+        self.assertIn("nav.adoc", out)
+        for t in dt._SCAN_TARGETS + ("all",):
+            self.assertIn(t, out)
+
+    def test_check_requires_a_family(self):
+        code, _, err = self._run("check")
+        self.assertEqual(code, 2)
+        self.assertIn("FAMILY", err)  # argparse: "the following arguments are required: FAMILY"
+
+    def test_check_accepts_multiple_families(self):
+        code, out, err = self._run("check", "chars", "markup")
+        self.assertEqual(code, 0, err)   # no fixture tree -> nothing found
+
+    def test_rule_with_multiple_families_is_rejected(self):
+        code, _, err = self._run("check", "chars", "markup", "--backticks")
+        self.assertEqual(code, 2)
+        self.assertIn("exactly one family", err)
+
+    def test_wrong_rule_for_family_is_rejected(self):
+        code, _, err = self._run("check", "chars", "--no-yo")
+        self.assertEqual(code, 2)
+        self.assertIn("--no-yo", err)
+
+    def test_check_sets_page_filter_then_runs(self):
+        # The page has to exist -- an unmatched --page is a usage error now
+        # (see UnmatchedPageRejectionTests). It stays empty: this is about
+        # routing and --page parsing, not findings.
+        for lang in ("en", "ru"):
+            d = Path(self._tmp) / lang / "modules/ROOT/pages"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "foo.adoc").write_text("= T\n")
+        code, out, _ = self._run("check", "l10n", "--structure", "--page", "foo.adoc")
+        self.assertEqual(dt._PAGE_FILTER, {"names": {("foo",)}, "dirs": set()})
+        self.assertEqual(code, 0)
+
+    def test_target_flag_is_accepted(self):
+        code, _, err = self._run("check", "refs", "--orphaned", "--target", "images")
+        self.assertEqual(code, 0, err)
+
+    def test_bad_target_value_is_rejected(self):
+        code, _, err = self._run("check", "chars", "--target", "bogus")
+        self.assertEqual(code, 2)
+        self.assertIn("bogus", err)
+
+    def test_legacy_flags_still_route_to_legacy(self):
+        code, out, _ = self._run("--check-pages-no-yo")
+        self.assertEqual(code, 0)
+        self.assertIn("OK:", out)
+
+    def test_multi_rule_run_headers_name_the_rule_not_the_registry_key(self):
+        """Section headers are what the user would type to re-run just that
+        rule -- internal CHECKS keys (pages-no-cyrillic) are not a surface."""
+        code, out, _ = self._run("check", "chars")
+        self.assertIn("=== CH01  check chars --no-cyrillic ===", out)
+        self.assertIn("=== CH02  check chars --no-cyrillic --target examples ===", out)
+        self.assertNotIn("=== pages-no-cyrillic ===", out)
+
+    def test_legacy_run_headers_still_name_the_legacy_flag(self):
+        code, out, _ = self._run("--check-pages-no-yo", "--check-pages-no-cyrillic")
+        self.assertIn("=== --check-pages-no-yo ===", out)
+
+    def test_list_rules_prints_commands_sorted_by_id(self):
+        code, out, _ = self._run("list", "rules")
+        self.assertEqual(code, 0)
+        self.assertIn("CH01  check chars --no-cyrillic", out)
+        self.assertIn("RF04  check refs --orphaned --target examples", out)
+        self.assertIn("TM01  check terms", out)
+        self.assertNotIn("pages-no-cyrillic", out)   # no internal registry keys
+        lines = [l for l in out.splitlines() if l[:2] in ("CH", "MK", "RF", "ST", "TM", "LN")]
+        self.assertEqual(lines, sorted(lines))
+
+    def test_bare_invocation_prints_the_new_surface(self):
+        code, out, _ = self._run()
+        self.assertEqual(code, 0)
+        self.assertIn("check <family>", out)
+        self.assertIn("{check,show,list,sync}", out)
+
+    def test_top_level_help_routes_to_new_surface(self):
+        code, out, _ = self._run("--help")
+        self.assertEqual(code, 0)
+        self.assertIn("check <family>", out)
+
+    def test_legacy_flag_still_gets_legacy_help(self):
+        code, out, _ = self._run("--all-checks", "--help")
+        self.assertEqual(code, 0)
+        self.assertIn("Legacy flag interface", out)
+
+
+class RuleIdRegistryTests(unittest.TestCase):
+    def test_every_check_has_a_unique_id(self):
+        self.assertEqual(set(dt.RULE_IDS), set(dt.CHECKS))
+        self.assertEqual(len(set(dt.RULE_IDS.values())), len(dt.CHECKS))
+
+    def test_ids_are_family_prefixed(self):
+        prefix = {"chars": "CH", "markup": "MK", "refs": "RF",
+                  "style": "ST", "terms": "TM", "l10n": "LN"}
+        for fam, subs in dt.FAMILIES.items():
+            for targets in subs.values():
+                for key in targets.values():
+                    self.assertTrue(dt.RULE_IDS[key].startswith(prefix[fam]),
+                                    f"{key} -> {dt.RULE_IDS[key]} (family {fam})")
+
+    def test_show_accepts_an_id(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dt._v2_show("ST01")
+        self.assertIn("check style --no-yo", out.getvalue())
+
+    def test_resolve_check_name(self):
+        self.assertEqual(dt._resolve_check_name("no-yo"), "pages-no-yo")
+        self.assertEqual(dt._resolve_check_name("LN02"), "pages-structure-parity")
+        self.assertEqual(dt._resolve_check_name("examples-orphaned"), "examples-orphaned")
+        self.assertIsNone(dt._resolve_check_name("nonsense"))
 
 
 if __name__ == "__main__":
