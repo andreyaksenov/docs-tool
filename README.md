@@ -53,10 +53,13 @@ Rules are grouped into seven **families**:
 ./docs_tool.py check style                   # the whole style family
 ./docs_tool.py check style --no-yo           # narrow to one rule
 ./docs_tool.py check chars markup            # several families
-./docs_tool.py check all                     # every family except links (network)
-./docs_tool.py check links                   # external links, on their own
+./docs_tool.py check chars markup refs style terms l10n   # all the offline families
+./docs_tool.py check links                   # external links, on their own (network)
 ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
 ```
+
+There is no `check all` — name the families you want. `links` reaches the network
+and only runs when you ask for it by name.
 
 `--target NAME` picks a scan target other than the default `pages` (`pages/` +
 `partials/`) — see `list targets`.
@@ -133,8 +136,8 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `LN05` | `check l10n --nav` | EN/RU nav differs |
 | `LK01` | `check links` | dead / redirected external links |
 
-`check all` runs every family **except `links`** — that one reaches the network,
-so it only runs when you name it.
+Name the families you want to run — there's no "run everything" keyword. `links`
+reaches the network and only runs when named.
 
 ### `chars` — Unicode / encoding
 
@@ -315,8 +318,9 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   `.docs_tool_link_cache.json` (git-ignore it). Honours `--page`.
 
   This is the only check that touches the network — slow, non-deterministic, and
-  connectivity-dependent — so **`check all` never includes it**; run it explicitly,
-  on its own schedule (a nightly job, not a pre-commit hook).
+  connectivity-dependent — so it only runs when you name it (`check links`), on its
+  own schedule (a nightly job, not a pre-commit hook). The legacy `--all-checks`
+  sweep skips it too.
 
   **Two classes print by default**, because they're the two you fix in the source:
 

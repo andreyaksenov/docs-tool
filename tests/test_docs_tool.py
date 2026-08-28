@@ -1525,7 +1525,7 @@ class PagesTerminologyTests(FixtureTestCase):
             dt.check_pages_terminology()
 
     def test_missing_glossary_in_multi_check_run_skips_not_aborts(self):
-        """`check all` / `--all-checks` / a profile sweeps terminology in; with
+        """A multi-family `check` or `--all-checks` sweeps terminology in; with
         no glossary it must be dropped with a note, not abort the run."""
         self.write("ru/modules/ROOT/pages/page.adoc", "Обычный текст.\n")
         cwd = os.getcwd()
@@ -2075,7 +2075,7 @@ class SkippedComponentReportTests(FixtureTestCase):
         self.assertIn("blog", out)        # the still-unregistered one remains
 
     def test_the_set_does_not_leak_between_runs(self):
-        """Cleared per scan -- otherwise `check all` would attribute one
+        """Cleared per scan -- otherwise a multi-rule run would attribute one
         rule's skips to a later rule that never saw them."""
         self.run_check(dt.check_pages_broken_refs)
         self.write("en/modules/ROOT/pages/page.adoc", "= no refs here\n")
@@ -2307,7 +2307,7 @@ class NoDocsTreeTests(unittest.TestCase):
         return code, out.getvalue() + err.getvalue() + (str(code) if code else "")
 
     def test_check_refuses_without_a_docs_tree(self):
-        code, out = self._run("check", "all")
+        code, out = self._run("check", "chars", "markup", "refs", "style", "terms", "l10n")
         self.assertNotEqual(code, 0)
         self.assertNotIn("OK:", out)
 
@@ -2525,14 +2525,14 @@ class FamilySelectionTests(unittest.TestCase):
             ["images-orphaned"],
         )
 
-    def test_family_all_spans_every_non_network_family(self):
+    def test_none_family_spans_every_non_network_family(self):
         self.assertEqual(
-            set(dt._resolve_family_selection("all", None, None)),
+            set(dt._resolve_family_selection(None, None, None)),
             set(dt.CHECKS) - dt._NETWORK_ONLY_CHECKS,
         )
 
-    def test_all_excludes_network_families_but_naming_one_still_works(self):
-        self.assertNotIn("links-external", dt._resolve_family_selection("all", None, None))
+    def test_network_family_only_runs_when_named(self):
+        self.assertNotIn("links-external", dt._resolve_family_selection(None, None, None))
         self.assertEqual(dt._resolve_family_selection("links", None, None), ["links-external"])
         self.assertEqual(
             dt._resolve_family_selection("links", {"external"}, None), ["links-external"])
@@ -2541,7 +2541,7 @@ class FamilySelectionTests(unittest.TestCase):
         self.assertEqual(dt._resolve_family_selection("style", None, "images"), [])
 
     def test_selection_is_deduplicated_and_ordered(self):
-        got = dt._resolve_family_selection("all", None, None)
+        got = dt._resolve_family_selection(None, None, None)
         self.assertEqual(len(got), len(set(got)))
 
     def test_family_of(self):

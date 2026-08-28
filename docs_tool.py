@@ -17,8 +17,9 @@ Commands:
 Rules are grouped into seven families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
 resolution), style (house style), terms (glossary), l10n (EN<->RU parity),
-links (external URL health). `links` reaches the network, so it runs only
-when named -- `check all` never includes it.
+links (external URL health). Name one or more to run them; there is no
+"run everything" keyword -- `links` reaches the network and is only ever
+run on an explicit `check links`.
 
 %RULES%
 "docs_tool.py show <id>" explains one rule and gives runnable examples for it;
@@ -3566,9 +3567,8 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
 # The one check in this file that touches the network: every http(s) link in
 # pages/ and partials/ is fetched and its status classified (404, redirect,
 # unreachable host, ...). Because it is slow, non-deterministic, and needs
-# connectivity, it is deliberately kept OUT of `check all` / `--all-checks`
-# (see _NETWORK_ONLY_CHECKS) -- it only ever runs on an explicit
-# `check links`. Findings are advisory (marked [beta]): a link that 403s a
+# connectivity, it is deliberately kept OUT of `--all-checks` (see
+# _NETWORK_ONLY_CHECKS) -- it only ever runs on an explicit `check links`. Findings are advisory (marked [beta]): a link that 403s a
 # datacenter IP or times out from a CI box is far more often the network in
 # between than a genuinely dead page, so only a hard 404/410 (or an NXDOMAIN
 # host) is counted as a failure; everything else is reported for a human to
@@ -4085,10 +4085,11 @@ BETA_CHECKS = {
     "links-external",   # not heuristic parsing, but network flakiness makes it advisory
 }
 
-# Checks that reach the network. Excluded from `check all` / `--all-checks`
-# (a pre-commit hook or CI sweep must not fan out hundreds of HTTP requests
-# just because it asked for "everything") -- they only run when named
-# explicitly, e.g. `check links`.
+# Checks that reach the network. Excluded from the legacy `--all-checks`
+# sweep (a pre-commit hook or CI job must not fan out hundreds of HTTP
+# requests just because it asked for "everything"); on the `check` surface
+# there is no "everything" keyword at all, so a network family only ever
+# runs when named (`check links`).
 _NETWORK_ONLY_CHECKS = {"links-external"}
 _NETWORK_FAMILIES = {"links"}
 
@@ -4151,7 +4152,7 @@ FAMILIES = {
         "examples":     {"examples": "examples-parity"},
         "nav":          {"nav": "nav-structure-parity"},
     },
-    "links": {                        # L6 -- the open web (network; opt-in, not in `check all`)
+    "links": {                        # L6 -- the open web (network; runs only when named)
         "external": {"pages": "links-external"},
     },
 }
@@ -4381,14 +4382,12 @@ def _family_of(rule):
 
 def _resolve_family_selection(family, picked_rules, target):
     """Map a `check` invocation to an ordered, de-duplicated list of CHECKS
-    keys. `family` may be None/"all" for every family; `picked_rules` is
-    a set (empty = whole family); `target` is a scan target, "all", or None.
-    See the selection rules above FAMILIES.
-
-    `all` deliberately skips the network families (see _NETWORK_FAMILIES):
-    a sweep that asked for "everything" must not silently start making HTTP
-    requests -- `check links` is always explicit."""
-    if family in (None, "all"):
+    keys. `family` is one FAMILIES key, or None for every non-network family
+    (network families are only ever run when named -- there is no "all"
+    keyword on this surface); `picked_rules` is a set (empty = whole
+    family); `target` is a scan target, "all", or None. See the selection
+    rules above FAMILIES."""
+    if family is None:
         fams = [f for f in FAMILIES if f not in _NETWORK_FAMILIES]
     else:
         fams = [family]
@@ -5097,11 +5096,9 @@ def _complete_page_or_dir_name(**kwargs):
 def _complete_family(prefix="", **kwargs):
     """argcomplete completer for the 'check' FAMILY positional. Returns an
     ordered {name: description} map so the shell lists the families in
-    writing-quality-pyramid order (chars -> l10n), not sorted, and shows
+    writing-quality-pyramid order (chars -> links), not sorted, and shows
     each one's one-liner instead of a shared blob."""
-    items = dict(FAMILY_DESC)
-    items["all"] = "every family"
-    return {k: v for k, v in items.items() if k.startswith(prefix)}
+    return {k: v for k, v in FAMILY_DESC.items() if k.startswith(prefix)}
 
 
 if argcomplete:
@@ -5289,7 +5286,7 @@ def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):
     if "pages-terminology" in selected:
         paths = glossary_paths or _discover_default_glossaries()
         if not paths and len(selected) > 1:
-            # Swept in as part of a multi-check run (a family, `check all`,
+            # Swept in as part of a multi-check run (a multi-family `check`,
             # `--all-checks`) with no glossary available -- skip it with a note
             # rather than aborting (a bare `check terms` still errors, in the check).
             print("note: skipping terminology check -- no --glossary and no "
@@ -5431,8 +5428,8 @@ def _build_v2_parser():
                               "for the full map, or 'docs_tool show <rule>' for one "
                               "rule's rationale and worked examples.")
     fam = c.add_argument("families", nargs="+", metavar="FAMILY",
-                   choices=list(FAMILIES) + ["all"],
-                   help="one or more of: chars, markup, refs, style, terms, l10n, all. "
+                   choices=list(FAMILIES),
+                   help="one or more of: chars, markup, refs, style, terms, l10n, links. "
                         "--<rule> flags need exactly one family.")
     fam.completer = _complete_family
     for rule in _ALL_RULES:
@@ -5567,7 +5564,6 @@ def _v2_list(what):
     print()
     print("check <family> [<family> ...]  run those families")
     print("check <family> --<rule>        run just one rule")
-    print("check all                      every family except links (network)")
     print("show <rule|rule-id>            one rule's rationale + examples")
     print("show all                       every rule, with examples")
     print("list rules | list targets      flat rule list · --target values")
@@ -5647,7 +5643,7 @@ def _main_v2():
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
     picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
 
-    if picked and (len(families) != 1 or families[0] == "all"):
+    if picked and len(families) != 1:
         print("check: --<rule> flags need exactly one family "
               f"(got: {' '.join(families)})", file=sys.stderr)
         sys.exit(2)

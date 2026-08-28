@@ -53,10 +53,10 @@ in a file whose markup does not parse.
 - **house** (style, terms) — per-vendor rules → warn by default
 - **relational** (l10n) — needs both trees aligned → warn by default
 - **external** (links) — reaches the network: slow, non-deterministic, connectivity-dependent →
-  warn, and **excluded from `check all` / `--all-checks`**. Added after the initial six
-  families; runs only when named explicitly (`check links`), on its own schedule (a nightly
-  job, never a pre-commit hook). Only a hard `404`/`410` or a non-resolving host fails the
-  run; redirects, `403`s, timeouts, and geo/VPN-blocked hosts are reported as a review list.
+  warn, and **runs only when named** (`check links`); the legacy `--all-checks` sweep skips
+  it. Added after the initial six families; belongs on its own schedule (a nightly job, never
+  a pre-commit hook). Only a hard `404`/`410` or a non-resolving host fails the run; redirects,
+  `403`s, timeouts, and geo/VPN-blocked hosts are reported as a review list.
 
 ### Why `terms` is its own family
 
@@ -91,7 +91,6 @@ Selection rules:
 | Invocation | Runs |
 |---|---|
 | `check <family> [<family> ...]` | every rule in each family, all scan targets |
-| `check all` | every family except `links` (network) |
 | `check <family> --<rule>` | that rule, target `pages` (or its sole target) — one family only |
 | `check <family> --<rule> --target X` | that rule, target `X` |
 | `check <family> --target X` | every rule in the family that has a target `X` |
@@ -110,9 +109,13 @@ docs_tool check refs --orphaned --target all   # every orphan target, no broken-
 docs_tool check style              # the Arenadata house-style set
 docs_tool check terms              # glossary check (needs a *-glossary.psv)
 docs_tool check l10n               # all EN<->RU drift checks
-docs_tool check all                # every family except links (network)
-docs_tool check links              # external URL health — opt-in, run on its own
+docs_tool check links              # external URL health — network, run on its own
+docs_tool check chars markup refs style terms l10n   # all offline families, named
 ```
+
+There is no `check all` keyword — name the families. The "run everything" affordance
+was removed: it read as complete but silently wasn't (it never included `links`), and
+spelling out the six offline families is a one-line shell alias for anyone who wants it.
 
 ### The `--page` paragraph shrinks to one sentence
 
@@ -170,7 +173,7 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 
 `links-external` (`LK01`) was added later and has no legacy predecessor in the original 22.
 The generated `--check-links-external` flag exists for symmetry, but the surface is
-`docs_tool check links`. It is the one check `--all-checks` / `check all` skips.
+`docs_tool check links`. It is the one check the legacy `--all-checks` sweep skips.
 
 ## 5. `sync`
 
@@ -194,9 +197,10 @@ Done on this branch:
   (`explain` was folded into `list`, then split back out as `show` — `list` enumerates, `show` describes.)
 - **"rule"** is the user-facing name for one check (`--no-yo`, `ST01`); families group rules.
   Internally the function registry is still `CHECKS` and the functions `check_*`.
-- **multi-family `check`** — `check chars markup` runs both; `check all` runs everything.
-- **`--all-checks` / `check all` no longer abort** when `terms` is swept in without a glossary —
-  it's dropped with a note; a bare `check terms` still errors.
+- **multi-family `check`** — `check chars markup` runs both. No `all` keyword: it read as
+  complete but never was (it skipped `links`), and naming the families is a one-line alias.
+- **`--all-checks` / a multi-family `check` no longer abort** when `terms` is swept in without
+  a glossary — it's dropped with a note; a bare `check terms` still errors.
 
 Deferred — each needs every check refactored to *return* structured `Finding` objects instead
 of `print()`ing, a large change that also rewrites the output-assertion tests (the safety net)
