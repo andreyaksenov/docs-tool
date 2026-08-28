@@ -23,7 +23,8 @@ the `chmod` and run `python docs_tool.py …`.
                      [--target NAME] [--verbose] [--page NAME ...]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
 
-./docs_tool.py show <rule|rule-id>            # one rule's full rationale
+./docs_tool.py show <rule|rule-id>            # one rule's rationale + examples
+./docs_tool.py show all                       # every rule, with examples
 ./docs_tool.py list                           # the family tree, one line per rule
 ./docs_tool.py list rules | list targets      # flat rule list · --target values
 ./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
@@ -102,8 +103,10 @@ keeps them out of the findings themselves.
 
 Every rule has a stable **rule ID**. `list` prints this section as a tree;
 `show <rule|id>` (e.g. `show no-yo`, `show ST03`) prints one rule's full
-rationale, exceptions, and the false positives it was tuned against. `beta` rules
-are heuristics — treat their output as a review list, not a hard gate.
+rationale, exceptions, and the false positives it was tuned against, ending with
+runnable examples. `show all` prints every rule with its examples but without the
+rationales — the terminal equivalent of this section. `beta` rules are heuristics
+— treat their output as a review list, not a hard gate.
 
 | ID | Command | Flags |
 |----|---------|-------|
