@@ -2069,6 +2069,129 @@ class SkippedComponentReportTests(FixtureTestCase):
         self.assertNotIn("docs-backup", out)
 
 
+class RuleExampleTests(unittest.TestCase):
+    """`show <rule>` ends with runnable examples, one per flag that changes
+    what that particular rule does."""
+
+    def _examples(self, rid):
+        return dt._rule_examples(dt._ID_TO_KEY[rid])
+
+    def test_every_rule_has_at_least_the_bare_invocation(self):
+        for key in dt.CHECKS:
+            ex = dt._rule_examples(key)
+            self.assertTrue(ex, key)
+            self.assertEqual(ex[0][0], f"./docs_tool.py {dt._check_command(key)}")
+
+    def test_examples_are_real_commands(self):
+        """Generated from _check_command, so they can't drift from the parser.
+        Re-parse each one to prove it."""
+        parser = dt._build_v2_parser()
+        for key in dt.CHECKS:
+            for cmd, _ in dt._rule_examples(key):
+                argv = cmd.split()[1:]
+                with contextlib.redirect_stderr(io.StringIO()):
+                    parser.parse_args(argv)     # SystemExit here = a bad example
+
+    def test_page_example_omitted_for_whole_site_rules(self):
+        self.assertFalse(any("--page" in c for c, _ in self._examples("RF01")))
+        self.assertTrue(any("--page" in c for c, _ in self._examples("ST01")))
+
+    def test_verbose_example_only_where_verbose_does_something(self):
+        self.assertTrue(any("--verbose" in c for c, _ in self._examples("LN02")))
+        self.assertFalse(any("--verbose" in c for c, _ in self._examples("CH04")))
+
+    def test_glossary_example_only_on_terms(self):
+        self.assertTrue(any("--glossary" in c for c, _ in self._examples("TM01")))
+        for rid in ("CH01", "LN02", "RF01"):
+            self.assertFalse(any("--glossary" in c for c, _ in self._examples(rid)), rid)
+
+    def test_sibling_targets_are_summarised_not_enumerated(self):
+        """refs --orphaned has four sibling targets. One representative line
+        stands in for all of them -- four near-identical rows would bury the
+        flags that are actually specific to this rule. Asserted by counting
+        examples, not by matching the wording."""
+        ex = self._examples("RF06")
+        self.assertEqual(len(dt._sibling_targets(dt._ID_TO_KEY["RF06"])), 4)
+        others = [c for c, _ in ex
+                  if "--orphaned" in c and "--target tags" not in c]
+        self.assertEqual(len(others), 1, others)
+
+    def test_single_sibling_target_is_named_outright(self):
+        """With only one alternative there is nothing to summarise, so CH01
+        says which target it is."""
+        notes = [n for _, n in self._examples("CH01")]
+        self.assertIn("over examples/", notes)
+
+    def test_show_prints_the_examples(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dt._v2_show("ST01")
+        text = out.getvalue()
+        self.assertIn("Examples:", text)
+        self.assertIn("./docs_tool.py check style --no-yo", text)
+
+
+class RuleFlagMetadataTests(unittest.TestCase):
+    """The three hand-maintained sets behind the examples are re-derived from
+    the check bodies here. Without this they rot silently: a check gaining
+    --page support would keep advertising the wrong examples forever."""
+
+    @staticmethod
+    def _analyse():
+        import ast
+        src = (Path(__file__).resolve().parent.parent / "docs_tool.py").read_text()
+        fns = {n.name: n for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.FunctionDef)}
+
+        def calls(fn, names, seen=None):
+            seen = seen or set()
+            if fn in seen or fn not in fns:
+                return False
+            seen.add(fn)
+            for n in ast.walk(fns[fn]):
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                    if n.func.id in names or calls(n.func.id, names, seen):
+                        return True
+            return False
+
+        def uses_verbose(fn, seen=None):
+            seen = seen or set()
+            if fn in seen or fn not in fns:
+                return False
+            seen.add(fn)
+            for n in ast.walk(fns[fn]):
+                if isinstance(n, ast.Name) and n.id == "verbose" \
+                        and not isinstance(getattr(n, "ctx", None), ast.Store):
+                    return True
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                    for v in list(n.args) + [k.value for k in (n.keywords or [])]:
+                        if isinstance(v, ast.Name) and v.id == "verbose":
+                            return True
+            return False
+
+        ignores_page, has_verbose, uses_ext = set(), set(), set()
+        for key, fn in dt.CHECKS.items():
+            name = fn.__name__
+            if not calls(name, {"_page_allowed"}):
+                ignores_page.add(key)
+            if uses_verbose(name):
+                has_verbose.add(key)
+            if calls(name, {"_resolve_module_ref"}):
+                uses_ext.add(key)
+        return ignores_page, has_verbose, uses_ext
+
+    def test_page_verbose_and_external_root_sets_match_the_code(self):
+        ignores_page, has_verbose, uses_ext = self._analyse()
+        self.assertEqual(dt._RULES_IGNORING_PAGE, ignores_page)
+        self.assertEqual(dt._RULES_WITH_VERBOSE, has_verbose)
+        self.assertEqual(dt._RULES_WITH_EXTERNAL_ROOT, uses_ext)
+
+    def test_sets_only_name_real_checks(self):
+        for s in (dt._RULES_IGNORING_PAGE, dt._RULES_WITH_VERBOSE,
+                  dt._RULES_WITH_EXTERNAL_ROOT):
+            self.assertLessEqual(s, set(dt.CHECKS))
+
+
 class NoDocsTreeTests(unittest.TestCase):
     """A check run from a directory with no en/modules or ru/modules must
     refuse to run. Scanning nothing and reporting "OK:" for every rule is a

@@ -3736,6 +3736,68 @@ FAMILY_DESC = {
 }
 _TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"}
 
+# Which optional flags actually do something for a given rule, so `show` can
+# offer examples that work instead of a generic list. Derived from the check
+# bodies rather than guessed -- ExampleFlagMetadataTests re-derives them from
+# the source and fails if a check gains or loses support without this being
+# updated.
+#
+# The --page exceptions are listed rather than the rules that honour it: most
+# do, and the whole-site checks are the memorable minority.
+_RULES_IGNORING_PAGE = {
+    "examples-no-cyrillic", "examples-parity", "nav-structure-parity",
+    "pages-broken-refs", "pages-orphaned", "examples-orphaned", "images-orphaned",
+}
+_RULES_WITH_VERBOSE = {
+    "pages-no-invisible-chars", "pages-ru-latin-homoglyphs", "pages-structure-parity",
+    "pages-translation", "examples-parity", "nav-structure-parity",
+    "pages-file-path-italics", "pages-terminology",
+}
+_RULES_WITH_EXTERNAL_ROOT = {
+    "pages-unbalanced-delimiters", "pages-broken-refs", "partials-orphaned",
+    "images-orphaned", "tags-orphaned",
+}
+
+
+def _sibling_targets(key):
+    """The other --target values the same rule can be pointed at, e.g.
+    ('examples',) for CH01. Empty for a single-target rule."""
+    for rules in FAMILIES.values():
+        for targets in rules.values():
+            if key in targets.values() and len(targets) > 1:
+                return tuple(t for t, k in targets.items() if k != key)
+    return ()
+
+
+def _rule_examples(key):
+    """Runnable `docs_tool` lines for one rule: the bare form first, then one
+    per optional flag that changes what this particular rule does. Generated
+    from _check_command so an example can't drift from the real syntax."""
+    cmd = _check_command(key)
+    out = [(f"./docs_tool.py {cmd}", "the whole site")]
+    if key not in _RULES_IGNORING_PAGE:
+        out.append((f"./docs_tool.py {cmd} --page resource_groups.adoc",
+                    "one page, a directory, or UNCOMMITTED"))
+    siblings = _sibling_targets(key)
+    if siblings:
+        # One representative --target line. refs --orphaned has four siblings;
+        # listing each would bury the flags that are actually specific to this
+        # rule under near-identical repetition.
+        tgt = siblings[0]
+        other = _check_command(_resolve_family_selection(
+            _family_of(_rule_of(key)), {_rule_of(key)}, tgt)[0])
+        rest = "another --target" if len(siblings) > 1 else f"over {tgt}/"
+        out.append((f"./docs_tool.py {other}", rest))
+    if key in _RULES_WITH_VERBOSE:
+        out.append((f"./docs_tool.py {cmd} --verbose", "full diff / per-hit detail"))
+    if key == "pages-terminology":
+        out.append((f"./docs_tool.py {cmd} --glossary my-glossary.psv",
+                    "explicit glossary (else *-glossary.psv)"))
+    if key in _RULES_WITH_EXTERNAL_ROOT:
+        out.append((f"./docs_tool.py {cmd} --external-root ADCM=../docs-adcm",
+                    "resolve cross-repo refs"))
+    return out
+
 
 def _family_of(rule):
     """The family a rule name belongs to (rule names are unique
@@ -4747,7 +4809,8 @@ def _build_v2_parser():
     c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
                        epilog="Each family has --<rule> flags (e.g. --no-yo, --structure) "
                               "and, where relevant, --target NAME. Run 'docs_tool list' "
-                              "for the full map.")
+                              "for the full map, or 'docs_tool show <rule>' for one "
+                              "rule's rationale and worked examples.")
     fam = c.add_argument("families", nargs="+", metavar="FAMILY",
                    choices=list(FAMILIES) + ["all"],
                    help="one or more of: chars, markup, refs, style, terms, l10n, all. "
@@ -4885,7 +4948,7 @@ def _v2_list(what):
     print("check <family> [<family> ...]  run those families")
     print("check <family> --<rule>        run just one rule")
     print("check all                      run everything")
-    print("show <rule|rule-id>            one rule's full rationale")
+    print("show <rule|rule-id>            one rule's rationale + examples")
     print("list rules | list targets      flat rule list · --target values")
     print()
     print("'suggest:' is advice for your pre-commit hook, not something the tool")
@@ -4905,6 +4968,16 @@ def _v2_show(name):
     doc = (CHECKS[key].__doc__ or "").strip()
     if doc:
         print("\n" + "\n".join(line.strip() for line in doc.splitlines()))
+    examples = _rule_examples(key)
+    # Label first, command second. Trailing comments would have to be padded
+    # past the longest command -- and `refs --orphaned --target tags
+    # --external-root ADCM=../docs-adcm` is 85 characters on its own, which
+    # drags every sibling line off the edge of the terminal. A short leading
+    # label column aligns no matter how long the commands get.
+    width = max(len(note) for _, note in examples)
+    print("\nExamples:")
+    for cmd, note in examples:
+        print(f"  {note:<{width}}   {cmd}")
 
 
 def _main_v2():
