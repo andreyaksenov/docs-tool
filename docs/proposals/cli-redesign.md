@@ -8,7 +8,7 @@ New design proposals for this tool go in `docs/proposals/`.
 
 **On this branch:** the `check`/`show`/`list`/`sync` surface, six families, `--target`,
 multi-family `check chars markup`, and stable rule IDs (`CH01`…, shown by `list`; `show <id>`
-prints one check's full rationale).
+prints one rule's full rationale).
 **Deferred:** unified output format, `--format json`/`sarif`, inline `// docs_tool-ignore`
 suppressions, the baseline file — all of which need every check refactored to emit structured
 findings, a large separate change (see §6).
@@ -66,12 +66,12 @@ monolingual and `--page`-scopeable, and terminology breaks both.
 ## 3. The command surface
 
 ```
-docs_tool check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose]
+docs_tool check <family> [<family> ...] [--<rule> ...] [--target NAME] [--verbose]
                                         [--page NAME ...] [--glossary PATH ...] [--external-root NAME=PATH ...]
-docs_tool show <subcheck|rule-id>  # one check's full rationale (docstring)
-docs_tool list                    # the family/check map, one line per check
-docs_tool list checks             # every check as a `check ...` command
-docs_tool list targets            # what each --target value scopes to
+docs_tool show <rule|rule-id>     # one rule's full rationale (docstring)
+docs_tool list                   # the family/rule map, one line per rule
+docs_tool list rules             # every rule as a `check ...` command
+docs_tool list targets           # what each --target value scopes to
 docs_tool sync <en-file> [--dry-run]
 ```
 
@@ -84,11 +84,11 @@ Selection rules:
 
 | Invocation | Runs |
 |---|---|
-| `check <family> [<family> ...]` | every check in each family, all scan targets |
+| `check <family> [<family> ...]` | every rule in each family, all scan targets |
 | `check all` | every family |
-| `check <family> --<subcheck>` | that subcheck, target `pages` (or its sole target) — one family only |
-| `check <family> --<subcheck> --target X` | that subcheck, target `X` |
-| `check <family> --target X` | every subcheck in the family that has a target `X` |
+| `check <family> --<rule>` | that rule, target `pages` (or its sole target) — one family only |
+| `check <family> --<rule> --target X` | that rule, target `X` |
+| `check <family> --target X` | every rule in the family that has a target `X` |
 | `--target all` | every target of whatever is selected |
 
 Default `--target` is `pages` (which means `pages/` + `partials/`, as today). `refs` always
@@ -178,9 +178,11 @@ Done on this branch:
 
 - **Stable rule IDs** — `CH01`/`MK01`/`RF02`/`ST01`/`TM01`/`LN02`… in `RULE_IDS`, shown by `list`.
 - **`--target`** scan-target flag instead of `pages-` vs `examples-` prefixes.
-- **`list` / `show`** — `list` is the one-line-per-check family map (a `SUMMARIES` blurb each),
-  plus `list checks` / `list targets`; `show <subcheck|id>` prints one check's full docstring.
+- **`list` / `show`** — `list` is the one-line-per-rule family map (a `SUMMARIES` blurb each),
+  plus `list rules` / `list targets`; `show <rule|id>` prints one rule's full docstring.
   (`explain` was folded into `list`, then split back out as `show` — `list` enumerates, `show` describes.)
+- **"rule"** is the user-facing name for one check (`--no-yo`, `ST01`); families group rules.
+  Internally the function registry is still `CHECKS` and the functions `check_*`.
 - **multi-family `check`** — `check chars markup` runs both; `check all` runs everything.
 - **`--all-checks` / `check all` no longer abort** when `terms` is swept in without a glossary —
   it's dropped with a note; a bare `check terms` still errors.
@@ -216,10 +218,10 @@ refreshed by hand. So:
 - **Fewer, bigger moves.** Every change propagates by manual copy.
 - **Every `--check-<old>` flag still works**, routed through the legacy parser (`main()`
   dispatches on `argv[0]`: `check`/`show`/`list`/`sync` → new surface, anything else → legacy).
-  `docs_tool.py --list-checks` still prints the old flag list; `docs_tool list checks`
+  `docs_tool.py --list-checks` still prints the old flag list; `docs_tool list rules`
   prints the new `check ...` command for each, one per line, sorted by rule ID.
 
-Not done: over-nesting (two levels — family then subcheck — is the limit). Exit codes are a
+Not done: over-nesting (two levels — family then rule — is the limit). Exit codes are a
 plain `0` clean / `1` findings everywhere — no severity tiers in the exit code.
 
 ## 8. Suggested sequencing

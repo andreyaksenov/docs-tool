@@ -18,19 +18,19 @@ the `chmod` and run `python docs_tool.py …`.
 ## Usage
 
 ```
-./docs_tool.py check <family> [<family> ...] [--<subcheck> ...]
+./docs_tool.py check <family> [<family> ...] [--<rule> ...]
                      [--target NAME] [--verbose] [--page NAME ...]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
 
-./docs_tool.py show <subcheck|rule-id>        # one check's full rationale
-./docs_tool.py list [checks|targets]          # the check map, or a flat list
+./docs_tool.py show <rule|rule-id>            # one rule's full rationale
+./docs_tool.py list [rules|targets]           # the rule map, or a flat list
 ./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
 ```
 
 Run with no arguments to print the full command list. A run exits `0` if everything
-passed, `1` if any check found something.
+passed, `1` if any rule found something.
 
-Checks are grouped into six **families**:
+Rules are grouped into six **families**:
 
 | Family   | Covers                                                                                   |
 |----------|------------------------------------------------------------------------------------------|
@@ -43,7 +43,7 @@ Checks are grouped into six **families**:
 
 ```bash
 ./docs_tool.py check style                  # the whole style family
-./docs_tool.py check style --no-yo           # narrow to one check
+./docs_tool.py check style --no-yo           # narrow to one rule
 ./docs_tool.py check chars markup            # several families
 ./docs_tool.py check all
 ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
@@ -52,11 +52,11 @@ Checks are grouped into six **families**:
 `--target NAME` picks a scan target other than the default `pages` (`pages/` +
 `partials/`) — see `list targets`.
 
-## Checks
+## Rules
 
-Every check has a stable **rule ID**. `list` prints this section as a tree;
-`show <subcheck|id>` (e.g. `show no-yo`, `show ST03`) prints one check's full
-rationale, exceptions, and the false positives it was tuned against. `beta` checks
+Every rule has a stable **rule ID**. `list` prints this section as a tree;
+`show <rule|id>` (e.g. `show no-yo`, `show ST03`) prints one rule's full
+rationale, exceptions, and the false positives it was tuned against. `beta` rules
 are heuristics — treat their output as a review list, not a hard gate.
 
 | ID | Command |
@@ -244,7 +244,7 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 
 ## Scoping with `--page`
 
-By default, every per-file check scans the whole site. `--page NAME` (repeatable)
+By default, every per-file rule scans the whole site. `--page NAME` (repeatable)
 limits `chars`, `markup`, `style`, `terms`, and `l10n` to matching files:
 
 ```bash

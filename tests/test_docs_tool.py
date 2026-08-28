@@ -1938,21 +1938,21 @@ class RunSyncGitRewordTests(unittest.TestCase):
 
 class FamilySelectionTests(unittest.TestCase):
     """_resolve_family_selection: the routing layer that maps
-    `check <family> [--sub] [--target]` to legacy CHECKS keys."""
+    `check <family> [--rule] [--target]` to legacy CHECKS keys."""
 
-    def test_every_family_and_subcheck_maps_to_a_real_check(self):
-        for fam, subs in dt.FAMILIES.items():
-            for sc, targets in subs.items():
+    def test_every_family_and_rule_maps_to_a_real_check(self):
+        for fam, rules in dt.FAMILIES.items():
+            for rule, targets in rules.items():
                 for key in targets.values():
-                    self.assertIn(key, dt.CHECKS, f"{fam} --{sc} -> {key}")
+                    self.assertIn(key, dt.CHECKS, f"{fam} --{rule} -> {key}")
 
     def test_all_22_checks_are_reachable_through_some_family(self):
         reachable = {k for subs in dt.FAMILIES.values()
                      for t in subs.values() for k in t.values()}
         self.assertEqual(reachable, set(dt.CHECKS))
 
-    def test_subcheck_names_are_unique_across_families(self):
-        seen = [sc for subs in dt.FAMILIES.values() for sc in subs]
+    def test_rule_names_are_unique_across_families(self):
+        seen = [rule for rules in dt.FAMILIES.values() for rule in rules]
         self.assertEqual(len(seen), len(set(seen)))
 
     def test_whole_family_runs_every_target(self):
@@ -1966,13 +1966,13 @@ class FamilySelectionTests(unittest.TestCase):
              "examples-orphaned", "images-orphaned", "tags-orphaned"},
         )
 
-    def test_subcheck_without_target_defaults_to_pages(self):
+    def test_rule_without_target_defaults_to_pages(self):
         self.assertEqual(
             dt._resolve_family_selection("chars", {"no-cyrillic"}, None),
             ["pages-no-cyrillic"],
         )
 
-    def test_subcheck_with_target_picks_it(self):
+    def test_rule_with_target_picks_it(self):
         self.assertEqual(
             dt._resolve_family_selection("chars", {"no-cyrillic"}, "examples"),
             ["examples-no-cyrillic"],
@@ -2046,7 +2046,7 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("no Cyrillic", out)          # a SUMMARIES blurb
         self.assertNotIn("pages-no-cyrillic", out) # no legacy-key line in the tree
 
-    def test_show_subcheck_prints_its_rationale(self):
+    def test_show_rule_prints_its_rationale(self):
         code, out, _ = self._run("show", "no-yo")
         self.assertEqual(code, 0)
         self.assertIn("ST01", out)
@@ -2059,11 +2059,11 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("check l10n --structure", out)
 
     def test_show_unknown_name_errors(self):
-        code, _, err = self._run("show", "not-a-check")
+        code, _, err = self._run("show", "not-a-rule")
         self.assertEqual(code, 2)
-        self.assertIn("unknown check", err)
+        self.assertIn("unknown rule", err)
 
-    def test_list_with_a_check_name_hints_at_show(self):
+    def test_list_with_a_rule_name_hints_at_show(self):
         code, _, err = self._run("list", "no-yo")
         self.assertEqual(code, 2)
         self.assertIn("show no-yo", err)
@@ -2090,12 +2090,12 @@ class CliV2RoutingTests(unittest.TestCase):
         code, out, err = self._run("check", "chars", "markup")
         self.assertEqual(code, 0, err)   # no fixture tree -> nothing found
 
-    def test_subcheck_with_multiple_families_is_rejected(self):
+    def test_rule_with_multiple_families_is_rejected(self):
         code, _, err = self._run("check", "chars", "markup", "--backticks")
         self.assertEqual(code, 2)
         self.assertIn("exactly one family", err)
 
-    def test_wrong_subcheck_for_family_is_rejected(self):
+    def test_wrong_rule_for_family_is_rejected(self):
         code, _, err = self._run("check", "chars", "--no-yo")
         self.assertEqual(code, 2)
         self.assertIn("--no-yo", err)
@@ -2121,8 +2121,8 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("OK:", out)
 
-    def test_list_checks_prints_commands_sorted_by_id(self):
-        code, out, _ = self._run("list", "checks")
+    def test_list_rules_prints_commands_sorted_by_id(self):
+        code, out, _ = self._run("list", "rules")
         self.assertEqual(code, 0)
         self.assertIn("CH01  check chars --no-cyrillic", out)
         self.assertIn("RF04  check refs --orphaned --target examples", out)

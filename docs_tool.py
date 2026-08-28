@@ -9,9 +9,9 @@ Run from the repo root (use "python docs_tool.py ..." on Windows). Every
 check scans all discovered modules automatically.
 
 Commands:
-    ./docs_tool.py check <family> [<family> ...] [--<subcheck> ...] [--target NAME] [--verbose] [--page NAME ...]
-    ./docs_tool.py show  <subcheck|rule-id>     -- one check's full rationale
-    ./docs_tool.py list  [checks|targets]       -- the family/check map, or a flat list
+    ./docs_tool.py check <family> [<family> ...] [--<rule> ...] [--target NAME] [--verbose] [--page NAME ...]
+    ./docs_tool.py show  <rule|rule-id>         -- one rule's full rationale
+    ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
 
 Checks are grouped into six families, ordered by where a rule's authority
@@ -3565,15 +3565,15 @@ BETA_CHECKS = {
 # docs/proposals/cli-redesign.md), which also predicts how deterministic a
 # check is and whether it should block a commit.
 #
-#   FAMILIES[family][subcheck] = {scan-target: CHECKS-key}
+#   FAMILIES[family][rule] = {scan-target: CHECKS-key}
 #
 # Selection rules (see _resolve_family_selection):
-#   check <family>                          -> every check in the family, all targets
-#   check <family> --<subcheck>             -> that subcheck, target "pages" (or its
-#                                              sole target)
-#   check <family> --<subcheck> --target X  -> that subcheck, target X
-#   check <family> --target X               -> every subcheck in the family that has
-#                                              a target X
+#   check <family>                       -> every rule in the family, all targets
+#   check <family> --<rule>              -> that rule, target "pages" (or its
+#                                           sole target)
+#   check <family> --<rule> --target X   -> that rule, target X
+#   check <family> --target X            -> every rule in the family that has
+#                                           a target X
 #   --target all                            -> every target of whatever is selected
 #
 # TIERS is advisory: `list` shows "block"/"warn by default" per family, as a
@@ -3620,7 +3620,7 @@ TIERS = {
 
 _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
 
-# `--target` values, for the two subchecks that have more than one target
+# `--target` values, for the two rules that have more than one target
 # (chars --no-cyrillic, refs --orphaned). Shown by `list targets`.
 TARGET_DESC = {
     "pages":    "pages/ + partials/  (the default)",
@@ -3632,7 +3632,7 @@ TARGET_DESC = {
     "all":      "every target above",
 }
 
-_ALL_SUBCHECKS = tuple(sorted({sc for fam in FAMILIES.values() for sc in fam}))
+_ALL_RULES = tuple(sorted({rule for fam in FAMILIES.values() for rule in fam}))
 
 # Stable per-check identifiers, family-prefixed. The user-facing handle for a
 # check: accepted by `show <id>`, printed by `list`. (Decoupling the selector
@@ -3665,7 +3665,7 @@ RULE_IDS = {
 _ID_TO_KEY = {v: k for k, v in RULE_IDS.items()}
 
 # One-line "what it does" for `docs_tool list`. The full rationale/exceptions
-# stay in each check_* function's docstring (docs_tool show <subcheck>).
+# stay in each check_* function's docstring (docs_tool show <rule>).
 SUMMARIES = {
     "pages-no-cyrillic":           "no Cyrillic characters in en/ files (RU text left in EN)",
     "examples-no-cyrillic":        "same check, over examples/ (all file types)",
@@ -3703,26 +3703,26 @@ FAMILY_DESC = {
 _TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"}
 
 
-def _family_of(subcheck):
-    """The family a subcheck name belongs to (subcheck names are unique
+def _family_of(rule):
+    """The family a rule name belongs to (rule names are unique
     across families), or None."""
-    for fam, subs in FAMILIES.items():
-        if subcheck in subs:
+    for fam, rules in FAMILIES.items():
+        if rule in rules:
             return fam
     return None
 
 
-def _resolve_family_selection(family, picked_subchecks, target):
+def _resolve_family_selection(family, picked_rules, target):
     """Map a `check` invocation to an ordered, de-duplicated list of CHECKS
-    keys. `family` may be None/"all" for every family; `picked_subchecks` is
+    keys. `family` may be None/"all" for every family; `picked_rules` is
     a set (empty = whole family); `target` is a scan target, "all", or None.
     See the selection rules above FAMILIES."""
     fams = list(FAMILIES) if family in (None, "all") else [family]
-    picked = set(picked_subchecks or ())
+    picked = set(picked_rules or ())
     out = []
     for fam in fams:
-        for sc, targets in FAMILIES[fam].items():
-            if picked and sc not in picked:
+        for rule, targets in FAMILIES[fam].items():
+            if picked and rule not in picked:
                 continue
             if target == "all":
                 out.extend(targets.values())
@@ -4626,16 +4626,16 @@ def _build_v2_parser():
     sub = p.add_subparsers(dest="verb", required=True, metavar="{check,show,list,sync}")
 
     c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
-                       epilog="Each family has --<subcheck> flags (e.g. --no-yo, --structure) "
+                       epilog="Each family has --<rule> flags (e.g. --no-yo, --structure) "
                               "and, where relevant, --target NAME. Run 'docs_tool list' "
                               "for the full map.")
     fam = c.add_argument("families", nargs="+", metavar="FAMILY",
                    choices=list(FAMILIES) + ["all"],
                    help="one or more of: chars, markup, refs, style, terms, l10n, all. "
-                        "--<subcheck> flags need exactly one family.")
+                        "--<rule> flags need exactly one family.")
     fam.completer = _complete_family
-    for sc in _ALL_SUBCHECKS:
-        c.add_argument(f"--{sc}", dest=sc.replace("-", "_"), action="store_true",
+    for rule in _ALL_RULES:
+        c.add_argument(f"--{rule}", dest=rule.replace("-", "_"), action="store_true",
                        help=argparse.SUPPRESS)
     c.add_argument("--target", metavar="NAME",
                    choices=_SCAN_TARGETS + ("all",),
@@ -4655,12 +4655,12 @@ def _build_v2_parser():
                    help="Glossary file(s) for 'check terms'. Repeatable. "
                         "Defaults to *-glossary.psv in the current directory.")
 
-    sh = sub.add_parser("show", help="One check's full rationale, by subcheck name or rule ID.")
-    sh.add_argument("name", metavar="SUBCHECK", help="e.g. 'no-yo' or 'ST01'.")
+    sh = sub.add_parser("show", help="One rule's full rationale, by rule name or rule ID.")
+    sh.add_argument("name", metavar="RULE", help="e.g. 'no-yo' or 'ST01'.")
 
-    ls = sub.add_parser("list", help="The family/check map (also 'list checks' / 'list targets').")
-    ls.add_argument("what", nargs="?", metavar="[checks|targets]",
-                    help="Omit for the family tree; 'checks' / 'targets' for flat lists.")
+    ls = sub.add_parser("list", help="The family/rule map (also 'list rules' / 'list targets').")
+    ls.add_argument("what", nargs="?", metavar="[rules|targets]",
+                    help="Omit for the family tree; 'rules' / 'targets' for flat lists.")
 
     s = sub.add_parser("sync", help="Align a RU page to its EN counterpart (beta).")
     sy = s.add_argument("file", metavar="EN_FILE",
@@ -4674,18 +4674,18 @@ def _build_v2_parser():
     return p
 
 
-def _subcheck_of(key):
-    """The subcheck name (e.g. 'no-yo') that resolves to a CHECKS key, or
+def _rule_of(key):
+    """The rule name (e.g. 'no-yo') that resolves to a CHECKS key, or
     the key itself if none maps to it directly."""
-    for subs in FAMILIES.values():
-        for sc, targets in subs.items():
+    for rules in FAMILIES.values():
+        for rule, targets in rules.items():
             if key in targets.values():
-                return sc
+                return rule
     return key
 
 
 def _resolve_check_name(name):
-    """A subcheck name, a legacy CHECKS key, or a rule ID -> CHECKS key
+    """A rule name, a legacy CHECKS key, or a rule ID -> CHECKS key
     (None if it matches nothing)."""
     fam = _family_of(name)
     if fam:
@@ -4703,10 +4703,10 @@ def _tier_of(fam):
 def _target_of(key):
     """The non-default scan target `--target` needs to reach a specific
     CHECKS key (e.g. 'examples' for examples-orphaned), or None. Only
-    subchecks with more than one target ever need it -- a single-target
-    subcheck like l10n --examples is unambiguous on its own."""
-    for subs in FAMILIES.values():
-        for targets in subs.values():
+    rules with more than one target ever need it -- a single-target
+    rule like l10n --examples is unambiguous on its own."""
+    for rules in FAMILIES.values():
+        for targets in rules.values():
             if key not in targets.values() or len(targets) == 1:
                 continue
             for t, k in targets.items():
@@ -4717,26 +4717,26 @@ def _target_of(key):
 
 def _check_command(key):
     """The `check ...` command that runs one CHECKS key -- 'check terms' for
-    a single-check family, else 'check <fam> --<sub> [--target X]'."""
-    sc = _subcheck_of(key)
-    fam = _family_of(sc)
+    a single-rule family, else 'check <fam> --<rule> [--target X]'."""
+    rule = _rule_of(key)
+    fam = _family_of(rule)
     tgt = _target_of(key)
     if fam and len(FAMILIES[fam]) == 1:
         base = f"check {fam}"
     else:
-        base = f"check {fam} --{sc}"
+        base = f"check {fam} --{rule}"
     return base + (f" --target {tgt}" if tgt else "")
 
 
 def _v2_list(what):
-    if what == "checks":
+    if what == "rules":
         rows = sorted((RULE_IDS[k], _check_command(k),
                        "  [beta]" if k in BETA_CHECKS else "") for k in CHECKS)
         for rid, cmd, beta in rows:
             print(f"{rid}  {cmd}{beta}")
         return
     if what == "targets":
-        print("--target values (for checks that scan more than one place):\n")
+        print("--target values (for rules that scan more than one place):\n")
         for t, desc in TARGET_DESC.items():
             print(f"  {t:<10}{desc}")
         return
@@ -4745,18 +4745,18 @@ def _v2_list(what):
         sys.exit(2)
     if what not in (None, "families"):
         hint = f" -- did you mean 'docs_tool show {what}'?" if _resolve_check_name(what) else ""
-        print(f"list: unknown argument '{what}' (expected: checks, targets){hint}", file=sys.stderr)
+        print(f"list: unknown argument '{what}' (expected: rules, targets){hint}", file=sys.stderr)
         sys.exit(2)
 
-    for i, (fam, subs) in enumerate(FAMILIES.items()):
+    for i, (fam, rules) in enumerate(FAMILIES.items()):
         if i:
             print()
         disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
         print(f"{fam}  —  {FAMILY_DESC.get(fam, '')}  ({disp} by default)")
-        for sc, targets in subs.items():
+        for rule, targets in rules.items():
             primary = targets.get("pages") or next(iter(targets.values()))
             beta = "  [beta]" if primary in BETA_CHECKS else ""
-            print(f"  {RULE_IDS[primary]:<5}--{sc:<21}{SUMMARIES[primary]}{beta}")
+            print(f"  {RULE_IDS[primary]:<5}--{rule:<21}{SUMMARIES[primary]}{beta}")
             if len(targets) > 1:
                 others = [t for t in targets if t != "pages"]
                 oids = sorted({RULE_IDS[targets[t]] for t in others})
@@ -4764,18 +4764,18 @@ def _v2_list(what):
                 print(f"{'':>7}{'':<21}  --target {'|'.join(others)}{note}")
     print()
     print("check <family> [<family> ...]  run those families")
-    print("check <family> --<subcheck>    run just one check")
+    print("check <family> --<rule>        run just one rule")
     print("check all                      run everything")
-    print("show <subcheck|rule-id>        one check's full rationale")
-    print("list checks | list targets     flat check list · --target values")
+    print("show <rule|rule-id>            one rule's full rationale")
+    print("list rules | list targets      flat rule list · --target values")
 
 
 def _v2_show(name):
     key = _resolve_check_name(name)
     if key is None:
-        print(f"unknown check: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
+        print(f"unknown rule: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
         sys.exit(2)
-    fam = _family_of(_subcheck_of(key)) or "?"
+    fam = _family_of(_rule_of(key)) or "?"
     disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
     beta = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
     print(f"{RULE_IDS[key]}  {_check_command(key)}   ({disp}){beta}\n")
@@ -4807,13 +4807,13 @@ def _main_v2():
     _apply_page_filter(args.page)
 
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
-    picked = {sc for sc in _ALL_SUBCHECKS if getattr(args, sc.replace("-", "_"))}
+    picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
 
     if picked and (len(families) != 1 or families[0] == "all"):
-        print("check: --<subcheck> flags need exactly one family "
+        print("check: --<rule> flags need exactly one family "
               f"(got: {' '.join(families)})", file=sys.stderr)
         sys.exit(2)
-    bad = {sc for sc in picked if _family_of(sc) != families[0]}
+    bad = {rule for rule in picked if _family_of(rule) != families[0]}
     if bad:
         print(f"check {families[0]}: unknown flag(s) for this family: "
               f"{', '.join('--' + b for b in sorted(bad))}", file=sys.stderr)
@@ -4825,7 +4825,7 @@ def _main_v2():
     seen = set()
     selected = [k for k in selected if not (k in seen or seen.add(k))]
     if not selected:
-        print(f"check: that selection matched no checks "
+        print(f"check: that selection matched no rules "
               f"({' '.join(families)}, --target={args.target}).", file=sys.stderr)
         sys.exit(2)
 
