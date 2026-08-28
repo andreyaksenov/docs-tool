@@ -10,6 +10,9 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [<family> ...] [--<rule> ...] [--target NAME] [--verbose] [--page NAME ...]
+                        check terms adds  [--glossary PATH ...];  check refs, [--external-root NAME=PATH ...]
+                        check links adds  [--offline] [--timeout N] [--allow-domain HOST ...]
+                                          [--show-unverified] [--insecure] [--link-cache PATH]
     ./docs_tool.py show  <rule|rule-id>|all     -- one rule's rationale, or every rule with examples
     ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
@@ -30,7 +33,7 @@ Examples:
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
     ./docs_tool.py check chars markup --page UNCOMMITTED
-    ./docs_tool.py check links --offline
+    ./docs_tool.py check links --show-unverified
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
@@ -4024,10 +4027,18 @@ def check_links_external(verbose=False) -> bool:
     missing CA bundle, a MITM proxy) are retried once without verification
     and noted -- pass --insecure to make that the default and drop the note.
 
-    Comment lines and ---- / .... blocks are skipped, as are RFC-2606
-    example hosts, localhost, private/link-local IPs, doc-only hosts
-    (FQDN:PORT, *.internal, 10.x, ...), *.git remotes, and any host passed
-    to --allow-domain."""
+    Only what AsciiDoc renders as a live link is checked: comment lines and
+    ---- / .... blocks are skipped, and so is a bare URL that is
+    backslash-escaped (\\http://x) or wrapped in a formatting pair
+    (_http://x_, `http://x`). Also skipped: RFC-2606 example hosts,
+    localhost, private/link-local IPs, doc-only hosts (FQDN:PORT,
+    *.internal, 10.x, ...), *.git remotes, and any host passed to
+    --allow-domain.
+
+    A 301/308 that only rewrites the URL cosmetically -- http->https, +/-
+    www., +/- trailing slash, a dropped #fragment, a change of letter case
+    -- is treated as clean, not a REDIRECT. Findings are grouped
+    BROKEN, then REDIRECT, then UNREACHABLE/VPN?."""
     _LINK_TLS_FELL_BACK.clear()
     _LINK_HOST_SEMAPHORES.clear()
     sites = {}
@@ -5565,7 +5576,8 @@ def _build_v2_parser():
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
     c.add_argument("--verbose", action="store_true",
-                   help="Show full diffs and per-hit detail on the heuristic checks.")
+                   help="Full diffs / per-hit detail on the heuristic checks; for "
+                        "'check links', every referencing page plus the 403/429/5xx list.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
                         help="Limit per-file EN/RU checks to matching page(s)/"
                              "partial(s); 'UNCOMMITTED' for the current git diff. "
@@ -5694,7 +5706,8 @@ def _v2_list(what):
     print("list rules | list targets      flat rule list · --target values")
     print()
     print("'suggest:' is advice for your pre-commit hook, not something the tool")
-    print("enforces -- every run exits 0 clean / 1 on findings, whatever the family.")
+    print("enforces -- a run exits 0 clean / 1 on findings (for links, only a dead")
+    print("link counts; redirects and unreachable hosts are reported, not failed).")
 
 
 def _print_examples(key, indent="  "):

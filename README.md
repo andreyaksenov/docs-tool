@@ -85,10 +85,11 @@ by kind:
 | Label | Means |
 |-------|-------|
 | `FILE` | header for the `path:line:col:` findings indented under it |
-| `BROKEN` | a reference that doesn't resolve (`path:line`) |
+| `BROKEN` | a reference (or, in `check links`, an external URL) that doesn't resolve |
 | `ORPHANED` | a file nothing points at — no line, the whole file is the finding |
 | `MISSING` | an EN or RU counterpart that doesn't exist |
 | `DIFF` | the EN/RU pair that diverged, one path per line |
+| `REDIRECT` `UNREACHABLE` `VPN?` | `check links` only — see the `links` family below |
 
 Where a specific line is meaningful it's `path:line` or `path:line:col`, which most
 editors and terminals turn into a clickable link. Running more than one rule puts a
@@ -134,7 +135,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `LN03` | `check l10n --untranslated` | RU line still English |
 | `LN04` | `check l10n --examples` | EN/RU examples differ |
 | `LN05` | `check l10n --nav` | EN/RU nav differs |
-| `LK01` | `check links` | dead / redirected / unreachable external links |
+| `LK01` | `check links` | dead / redirected / unreachable external links (404 fails; the rest are flagged) |
 
 Name the families you want to run — there's no "run everything" keyword. `links`
 reaches the network and only runs when named.
@@ -335,19 +336,24 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 
   `UNREACHABLE`/`VPN?` don't fail the run — from any one machine a blocked route
   looks the same as a dead link, so re-run behind a VPN to tell them apart.
+  Findings are grouped `BROKEN` → `REDIRECT` → `UNREACHABLE`, worst first.
 
   **Collapsed to a one-line count** (the server answered, just not usefully): `401`/
   `403` anti-bot walls, `429`s, `5xx`. `--show-unverified` (or `--verbose`) lists
-  those too. A trailing-slash or `http`→`https` redirect is treated as clean.
+  those too. A `301`/`308` that only rewrites the URL cosmetically — `http`→`https`,
+  ± `www.`, ± trailing slash, a dropped `#fragment`, a letter-case change — is
+  treated as clean, not a `REDIRECT`.
 
   A separate one-line note flags any host whose TLS certificate the local trust
   store couldn't validate (a missing CA bundle, not a bad site) — `--insecure`
   makes unverified TLS the default and drops the note.
 
-  Skipped: comment lines and `----`/`....` blocks, RFC 2606 example hosts,
-  `localhost`, private / link-local IPs, doc placeholders (`http://FQDN:PORT`,
-  `*.internal`, `10.x`, a bare `HOST`), `*.git` clone URLs, unresolved
-  `{attributes}`, and any host passed to `--allow-domain`.
+  Only what AsciiDoc renders as a live link is checked. Skipped: comment lines and
+  `----`/`....` blocks; a bare URL that's backslash-escaped (`\http://x`) or wrapped
+  in a formatting pair (`_http://x_`, `` `http://x` ``); RFC 2606 example hosts;
+  `localhost`; private / link-local IPs; doc placeholders (`http://FQDN:PORT`,
+  `*.internal`, `10.x`, a bare `HOST`); `*.git` clone URLs; unresolved
+  `{attributes}`; and any host passed to `--allow-domain`.
 
   ```bash
   ./docs_tool.py check links
@@ -421,10 +427,12 @@ broken reference in the repo. Run `check refs` in CI, or by hand before a releas
 ## Legacy `--check-*` flags
 
 The pre-subcommand interface still works: `--check-<name>`, `--all-checks`,
-`--sync`, `--list-checks`, `--list-modules`. All 22 checks are reachable both
-ways — upgrading a vendored copy doesn't break an existing hook or CI job. See the
+`--sync`, `--list-checks`, `--list-modules`. Every check is reachable both ways —
+upgrading a vendored copy doesn't break an existing hook or CI job. See the
 [migration map](docs/proposals/cli-redesign.md#4-full-migration-map) for the
 `check <family>` equivalent of each `--check-*` flag, or run `./docs_tool.py --list-checks`.
+`--all-checks` runs everything **except `--check-links-external`** (network) — that
+one only runs when named.
 
 Dropped in the redesign, and only these: `sync --since REF`, and the `-v` / `-n`
 short aliases (spell out `--verbose` / `--dry-run`). Two silent no-ops also became
