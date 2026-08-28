@@ -1,5 +1,13 @@
 # docs_tool.py
 
+> **This is the frozen pre-redesign version**, kept for rollback. The current tool
+> lives on [`main`](https://github.com/andreyaksenov/docs-tool), where the same 22
+> checks are grouped into six families behind `check`/`show`/`list`/`sync`
+> subcommands — every `--check-*` flag documented below still works there, so
+> upgrading doesn't break an existing hook or CI job. Only `--sync --since REF` and
+> the `-v` / `-n` short aliases were dropped. This branch is a snapshot, not a
+> maintained release line: fixes land on `main`.
+
 A single Python utility for checking that the `en/` and `ru/` documentation trees stay in sync, and for syncing a RU page's structure after an EN edit.
 Run it from the root of the Antora docs repo you want to check.
 
@@ -19,7 +27,7 @@ It's a single self-contained file.
 Copy it into any Antora docs repo without cloning this repo:
 
 ```bash
-curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool.py && chmod +x docs_tool.py
+curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/legacy-flags/docs_tool.py && chmod +x docs_tool.py
 ```
 
 Run it with an explicit path from the repo root:
@@ -35,7 +43,7 @@ python3 docs_tool.py --check-<name>
 Windows doesn't have an executable bit, so skip the `chmod` step and run the file with `python` (the Windows installer doesn't provide a `python3` command) or the `py` launcher instead of `./docs_tool.py`:
 
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool.py -OutFile docs_tool.py
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/andreyaksenov/docs-tool/legacy-flags/docs_tool.py -OutFile docs_tool.py
 python docs_tool.py --check-<name>
 ```
 
