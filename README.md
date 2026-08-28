@@ -212,7 +212,7 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 
 - **`LN02` · `check l10n --structure`** · beta — EN/RU structural skeletons
   (headings, blocks, `include::`) must match, catching drift when line counts don't.
-  `--verbose` shows the full diff.
+  Prints a 20-line diff preview per file; `--verbose` shows the full diff.
   ```bash
   ./docs_tool.py check l10n --structure
   ./docs_tool.py check l10n --structure --page resource_groups.adoc
@@ -220,7 +220,8 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```
 
 - **`LN03` · `check l10n --untranslated`** · beta — RU lines byte-identical to
-  their EN counterpart. `--verbose` also flags English stopwords in RU lines.
+  their EN counterpart (`UNTRANSLATED`), plus RU lines carrying English stopwords
+  like `the`/`and`/`with` (`SUSPECT`). `--verbose` names the matched stopword.
   ```bash
   ./docs_tool.py check l10n --untranslated
   ./docs_tool.py check l10n --untranslated --page resource_groups.adoc

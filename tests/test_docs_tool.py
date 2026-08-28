@@ -1138,9 +1138,9 @@ class PagesTranslationTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_translation)
         self.assertTrue(ok, output)
 
-    def test_verbose_stopword_flagging(self):
-        """A leftover English stopword inside otherwise-Russian text is only
-        flagged under the stricter -v/verbose heuristic."""
+    def test_stopword_flagging_is_always_on(self):
+        """A leftover English stopword inside otherwise-Russian text is
+        flagged on a plain run; --verbose only appends the matched word."""
         self.write(
             "en/modules/ROOT/pages/page.adoc",
             "This paragraph explains the new caching behavior in detail.\n",
@@ -1149,12 +1149,15 @@ class PagesTranslationTests(FixtureTestCase):
             "ru/modules/ROOT/pages/page.adoc",
             "Этот абзац объясняет and новое поведение кэширования.\n",
         )
-        ok, _ = self.run_check(dt.check_pages_translation, verbose=False)
-        self.assertTrue(ok)
+        ok, output = self.run_check(dt.check_pages_translation, verbose=False)
+        self.assertFalse(ok)
+        self.assertIn("SUSPECT", output)
+        self.assertNotIn("[and]", output)
 
         ok, output = self.run_check(dt.check_pages_translation, verbose=True)
         self.assertFalse(ok)
         self.assertIn("SUSPECT", output)
+        self.assertIn("[and]", output)
 
     def test_description_attribute_untranslated_is_flagged(self):
         """:description:/:page-htmltitle: are ":"-prefixed structural

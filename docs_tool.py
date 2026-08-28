@@ -678,6 +678,10 @@ def _nav_skeleton(path: Path):
     return out
 
 
+# How many skeleton-diff lines to show before truncating; --verbose shows all.
+_SKELETON_DIFF_PREVIEW = 20
+
+
 def _skeleton_diff_lines(en_skel, ru_skel, en_label, ru_label):
     """Like _labeled_unified_diff, but diffs the skeleton *content* only
     (ignoring line numbers) so that lines shifting by a line or two --
@@ -707,15 +711,14 @@ def _compare_skeleton_pair(en_file: Path, ru_file: Path, skeleton_fn, verbose) -
         return True
     print(f"DIFF     {en_file}")
     print(f"         {ru_file}")
-    if verbose:
-        print("\n".join(_skeleton_diff_lines(en_skel, ru_skel, en_file, ru_file)))
-        print()
+    diff = _skeleton_diff_lines(en_skel, ru_skel, en_file, ru_file)
+    if verbose or len(diff) <= _SKELETON_DIFF_PREVIEW:
+        print("\n".join(diff))
     else:
-        i = next((i for i in range(min(len(en_plain), len(ru_plain))) if en_plain[i] != ru_plain[i]),
-                 min(len(en_plain), len(ru_plain)))
-        en_lineno = en_skel[i][0] if i < len(en_skel) else "EOF"
-        ru_lineno = ru_skel[i][0] if i < len(ru_skel) else "EOF"
-        print(f"         first difference: {en_file}:{en_lineno}  vs  {ru_file}:{ru_lineno}  (rerun with --verbose for the full diff)")
+        print("\n".join(diff[:_SKELETON_DIFF_PREVIEW]))
+        print(f"         ... {len(diff) - _SKELETON_DIFF_PREVIEW} more diff line(s); "
+              f"rerun with --verbose for the full diff")
+    print()
     return False
 
 
@@ -2526,7 +2529,7 @@ def _strip_noise(line: str) -> str:
     return s
 
 
-def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_header):
+def _check_translation_pair(en_file: Path, ru_file: Path, verbose: bool, report_header):
     """Returns the number of UNTRANSLATED/SUSPECT lines flagged."""
     en_lines = _read_lines(en_file)
     ru_lines = _read_lines(ru_file)
@@ -2594,20 +2597,23 @@ def _check_translation_pair(en_file: Path, ru_file: Path, strict: bool, report_h
             ensure_header()
             finding_count += 1
             print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_text}")
-        elif strict and not _HEADING_RE.match(en_text):
+        elif not _HEADING_RE.match(en_text):
             candidate = _strip_noise(ru_text).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
-            if _STOPWORDS_RE.search(candidate):
+            hits = _STOPWORDS_RE.findall(candidate)
+            if hits:
                 ensure_header()
                 finding_count += 1
-                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_text}")
+                marker = f" [{', '.join(sorted(set(hits)))}]" if verbose else ""
+                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_text}{marker}")
 
     return finding_count
 
 
 def check_pages_translation(verbose=False) -> bool:
-    """Port of check_pages_translation.sh. `verbose` (--verbose) enables the
-    stricter stopword-based heuristic."""
+    """Port of check_pages_translation.sh. Flags RU lines byte-identical to EN
+    (UNTRANSLATED) and RU lines carrying English stopwords (SUSPECT); --verbose
+    appends the matched stopword(s) to each SUSPECT line."""
     ok = True
     total_hits = 0
 
@@ -3680,7 +3686,7 @@ SUMMARIES = {
     "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
     "pages-line-parity":           "EN file and its RU counterpart have the same line count",
     "pages-structure-parity":      "EN and RU structural skeletons must match",
-    "pages-translation":           "RU line byte-identical to its EN counterpart (untranslated)",
+    "pages-translation":           "RU line still identical to EN, or carrying English stopwords",
     "examples-parity":             "EN and RU examples/ must match (byte / comment-stripped)",
     "nav-structure-parity":        "EN and RU nav.adoc structure must match",
 }
@@ -4432,8 +4438,8 @@ def build_parser():
     parser.add_argument("--list-modules", action="store_true",
                         help="List every discovered module (under en/modules/ and ru/modules/) and exit.")
     parser.add_argument("--verbose", action="store_true",
-                        help="Verbose mode: show diffs (parity checks) or enable the stricter "
-                             "stopword heuristic (--check-pages-translation).")
+                        help="Verbose mode: show full diffs on the parity checks (instead of "
+                             "a truncated preview) and per-hit detail on the heuristic checks.")
     page_action = parser.add_argument("--page", action="append", metavar="NAME",
                         help="Limit the per-file en/ru checks (translation, line-parity, "
                              "structure-parity, no-cyrillic, no-unicode-dashes, no-yo, "
@@ -4625,7 +4631,7 @@ def _build_v2_parser():
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
     c.add_argument("--verbose", action="store_true",
-                   help="Show diffs / enable the stricter translation heuristic.")
+                   help="Show full diffs and per-hit detail on the heuristic checks.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
                         help="Limit per-file EN/RU checks to matching page(s)/"
                              "partial(s); 'UNCOMMITTED' for the current git diff. "
