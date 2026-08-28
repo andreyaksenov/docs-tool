@@ -4363,7 +4363,7 @@ SUMMARIES = {
     "pages-translation":           "RU line still identical to EN, or carrying English stopwords",
     "examples-parity":             "EN and RU examples/ must match (byte / comment-stripped)",
     "nav-structure-parity":        "EN and RU nav.adoc structure must match",
-    "links-external":              "every http(s) link resolves (no 404, dead host, or permanent redirect)",
+    "links-external":              "external http(s) links: 404 fails, redirects and unreachable flagged",
 }
 
 # Short label per family for `list`; tier -> commit disposition.
@@ -4480,7 +4480,9 @@ def _rule_examples(key):
         rest = "another --target" if len(siblings) > 1 else f"over {tgt}/"
         out.append((f"./docs_tool.py {other}", rest))
     if key in _RULES_WITH_VERBOSE:
-        out.append((f"./docs_tool.py {cmd} --verbose", "full diff / per-hit detail"))
+        vlabel = ("every referencing page + the 403/429/5xx list"
+                  if key == "links-external" else "full diff / per-hit detail")
+        out.append((f"./docs_tool.py {cmd} --verbose", vlabel))
     if key == "pages-terminology":
         out.append((f"./docs_tool.py {cmd} --glossary my-glossary.psv",
                     "explicit glossary (else *-glossary.psv)"))
