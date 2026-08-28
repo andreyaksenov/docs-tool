@@ -10,7 +10,7 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [<family> ...] [--<rule> ...] [--target NAME] [--verbose] [--page NAME ...]
-    ./docs_tool.py show  <rule|rule-id>         -- one rule's full rationale
+    ./docs_tool.py show  <rule|rule-id>|all     -- one rule's rationale, or every rule with examples
     ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
 
@@ -25,6 +25,8 @@ Examples:
     ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
     ./docs_tool.py check chars markup --page UNCOMMITTED
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
+
+Run "docs_tool.py show all" for runnable examples covering every rule.
 
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
 --list-checks, --list-modules -- still works; see "docs_tool.py --list-checks".
@@ -4837,8 +4839,8 @@ def _build_v2_parser():
                    help="Glossary file(s) for 'check terms'. Repeatable. "
                         "Defaults to *-glossary.psv in the current directory.")
 
-    sh = sub.add_parser("show", help="One rule's full rationale, by rule name or rule ID.")
-    sh.add_argument("name", metavar="RULE", help="e.g. 'no-yo' or 'ST01'.")
+    sh = sub.add_parser("show", help="One rule's rationale + examples, or 'show all' for every rule.")
+    sh.add_argument("name", metavar="RULE", help="e.g. 'no-yo', 'ST01', or 'all'.")
 
     ls = sub.add_parser("list", help="The family/rule map (also 'list rules' / 'list targets').")
     ls.add_argument("what", nargs="?", metavar="[rules|targets]",
@@ -4949,16 +4951,46 @@ def _v2_list(what):
     print("check <family> --<rule>        run just one rule")
     print("check all                      run everything")
     print("show <rule|rule-id>            one rule's rationale + examples")
+    print("show all                       every rule, with examples")
     print("list rules | list targets      flat rule list · --target values")
     print()
     print("'suggest:' is advice for your pre-commit hook, not something the tool")
     print("enforces -- every run exits 0 clean / 1 on findings, whatever the family.")
 
 
+def _print_examples(key, indent="  "):
+    examples = _rule_examples(key)
+    # Label first, command second. Trailing comments would have to be padded
+    # past the longest command -- and `refs --orphaned --target tags
+    # --external-root ADCM=../docs-adcm` is 85 characters on its own, which
+    # drags every sibling line off the edge of the terminal. A short leading
+    # label column aligns no matter how long the commands get.
+    width = max(len(note) for _, note in examples)
+    for cmd, note in examples:
+        print(f"{indent}{note:<{width}}   {cmd}")
+
+
+def _v2_show_all():
+    """Every rule with its examples, in rule-ID order. The per-rule docstrings
+    are left out on purpose: 22 full rationales is a document, not a reference
+    you scan -- `show <rule>` is there when you want one of them."""
+    for i, (key, rid) in enumerate(sorted(RULE_IDS.items(), key=lambda kv: kv[1])):
+        if i:
+            print()
+        beta = "  [beta]" if key in BETA_CHECKS else ""
+        print(f"{rid}  {SUMMARIES.get(key, '')}{beta}")
+        _print_examples(key, indent="      ")
+    print("\nshow <rule|rule-id>  for one rule's full rationale, exceptions, and "
+          "known false positives")
+
+
 def _v2_show(name):
+    if name == "all":
+        return _v2_show_all()
     key = _resolve_check_name(name)
     if key is None:
-        print(f"unknown rule: {name}  (run 'docs_tool list' for the map)", file=sys.stderr)
+        print(f"unknown rule: {name}  (run 'docs_tool list' for the map, or "
+              f"'docs_tool show all' for every rule with examples)", file=sys.stderr)
         sys.exit(2)
     fam = _family_of(_rule_of(key)) or "?"
     disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
@@ -4968,16 +5000,8 @@ def _v2_show(name):
     doc = (CHECKS[key].__doc__ or "").strip()
     if doc:
         print("\n" + "\n".join(line.strip() for line in doc.splitlines()))
-    examples = _rule_examples(key)
-    # Label first, command second. Trailing comments would have to be padded
-    # past the longest command -- and `refs --orphaned --target tags
-    # --external-root ADCM=../docs-adcm` is 85 characters on its own, which
-    # drags every sibling line off the edge of the terminal. A short leading
-    # label column aligns no matter how long the commands get.
-    width = max(len(note) for _, note in examples)
     print("\nExamples:")
-    for cmd, note in examples:
-        print(f"  {note:<{width}}   {cmd}")
+    _print_examples(key)
 
 
 def _main_v2():

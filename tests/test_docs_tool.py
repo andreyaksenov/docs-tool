@@ -2122,6 +2122,40 @@ class RuleExampleTests(unittest.TestCase):
         notes = [n for _, n in self._examples("CH01")]
         self.assertIn("over examples/", notes)
 
+    def test_show_all_covers_every_rule_with_examples(self):
+        """The one command that answers "how do I run each of these" -- the
+        per-rule `show` needs 22 invocations to do the same job."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dt._v2_show("all")
+        text = out.getvalue()
+        for key, rid in dt.RULE_IDS.items():
+            self.assertIn(rid, text, rid)
+            self.assertIn(f"./docs_tool.py {dt._check_command(key)}", text, rid)
+
+    def test_show_all_omits_the_long_rationales(self):
+        """22 full docstrings would be a document, not a reference."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dt._v2_show("all")
+        text = out.getvalue()
+        doc = (dt.CHECKS["pages-no-yo"].__doc__ or "")
+        self.assertNotIn("Фёдоров", text)          # from ST01's rationale
+        self.assertIn("ST01", text)
+        # ...and the single-rule view still has it
+        one = io.StringIO()
+        with contextlib.redirect_stdout(one):
+            dt._v2_show("ST01")
+        self.assertIn("Фёдоров", one.getvalue())
+
+    def test_show_all_is_discoverable(self):
+        """It only helps if --help and list say it exists."""
+        self.assertIn("show all", dt.__doc__)
+        listing = io.StringIO()
+        with contextlib.redirect_stdout(listing):
+            dt._v2_list(None)
+        self.assertIn("show all", listing.getvalue())
+
     def test_show_prints_the_examples(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
