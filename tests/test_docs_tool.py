@@ -2804,8 +2804,17 @@ class ExternalLinkExtractionTests(unittest.TestCase):
 
     def test_internal_plus_in_url_is_kept(self):
         self.assertEqual(
-            dt._extract_urls_from_line("https://api.example.com/search?q=a+b next"),
-            ["https://api.example.com/search?q=a+b"])
+            dt._extract_urls_from_line("https://api.arenadata.io/search?q=a+b next"),
+            ["https://api.arenadata.io/search?q=a+b"])
+
+    def test_trailing_italic_underscore_stripped(self):
+        self.assertEqual(
+            dt._extract_urls_from_line("visit _http://host.ru-central1.internal_ now"),
+            ["http://host.ru-central1.internal"])
+        self.assertEqual(dt._extract_urls_from_line("path https://x.io/a_b_c_ end"),
+                         ["https://x.io/a_b_c"])
+        self.assertEqual(dt._extract_urls_from_line("keep https://x.io/a_b_c here"),
+                         ["https://x.io/a_b_c"])
 
     def test_attribute_value_url_is_caught(self):
         self.assertEqual(dt._extract_urls_from_line(":page-source: https://repo.example/tree/main"),
@@ -2817,13 +2826,26 @@ class ExternalLinkExtractionTests(unittest.TestCase):
         self.assertFalse(dt._should_probe("https://{host}/page"))
         self.assertFalse(dt._should_probe("https://host.example/TODO"))
         self.assertFalse(dt._should_probe("https://github.com/org/repo.git"))
-        self.assertTrue(dt._should_probe("https://docs.example.org/guide"))
+        self.assertFalse(dt._should_probe("https://docs.example.org/guide"))   # RFC 2606, suffix
+        self.assertTrue(dt._should_probe("https://docs.arenadata.io/guide"))
+
+    def test_private_and_placeholder_hosts_are_skipped(self):
+        for u in ("http://10.20.30.40:9000/", "http://192.168.1.1", "http://172.16.0.9",
+                  "http://169.254.1.1", "http://10.20.30.444",   # malformed IP
+                  "http://FQDN:8081", "http://HOST:PORT", "http://hostname:25000/x",
+                  "http://adh-host1.ru-central1.internal:25000/",
+                  "https://wiki.corp.lan/page"):
+            self.assertFalse(dt._should_probe(u), u)
+
+    def test_public_ip_and_real_host_still_probed(self):
+        self.assertTrue(dt._should_probe("https://8.8.8.8/status"))
+        self.assertTrue(dt._should_probe("https://docs.arenadata.io/x"))
 
     def test_allow_domain_suffix_match(self):
-        dt.LINK_ALLOW_DOMAINS = {"intranet.example"}
+        dt.LINK_ALLOW_DOMAINS = {"intranet.acme"}
         try:
-            self.assertFalse(dt._should_probe("https://wiki.intranet.example/x"))
-            self.assertTrue(dt._should_probe("https://intranet.example.org/x"))
+            self.assertFalse(dt._should_probe("https://wiki.intranet.acme/x"))
+            self.assertTrue(dt._should_probe("https://other.acme/x"))
         finally:
             dt.LINK_ALLOW_DOMAINS = set()
 

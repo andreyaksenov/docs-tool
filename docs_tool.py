@@ -41,6 +41,7 @@ legitimate content -- treat their output as a review list, not a hard gate.
 """
 import argparse
 import difflib
+import ipaddress
 import json
 import os
 import re
@@ -3622,12 +3623,26 @@ _GEO_SENSITIVE_SUFFIXES = (
 # attribute substitution). Both are stripped from the bare-URL sweep and
 # from a macro target.
 _LINK_MACRO_RE = re.compile(r'\b(?:link|image):{1,2}\+*(https?://[^\[\]\s^+]+)[+^]*\[')
-_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|)^]+(?:\([^\s\[\]<>"`|)^]*\))?[^\s\[\]<>"`|)^.,;:!?+]')
-_URL_TRAILING_JUNK = '.,;:!?"\'»<>^+'
-_URL_SKIP_HOSTS = {"example.com", "example.org", "example.net", "example.edu",
-                   "localhost", "127.0.0.1", "0.0.0.0", "::1"}
+_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|)^]+(?:\([^\s\[\]<>"`|)^]*\))?[^\s\[\]<>"`|)^.,;:!?+_]')
+# A trailing `_` is almost always an AsciiDoc italic marker that ran into
+# the URL (`_http://host_`); a real URL essentially never ends in one.
+_URL_TRAILING_JUNK = '.,;:!?"\'»<>^+_'
+_URL_SKIP_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+# RFC 2606 reserved domains -- matched as a suffix, so www.example.com and
+# docs.example.org go too.
+_URL_EXAMPLE_DOMAINS = ("example.com", "example.org", "example.net", "example.edu")
+# Stand-in hostnames docs use in "http://<this>:PORT" style instructions.
+_URL_PLACEHOLDER_HOSTS = {
+    "fqdn", "host", "hostname", "hosts", "host1", "host2", "port", "ip",
+    "ipaddress", "ip-address", "address", "server", "servername", "server-name",
+    "namenode", "master", "your-host", "your-server", "host-or-ip",
+}
+# Non-routable / doc-only TLDs -- a link into one is never a live external page.
+_URL_PRIVATE_TLDS = (".local", ".internal", ".lan", ".intranet", ".corp",
+                     ".home", ".invalid", ".test", ".localdomain")
 _URL_PLACEHOLDER_RE = re.compile(r'(?i)(?:\bTODO\b|\bFIXME\b|\bXXX\b|CHANGEME|'
                                  r'your[-_]|<[^>]+>|\.\.\.)')
+_DOTTED_QUAD_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 
 def _trim_url(url):
@@ -3672,10 +3687,29 @@ def _is_geo_sensitive(host):
     return any(_host_suffix_match(host, s) for s in _GEO_SENSITIVE_SUFFIXES)
 
 
+def _is_unroutable_host(host):
+    """True for a host that is never a live external page: a private /
+    loopback / link-local / malformed IP, a doc-only TLD (.internal,
+    .local, ...), or a stand-in like FQDN / HOST / HOSTNAME. These show up
+    all over "point your browser at http://<host>:<port>" instructions."""
+    if host in _URL_PLACEHOLDER_HOSTS:
+        return True
+    if host.endswith(_URL_PRIVATE_TLDS):
+        return True
+    if any(_host_suffix_match(host, d) for d in _URL_EXAMPLE_DOMAINS):
+        return True
+    try:
+        return not ipaddress.ip_address(host).is_global
+    except ValueError:
+        # a dotted-quad shape that isn't a valid address (10.20.30.444)
+        return bool(_DOTTED_QUAD_RE.match(host))
+
+
 def _should_probe(url):
     """Skip URLs that can't or shouldn't be fetched: RFC-2606 example
-    hosts, localhost, an unsubstituted `{attribute}`, an obvious
-    placeholder, or a host the caller allow-listed with --allow-domain."""
+    hosts, localhost, private/placeholder hosts (see _is_unroutable_host),
+    an unsubstituted `{attribute}`, an obvious placeholder, or a host the
+    caller allow-listed with --allow-domain."""
     if "{" in url or "}" in url:
         return False
     if url.endswith(".git"):
@@ -3683,7 +3717,7 @@ def _should_probe(url):
     if _URL_PLACEHOLDER_RE.search(url):
         return False
     host = _host_of(url)
-    if not host or host in _URL_SKIP_HOSTS or host.endswith(".local"):
+    if not host or host in _URL_SKIP_HOSTS or _is_unroutable_host(host):
         return False
     if any(_host_suffix_match(host, d) for d in LINK_ALLOW_DOMAINS):
         return False
@@ -3968,8 +4002,9 @@ def check_links_external(verbose=False) -> bool:
     and noted -- pass --insecure to make that the default and drop the note.
 
     Comment lines and ---- / .... blocks are skipped, as are RFC-2606
-    example hosts, localhost, *.git remotes, and any host passed to
-    --allow-domain."""
+    example hosts, localhost, private/link-local IPs, doc-only hosts
+    (FQDN:PORT, *.internal, 10.x, ...), *.git remotes, and any host passed
+    to --allow-domain."""
     _LINK_TLS_FELL_BACK.clear()
     _LINK_HOST_SEMAPHORES.clear()
     sites = {}

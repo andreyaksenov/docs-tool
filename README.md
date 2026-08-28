@@ -345,8 +345,9 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   makes unverified TLS the default and drops the note.
 
   Skipped: comment lines and `----`/`....` blocks, RFC 2606 example hosts,
-  `localhost`, `*.git` clone URLs, unresolved `{attributes}`, and any host passed
-  to `--allow-domain`.
+  `localhost`, private / link-local IPs, doc placeholders (`http://FQDN:PORT`,
+  `*.internal`, `10.x`, a bare `HOST`), `*.git` clone URLs, unresolved
+  `{attributes}`, and any host passed to `--allow-domain`.
 
   ```bash
   ./docs_tool.py check links
