@@ -1937,37 +1937,55 @@ class NoDocsTreeTests(unittest.TestCase):
         self.assertIn("nosuchfamily", out)
 
 
-class UnmatchedPageWarningTests(FixtureTestCase):
-    """--page NAME that matches nothing has to say so: a silent run reads
-    as "that page is clean" when it means "nothing was checked"."""
-
-    def _no_yo_with_page(self, *pages):
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            dt._apply_page_filter(list(pages))   # warns as a side effect
-        return err.getvalue()
+class UnmatchedPageRejectionTests(FixtureTestCase):
+    """--page NAME that matches nothing aborts the run (exit 2). Letting it
+    through would report "OK:" and exit 0 for a page that was never read,
+    so a typo in a CI invocation would pass as a green run."""
 
     def setUp(self):
         super().setUp()
         self.antora_yml("en", "TEST")
         self.write("en/modules/ROOT/pages/reference/vacuum.adoc", "= T\n")
 
-    def test_unknown_filename_warns(self):
-        self.assertIn("nosuch.adoc", self._no_yo_with_page("nosuch.adoc"))
+    def _filter(self, *pages):
+        """Returns (exit_code_or_None, stderr) for _apply_page_filter."""
+        err = io.StringIO()
+        code = None
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            try:
+                dt._apply_page_filter(list(pages))
+            except SystemExit as e:
+                code = e.code
+        return code, err.getvalue()
 
-    def test_unknown_directory_warns(self):
-        self.assertIn("nosuchdir", self._no_yo_with_page("nosuchdir"))
+    def test_unknown_filename_aborts(self):
+        code, err = self._filter("nosuch.adoc")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuch.adoc", err)
 
-    def test_real_filename_is_silent(self):
-        self.assertEqual(self._no_yo_with_page("vacuum.adoc"), "")
+    def test_unknown_directory_aborts(self):
+        code, err = self._filter("nosuchdir")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuchdir", err)
 
-    def test_real_directory_is_silent(self):
-        self.assertEqual(self._no_yo_with_page("reference"), "")
+    def test_real_filename_passes_through(self):
+        self.assertEqual(self._filter("vacuum.adoc"), (None, ""))
 
-    def test_only_the_unmatched_one_is_named(self):
-        out = self._no_yo_with_page("vacuum.adoc", "nosuch.adoc")
-        self.assertIn("nosuch.adoc", out)
-        self.assertNotIn("--page vacuum.adoc", out)
+    def test_real_directory_passes_through(self):
+        self.assertEqual(self._filter("reference"), (None, ""))
+
+    def test_one_bad_value_aborts_even_alongside_a_good_one(self):
+        code, err = self._filter("vacuum.adoc", "nosuch.adoc")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuch.adoc", err)
+        self.assertNotIn("--page vacuum.adoc", err)
+
+    def test_every_unmatched_value_is_reported_at_once(self):
+        """One re-run per typo would be a poor trade for a one-line loop."""
+        code, err = self._filter("nosuch.adoc", "alsonot.adoc")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuch.adoc", err)
+        self.assertIn("alsonot.adoc", err)
 
 
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
@@ -2229,8 +2247,13 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("--no-yo", err)
 
     def test_check_sets_page_filter_then_runs(self):
-        # no fixture tree here -> checks just find nothing, but routing +
-        # --page parsing must work and exit 0.
+        # The page has to exist -- an unmatched --page is a usage error now
+        # (see UnmatchedPageRejectionTests). It stays empty: this is about
+        # routing and --page parsing, not findings.
+        for lang in ("en", "ru"):
+            d = Path(self._tmp) / lang / "modules/ROOT/pages"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "foo.adoc").write_text("= T\n")
         code, out, _ = self._run("check", "l10n", "--structure", "--page", "foo.adoc")
         self.assertEqual(dt._PAGE_FILTER, {"names": {("foo",)}, "dirs": set()})
         self.assertEqual(code, 0)

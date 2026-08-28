@@ -4540,10 +4540,13 @@ def _require_a_docs_tree():
              f"{Path.cwd()} -- run docs_tool from the docs repo root")
 
 
-def _warn_unmatched_page_filters(page_args):
-    """Warn about a --page NAME that matched no file. Silence there reads
-    as "this page is clean" when it actually means "nothing was checked",
-    so a typo'd filename would otherwise pass as a green run."""
+def _reject_unmatched_page_filters(page_args):
+    """Abort on a --page NAME that matched no file. Running the remaining
+    rules would report "OK:" for a page that was never read, and exit 0 --
+    so a typo'd filename in a CI invocation would pass as a green run.
+    A usage error (exit 2), like a bad --target: nothing was checked, so
+    this is not a finding. UNCOMMITTED is exempt -- resolving to nothing
+    there is the normal "no .adoc changes" case, handled by the caller."""
     explicit = [n for n in page_args if n != "UNCOMMITTED"]
     if not explicit:
         return
@@ -4559,6 +4562,7 @@ def _warn_unmatched_page_filters(page_args):
                                       if _ends_with_parts(relparts, n)}
                     matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
                                      if relparts[:len(d)] == d}
+    unmatched = []
     for name in explicit:
         if name.endswith(".adoc"):
             key = tuple(p for p in name[:-len(".adoc")].split("/") if p)
@@ -4567,8 +4571,16 @@ def _warn_unmatched_page_filters(page_args):
             key = tuple(p for p in name.split("/") if p)
             hit = key in matched_dirs
         if not hit:
-            print(f"warning: --page {name} matched no file -- nothing was "
-                  f"checked for it", file=sys.stderr)
+            unmatched.append(name)
+    if unmatched:
+        # Every unmatched value at once: a run with several --page typos
+        # shouldn't take one re-run per typo to discover them all.
+        for name in unmatched:
+            kind = "file" if name.endswith(".adoc") else "file under that directory"
+            print(f"error: --page {name} matched no {kind}", file=sys.stderr)
+        print("aborting -- a --page value that matches nothing would report a "
+              "clean run over a page that was never read", file=sys.stderr)
+        sys.exit(2)
 
 
 def _apply_page_filter(page_args):
@@ -4590,7 +4602,7 @@ def _apply_page_filter(page_args):
         print("OK: no uncommitted .adoc changes to check.")
         sys.exit(0)
     _PAGE_FILTER = {"names": names, "dirs": dirs}
-    _warn_unmatched_page_filters(page_args)
+    _reject_unmatched_page_filters(page_args)
 
 
 def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):

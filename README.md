@@ -258,9 +258,10 @@ If a bare filename matches two files, qualify it (`--page gp_toolkit/gp_ao.adoc`
 pass the full path. `--page UNCOMMITTED` with nothing uncommitted exits `0`
 immediately — which is what the pre-commit hook relies on.
 
-A `--page` value that matches no file warns on stderr (`--page nosuch.adoc matched
-no file`) instead of passing silently, since an empty run otherwise looks identical
-to a clean one.
+A `--page` value that matches no file aborts the run with exit `2` — an empty run
+otherwise looks identical to a clean one, so a typo in a CI invocation would pass
+green. `--page UNCOMMITTED` resolving to nothing is exempt: that's the normal
+"no `.adoc` changes" case, and still exits `0`.
 
 ## Sync
 
