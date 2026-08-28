@@ -3580,12 +3580,11 @@ def check_pages_ru_latin_homoglyphs(verbose=False) -> bool:
 LINK_TIMEOUT = 10.0
 LINK_OFFLINE = False
 LINK_ALLOW_DOMAINS = set()
-LINK_CACHE_PATH = ".docs_tool_link_cache.json"
-LINK_CACHE_REFRESH = False
+LINK_CACHE_PATH = None          # off by default; --link-cache PATH opts in
 LINK_INSECURE = False           # skip TLS verification without the per-run note
-LINK_SHOW_UNVERIFIED = False    # list the couldn't-check links, not just count them
+LINK_SHOW_UNVERIFIED = False    # also list the server-said-no links (403/429/5xx)
 LINK_MAX_WORKERS = 8
-_LINK_CACHE_TTL = 7 * 24 * 3600          # results older than a week are re-probed
+_LINK_CACHE_TTL = 7 * 24 * 3600          # a cached result older than this is re-probed
 _LINK_PROGRESS_THRESHOLD = 8            # show a progress line past this many fresh fetches
 # At most a few requests in flight per host: fanning all 8 workers at one
 # host (github.com carries most links in these docs) earns a 429 that is
@@ -3919,7 +3918,7 @@ def _classify_probe(probe):
 
 
 def _load_link_cache():
-    if LINK_CACHE_REFRESH or not LINK_CACHE_PATH:
+    if not LINK_CACHE_PATH:
         return {}
     try:
         data = json.loads(Path(LINK_CACHE_PATH).read_text(encoding="utf-8"))
@@ -3945,23 +3944,24 @@ def _save_link_cache(cache):
 def check_links_external(verbose=False) -> bool:
     """Fetch every http(s) link in pages/ and partials/ (both languages).
 
-    Two classes are printed by default, because they are the two you can act
-    on in the source:
+    Printed line by line:
 
-        BROKEN     404 / 410, or a host that does not resolve  -- fails the run
-        REDIRECT   permanent (301/308) to a genuinely different URL
+        BROKEN       404 / 410, or a host that does not resolve  -- fails the run
+        REDIRECT     permanent (301/308) to a genuinely different URL
+        UNREACHABLE  timeout / connection refused / DNS failure
+        VPN?         unreachable on a host known to region-lock
 
-    Everything else -- 401/403 anti-bot walls, 429s, 5xx, timeouts, DNS
-    failures, region-locked hosts -- is collapsed into a one-line count,
-    since from any given machine it says more about the route than the page.
+    UNREACHABLE / VPN? don't fail the run -- re-run behind a VPN to tell a
+    dead link from a blocked route. Collapsed to a one-line count (the
+    server answered, just not usefully): 401/403 anti-bot walls, 429s, 5xx.
     --show-unverified (or --verbose) lists those too.
 
     Only BROKEN fails the run. Links are de-duplicated site-wide (one fetch
-    per distinct URL, at most a few concurrent per host) and cached for a
-    week in .docs_tool_link_cache.json (--link-cache to move it,
-    --refresh-links to ignore it). --offline skips fetching and just lists
-    the links found. Honours --page. Once there are more than a handful to
-    fetch, a "checking k/N" progress line is written to stderr.
+    per distinct URL, at most a few concurrent per host). Every run is fresh
+    unless --link-cache PATH is given (then results are cached there with a
+    7-day TTL). --offline skips fetching and just lists the links found.
+    Honours --page. Past a handful of fetches a "checking k/N" progress line
+    is written to stderr.
 
     Hosts whose TLS certificate the local trust store can't validate (a
     missing CA bundle, a MITM proxy) are retried once without verification
@@ -4040,55 +4040,61 @@ def check_links_external(verbose=False) -> bool:
     _save_link_cache(cache)
 
     total = len(sites)
-    actionable = []      # (label, detail, url) -- BROKEN + REDIRECT, always printed
-    unverified = []      # (label, detail, url) -- couldn't-check, listed only on request
+    # Shown line-by-line: things you act on in the source (BROKEN, REDIRECT)
+    # and things you'd re-test behind a VPN (UNREACHABLE, VPN?).
+    # Collapsed to a count: the server answered, just not usefully -- 403
+    # anti-bot walls, 429s, 5xx. --show-unverified / --verbose lists those.
+    shown, collapsed = [], []
     for url in sorted(sites):
         label, detail, finding = results[url]
         if label == "OK":
             continue
-        if label in ("BROKEN", "REDIRECT"):
-            actionable.append((label, detail, url))
-        else:
-            unverified.append((label, detail, url))
+        (shown if label in ("BROKEN", "REDIRECT", "UNREACHABLE", "VPN?")
+         else collapsed).append((label, detail, url))
 
     def _print_hit(label, detail, url):
-        print(f"{label:<9} {url}  ({detail})")
+        print(f"{label:<11} {url}  ({detail})")
         refs = sites[url]
         for f, ln in (refs if verbose else refs[:3]):
             print(f"        {f}:{ln}")
         if not verbose and len(refs) > 3:
             print(f"        ... and {len(refs) - 3} more (--verbose for all)")
 
-    for label, detail, url in actionable:
+    for label, detail, url in shown:
         _print_hit(label, detail, url)
 
-    show_unverified = verbose or LINK_SHOW_UNVERIFIED
-    if unverified and show_unverified:
-        if actionable:
+    show_collapsed = verbose or LINK_SHOW_UNVERIFIED
+    if collapsed and show_collapsed:
+        if shown:
             print()
-        for label, detail, url in unverified:
+        for label, detail, url in collapsed:
             _print_hit(label, detail, url)
 
-    findings = sum(1 for lbl, _, _ in actionable if lbl == "BROKEN")
-    redirects = sum(1 for lbl, _, _ in actionable if lbl == "REDIRECT")
+    findings = sum(1 for lbl, _, _ in shown if lbl == "BROKEN")
+    redirects = sum(1 for lbl, _, _ in shown if lbl == "REDIRECT")
+    unreachable = sum(1 for lbl, _, _ in shown if lbl in ("UNREACHABLE", "VPN?"))
 
-    if not actionable and not unverified:
+    if not shown and not collapsed:
         print(f"OK: all {total} external link(s) resolve.")
     else:
-        print(f"\nTotal: {findings} broken, {redirects} redirect(s), "
-              f"of {total} external link(s).")
+        parts = [f"{findings} broken", f"{redirects} redirect(s)"]
+        if unreachable:
+            parts.append(f"{unreachable} unreachable")
+        print(f"\nTotal: {', '.join(parts)}, of {total} external link(s).")
 
-    if unverified and not show_unverified:
-        by_label = Counter(lbl for lbl, _, _ in unverified)
+    if unreachable:
+        print("Unreachable from here can mean the link is dead, or that a "
+              "proxy / datacenter-IP block / regional restriction is in the\n"
+              "way -- re-run behind a VPN to tell them apart.")
+
+    if collapsed and not show_collapsed:
+        by_label = Counter(lbl for lbl, _, _ in collapsed)
         pretty = {"BLOCKED": "blocked", "RATELIMIT": "rate-limited",
-                  "SERVER-ERR": "server error", "UNREACHABLE": "unreachable",
-                  "VPN?": "maybe VPN-only"}
+                  "SERVER-ERR": "server error"}
         breakdown = ", ".join(f"{n} {pretty.get(lbl, lbl.lower())}"
                               for lbl, n in by_label.most_common())
-        print(f"{len(unverified)} link(s) could not be verified from here "
-              f"({breakdown}) -- pass --show-unverified to list them.\n"
-              f"A proxy, a datacenter-IP block, or a regional restriction here "
-              f"reads the same as a dead link; a VPN often clears it.")
+        print(f"{len(collapsed)} more link(s) got an unhelpful response "
+              f"({breakdown}) -- --show-unverified to list them.")
 
     if _LINK_TLS_FELL_BACK:
         print(f"{len(_LINK_TLS_FELL_BACK)} host(s) were checked without TLS "
@@ -4337,7 +4343,7 @@ RULE_FLAGS = {
     "pages-translation":           "RU line still English",
     "examples-parity":             "EN/RU examples differ",
     "nav-structure-parity":        "EN/RU nav differs",
-    "links-external":              "dead / redirected external links",
+    "links-external":              "dead / redirected / unreachable",
 }
 
 
@@ -4418,12 +4424,12 @@ def _rule_examples(key):
                     "resolve cross-repo refs"))
     if key == "links-external":
         out.append((f"./docs_tool.py {cmd} --offline", "just list the links, don't fetch"))
-        out.append((f"./docs_tool.py {cmd} --show-unverified", "list the couldn't-check links too"))
+        out.append((f"./docs_tool.py {cmd} --show-unverified", "list the 403/429/5xx links too"))
         out.append((f"./docs_tool.py {cmd} --timeout 5", "shorter per-request timeout (default 10s)"))
         out.append((f"./docs_tool.py {cmd} --allow-domain intranet.example.com",
                     "skip a host you know is fine"))
         out.append((f"./docs_tool.py {cmd} --insecure", "skip TLS verification (missing local CA bundle)"))
-        out.append((f"./docs_tool.py {cmd} --refresh-links", "ignore the 7-day result cache"))
+        out.append((f"./docs_tool.py {cmd} --link-cache .link-cache.json", "cache results (off by default)"))
     return out
 
 
@@ -5441,12 +5447,10 @@ def _add_link_args(parser):
     parser.add_argument("--allow-domain", action="append", metavar="HOST",
                         help="'check links': skip this host (suffix match). Repeatable.")
     parser.add_argument("--link-cache", metavar="PATH",
-                        help="'check links': result cache file "
-                             "(default .docs_tool_link_cache.json; empty string disables).")
-    parser.add_argument("--refresh-links", action="store_true",
-                        help="'check links': ignore the cache and re-fetch every link.")
+                        help="'check links': cache results to PATH (7-day TTL) so reruns "
+                             "skip re-fetching. Off by default -- every run is fresh.")
     parser.add_argument("--show-unverified", action="store_true",
-                        help="'check links': list the couldn't-verify links, not just count them.")
+                        help="'check links': also list the 403/429/5xx links, not just count them.")
     parser.add_argument("--insecure", action="store_true",
                         help="'check links': skip TLS certificate verification (and its note).")
 
@@ -5455,14 +5459,12 @@ def _configure_links_from_args(args):
     """Push the `check links` knobs into the module globals check_links_external
     reads (same pattern as EXTERNAL_COMPONENTS / GLOSSARY)."""
     global LINK_TIMEOUT, LINK_OFFLINE, LINK_ALLOW_DOMAINS
-    global LINK_CACHE_PATH, LINK_CACHE_REFRESH, LINK_INSECURE, LINK_SHOW_UNVERIFIED
+    global LINK_CACHE_PATH, LINK_INSECURE, LINK_SHOW_UNVERIFIED
     if getattr(args, "timeout", None) is not None:
         LINK_TIMEOUT = args.timeout
     LINK_OFFLINE = bool(getattr(args, "offline", False))
     LINK_ALLOW_DOMAINS = {d.lower() for d in (getattr(args, "allow_domain", None) or [])}
-    if getattr(args, "link_cache", None) is not None:
-        LINK_CACHE_PATH = args.link_cache
-    LINK_CACHE_REFRESH = bool(getattr(args, "refresh_links", False))
+    LINK_CACHE_PATH = getattr(args, "link_cache", None) or None
     LINK_SHOW_UNVERIFIED = bool(getattr(args, "show_unverified", False))
     LINK_INSECURE = bool(getattr(args, "insecure", False))
 

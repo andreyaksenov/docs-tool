@@ -23,7 +23,7 @@ the `chmod` and run `python docs_tool.py …`.
                      [--target NAME] [--verbose] [--page NAME ...]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
                      [--offline] [--timeout N] [--show-unverified]        # check links
-                     [--allow-domain HOST ...] [--insecure] [--refresh-links]
+                     [--allow-domain HOST ...] [--insecure] [--link-cache PATH]
 
 ./docs_tool.py show <rule|rule-id>            # one rule's rationale + examples
 ./docs_tool.py show all                       # every rule, with examples
@@ -134,7 +134,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `LN03` | `check l10n --untranslated` | RU line still English |
 | `LN04` | `check l10n --examples` | EN/RU examples differ |
 | `LN05` | `check l10n --nav` | EN/RU nav differs |
-| `LK01` | `check links` | dead / redirected external links |
+| `LK01` | `check links` | dead / redirected / unreachable external links |
 
 Name the families you want to run — there's no "run everything" keyword. `links`
 reaches the network and only runs when named.
@@ -314,28 +314,31 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 
 - **`LK01` · `check links`** · beta — fetches every `http(s)` link in `pages/` and
   `partials/` (both languages). De-duplicates site-wide (one request per distinct
-  URL, a few concurrent per host) and caches results for a week in
-  `.docs_tool_link_cache.json` (git-ignore it). Honours `--page`.
+  URL, a few concurrent per host). Honours `--page`.
 
   This is the only check that touches the network — slow, non-deterministic, and
   connectivity-dependent — so it only runs when you name it (`check links`), on its
   own schedule (a nightly job, not a pre-commit hook). The legacy `--all-checks`
-  sweep skips it too. A big doc set can carry many hundreds of external links (a
-  first, uncached run then takes minutes); a `checking k/N` line on stderr tracks
-  progress, and the cache makes every run after the first quick.
+  sweep skips it too. A big doc set can carry many hundreds of external links and a
+  full run then takes minutes; a `checking k/N` line on stderr tracks progress.
+  **Every run is fresh** — pass `--link-cache PATH` to cache results there (7-day
+  TTL) if you want reruns to be quick.
 
-  **Two classes print by default**, because they're the two you fix in the source:
+  **Printed line by line:**
 
   | Label | Means | Fails the run? |
   |-------|-------|:--:|
   | `BROKEN` | `404` / `410`, or a host that doesn't resolve | **yes** |
   | `REDIRECT` | permanent `301`/`308` to a genuinely different URL | no |
+  | `UNREACHABLE` | timeout / connection refused / DNS failure | no |
+  | `VPN?` | unreachable on a host known to region-lock | no |
 
-  Everything else — `403` anti-bot walls, `429`s, `5xx`, timeouts, DNS failures,
-  region-locked hosts — is collapsed into a **one-line count** (a `403` from a
-  datacenter IP or a timeout from a CI box says more about the route than the
-  page). `--show-unverified` (or `--verbose`) lists those too. A trailing-slash or
-  `http`→`https` redirect is treated as clean.
+  `UNREACHABLE`/`VPN?` don't fail the run — from any one machine a blocked route
+  looks the same as a dead link, so re-run behind a VPN to tell them apart.
+
+  **Collapsed to a one-line count** (the server answered, just not usefully): `401`/
+  `403` anti-bot walls, `429`s, `5xx`. `--show-unverified` (or `--verbose`) lists
+  those too. A trailing-slash or `http`→`https` redirect is treated as clean.
 
   A separate one-line note flags any host whose TLS certificate the local trust
   store couldn't validate (a missing CA bundle, not a bad site) — `--insecure`
@@ -348,12 +351,12 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```bash
   ./docs_tool.py check links
   ./docs_tool.py check links --offline                       # just list the links, don't fetch
-  ./docs_tool.py check links --show-unverified                # list the couldn't-check links too
+  ./docs_tool.py check links --show-unverified                # list the 403/429/5xx links too
   ./docs_tool.py check links --page install.adoc
   ./docs_tool.py check links --timeout 5                     # per-request, default 10s
   ./docs_tool.py check links --allow-domain intranet.example # skip a host you know is fine
   ./docs_tool.py check links --insecure                      # skip TLS verification + its note
-  ./docs_tool.py check links --refresh-links                 # ignore the 7-day cache
+  ./docs_tool.py check links --link-cache .link-cache.json   # cache results (off by default)
   ```
 
 ## Scoping with `--page`

@@ -41,7 +41,7 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_page_filter = dt._PAGE_FILTER
         self._orig_glossary = dt.GLOSSARY
         self._orig_links = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
-                            dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH, dt._probe_url,
+                            dt.LINK_CACHE_PATH, dt._probe_url,
                             dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED)
         dt.EN_MODULES_ROOT = self.root / "en" / "modules"
         dt.RU_MODULES_ROOT = self.root / "ru" / "modules"
@@ -50,10 +50,9 @@ class FixtureTestCase(unittest.TestCase):
         dt.GLOSSARY = {}
         dt.LINK_OFFLINE = False
         dt.LINK_ALLOW_DOMAINS = set()
-        dt.LINK_CACHE_REFRESH = False
         dt.LINK_INSECURE = False
         dt.LINK_SHOW_UNVERIFIED = False
-        dt.LINK_CACHE_PATH = str(self.root / ".link_cache.json")
+        dt.LINK_CACHE_PATH = None
         dt._OWN_COMPONENT_NAME_CACHE.clear()
 
     def tearDown(self):
@@ -63,7 +62,7 @@ class FixtureTestCase(unittest.TestCase):
         dt._PAGE_FILTER = self._orig_page_filter
         dt.GLOSSARY = self._orig_glossary
         (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
-         dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH, dt._probe_url,
+         dt.LINK_CACHE_PATH, dt._probe_url,
          dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED) = self._orig_links
         dt._OWN_COMPONENT_NAME_CACHE.clear()
         shutil.rmtree(self._tmpdir, ignore_errors=True)
@@ -3049,28 +3048,36 @@ class ExternalLinkCheckTests(FixtureTestCase):
         self.assertIn("REDIRECT", out)
         self.assertIn("https://new.example/p", out)
 
-    def test_unverifiable_is_collapsed_by_default(self):
+    def test_unreachable_is_shown_but_blocked_is_collapsed(self):
         self._page("slow: https://slow.example/p\nblock: https://wall.example/q\n")
         dt._probe_url = _probe_table({
             "https://slow.example/p": ("err", "timeout", "no response in 10s"),
             "https://wall.example/q": 403})
         ok, out = self.run_check(dt.check_links_external)
-        self.assertTrue(ok, out)
-        self.assertNotIn("https://slow.example/p", out)   # not listed line-by-line
-        self.assertNotIn("UNREACHABLE", out)
-        self.assertIn("2 link(s) could not be verified", out)
+        self.assertTrue(ok, out)                          # neither fails the run
+        self.assertIn("UNREACHABLE https://slow.example/p", out)   # shown line-by-line
         self.assertIn("1 unreachable", out)
-        self.assertIn("1 blocked", out)
+        self.assertNotIn("https://wall.example/q", out)   # 403 collapsed
+        self.assertIn("1 more link(s) got an unhelpful response (1 blocked)", out)
         self.assertIn("--show-unverified", out)
+        self.assertIn("VPN", out)                         # the re-run-behind-a-VPN hint
 
-    def test_show_unverified_lists_them(self):
-        self._page("slow: https://slow.example/p\n")
-        dt._probe_url = _probe_table({"https://slow.example/p": ("err", "timeout", "gone")})
+    def test_show_unverified_lists_the_collapsed_ones(self):
+        self._page("block: https://wall.example/q\n")
+        dt._probe_url = _probe_table({"https://wall.example/q": 403})
         dt.LINK_SHOW_UNVERIFIED = True
         ok, out = self.run_check(dt.check_links_external)
         self.assertTrue(ok, out)
-        self.assertIn("UNREACHABLE", out)
-        self.assertIn("https://slow.example/p", out)
+        self.assertIn("BLOCKED", out)
+        self.assertIn("https://wall.example/q", out)
+
+    def test_unreachable_shown_by_default(self):
+        self._page("slow: https://slow.example/p\n")
+        dt._probe_url = _probe_table({"https://slow.example/p": ("err", "timeout", "gone")})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertTrue(ok, out)
+        self.assertIn("UNREACHABLE https://slow.example/p", out)
+        self.assertIn("p.adoc:1", out)
 
     def test_clean_run_is_one_line(self):
         self._page("https://ok.example/1\n")
@@ -3142,7 +3149,24 @@ class ExternalLinkCheckTests(FixtureTestCase):
 
 
 class ExternalLinkCacheTests(FixtureTestCase):
-    def test_cached_result_is_not_re_probed(self):
+    def setUp(self):
+        super().setUp()
+        dt.LINK_CACHE_PATH = str(self.root / ".link-cache.json")
+
+    def test_no_cache_by_default_every_run_is_fresh(self):
+        dt.LINK_CACHE_PATH = None
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", "https://c.example/p\n")
+        dt._probe_url = _probe_table({"https://c.example/p": 200})
+        self.run_check(dt.check_links_external)
+        self.assertFalse((self.root / ".link-cache.json").exists())
+
+        calls = []
+        dt._probe_url = _probe_table({"https://c.example/p": 200}, calls)
+        self.run_check(dt.check_links_external)
+        self.assertEqual(calls, ["https://c.example/p"])   # re-probed
+
+    def test_cache_when_enabled_skips_re_probing(self):
         self.antora_yml("en", "TEST")
         self.write("en/modules/ROOT/pages/p.adoc", "https://c.example/p\n")
 
@@ -3156,19 +3180,6 @@ class ExternalLinkCacheTests(FixtureTestCase):
         ok, out = self.run_check(dt.check_links_external)
         self.assertTrue(ok, out)
         self.assertEqual(calls, [])
-
-    def test_refresh_links_ignores_cache(self):
-        self.antora_yml("en", "TEST")
-        self.write("en/modules/ROOT/pages/p.adoc", "https://c.example/p\n")
-        dt._probe_url = _probe_table({"https://c.example/p": 200})
-        self.run_check(dt.check_links_external)
-
-        dt.LINK_CACHE_REFRESH = True
-        calls = []
-        dt._probe_url = _probe_table({"https://c.example/p": 404}, calls)
-        ok, out = self.run_check(dt.check_links_external)
-        self.assertFalse(ok)
-        self.assertEqual(calls, ["https://c.example/p"])
 
     def test_expired_entry_is_re_probed(self):
         self.antora_yml("en", "TEST")
@@ -3199,20 +3210,30 @@ class ExternalLinkWiringTests(unittest.TestCase):
     def test_link_args_parse_and_configure(self):
         p = dt._build_v2_parser()
         args = p.parse_args(["check", "links", "--offline", "--timeout", "5",
-                             "--allow-domain", "x.example", "--refresh-links",
-                             "--link-cache", "/tmp/lc.json"])
+                             "--allow-domain", "x.example", "--insecure",
+                             "--show-unverified", "--link-cache", "/tmp/lc.json"])
         _orig = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
-                 dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH)
+                 dt.LINK_CACHE_PATH, dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED)
         try:
             dt._configure_links_from_args(args)
             self.assertEqual(dt.LINK_TIMEOUT, 5.0)
             self.assertTrue(dt.LINK_OFFLINE)
             self.assertEqual(dt.LINK_ALLOW_DOMAINS, {"x.example"})
             self.assertEqual(dt.LINK_CACHE_PATH, "/tmp/lc.json")
-            self.assertTrue(dt.LINK_CACHE_REFRESH)
+            self.assertTrue(dt.LINK_INSECURE)
+            self.assertTrue(dt.LINK_SHOW_UNVERIFIED)
         finally:
             (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
-             dt.LINK_CACHE_PATH, dt.LINK_CACHE_REFRESH) = _orig
+             dt.LINK_CACHE_PATH, dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED) = _orig
+
+    def test_no_cache_flag_means_no_caching(self):
+        args = dt._build_v2_parser().parse_args(["check", "links"])
+        _orig = dt.LINK_CACHE_PATH
+        try:
+            dt._configure_links_from_args(args)
+            self.assertIsNone(dt.LINK_CACHE_PATH)
+        finally:
+            dt.LINK_CACHE_PATH = _orig
 
     def test_help_lists_lk01(self):
         help_text = dt._build_v2_parser().format_help()
