@@ -67,11 +67,13 @@ class FixtureTestCase(unittest.TestCase):
 
     @staticmethod
     def run_check(check_fn, *args, **kwargs):
-        """Runs a check_*() function with stdout captured, returning
-        (ok, output_text) instead of letting findings print to the real
-        terminal."""
+        """Runs a check_*() function with stdout and stderr captured,
+        returning (ok, output_text) instead of letting findings print to
+        the real terminal. Both streams are merged: some advisory output
+        (the unchecked-component note, the glossary fallback) goes to
+        stderr, and a test asserting on it shouldn't have to care which."""
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             ok = check_fn(*args, **kwargs)
         return ok, buf.getvalue()
 
@@ -1886,6 +1888,53 @@ class CompletePageNameTests(FixtureTestCase):
             "gp_toolkit/gp_ao_diskquota_no_perm_map.adoc",
             "reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc",
         })
+
+
+class SkippedComponentReportTests(FixtureTestCase):
+    """A reference into a component with no --external-root is left
+    unchecked, not reported broken. Name those components: a run that never
+    looked at one otherwise reads exactly like a run that verified it --
+    the same silent-clean-pass the --external-root warning already guards
+    against for a *wrong* path, here for an *omitted* one."""
+
+    def setUp(self):
+        super().setUp()
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:docs-backup::intro.adoc[Backup]\n"
+                   "xref:blog::post.adoc[Post]\n")
+
+    def test_unregistered_components_are_named(self):
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, out)          # left unchecked, not broken
+        self.assertIn("docs-backup", out)
+        self.assertIn("blog", out)
+        self.assertIn("--external-root", out)
+
+    def test_nothing_reported_when_every_reference_resolves_locally(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "xref:other.adoc[O]\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "= O\n")
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, out)
+        self.assertNotIn("left unchecked", out)
+
+    def test_a_registered_component_is_not_reported(self):
+        ext = Path(self._tmpdir) / "sibling"
+        (ext / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
+        (ext / "en/modules/ROOT/pages/intro.adoc").write_text("= I\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components(
+            [f"docs-backup={ext}"])
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertNotIn("docs-backup", out)
+        self.assertIn("blog", out)        # the still-unregistered one remains
+
+    def test_the_set_does_not_leak_between_runs(self):
+        """Cleared per scan -- otherwise `check all` would attribute one
+        rule's skips to a later rule that never saw them."""
+        self.run_check(dt.check_pages_broken_refs)
+        self.write("en/modules/ROOT/pages/page.adoc", "= no refs here\n")
+        _, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertNotIn("docs-backup", out)
 
 
 class NoDocsTreeTests(unittest.TestCase):

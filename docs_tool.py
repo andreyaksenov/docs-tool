@@ -82,6 +82,13 @@ _INVISIBLE_RE = re.compile('[' + ''.join(
 # see, and left unchecked. {component_name: {"en": {module: root}, "ru": {module: root}}}
 EXTERNAL_COMPONENTS = {}
 
+# Component/module names a reference pointed at that couldn't be resolved
+# against this repo or any --external-root, filled in by _resolve_module_ref
+# and reported by _report_skipped_components. Those references are left
+# unchecked, so without this a run that never looked at a whole component
+# is indistinguishable from one that verified it.
+_SKIPPED_COMPONENTS = set()
+
 
 # --------------------------------------------------------------------------
 # Module discovery
@@ -864,6 +871,12 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
     if modules is None and name == own_name:
         modules = lang_module_roots
     if modules is None:
+        # Not a module here, not a registered --external-root, not our own
+        # component name: nothing to resolve against, so the reference is
+        # left unchecked rather than reported broken. Record the name --
+        # a run that silently skips a whole component otherwise looks
+        # exactly like one that verified it (see _report_skipped_components).
+        _SKIPPED_COMPONENTS.add(name)
         return None
     if rest.startswith(":"):
         # Antora's explicit-empty-module form (`component::page`) means the
@@ -1215,12 +1228,30 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     return includers
 
 
+def _report_skipped_components():
+    """Name the components whose references this run left unchecked. The
+    counterpart to the --external-root warning in _load_external_components:
+    that catches a *wrong* path, this catches an *omitted* one -- the more
+    common case, since nobody passes a flag they've forgotten they need.
+    Not a finding (nothing is known to be broken), so it doesn't fail the
+    run -- but silence here means an unverified component reads exactly
+    like a verified one."""
+    skipped = sorted(_SKIPPED_COMPONENTS)
+    if not skipped:
+        return
+    print(f"\nnote: {len(skipped)} referenced component(s) left unchecked -- "
+          f"{', '.join(skipped)}", file=sys.stderr)
+    print("      pass --external-root NAME=PATH for each one you have "
+          "checked out locally", file=sys.stderr)
+
+
 def check_pages_broken_refs(verbose=False) -> bool:
     """Port of check_pages_broken_refs.sh, extended to resolve
     component-prefixed xrefs against sibling modules of the same language
     when the component name matches a discovered module."""
     ok = True
     broken_count = 0
+    _SKIPPED_COMPONENTS.clear()   # report only what this scan itself skipped
 
     def report(file, lineno, msg):
         nonlocal ok, broken_count
@@ -1248,6 +1279,7 @@ def check_pages_broken_refs(verbose=False) -> bool:
         print("OK: no broken xref/include/image references found.")
     else:
         print(f"\nTotal: {broken_count} broken reference(s).")
+    _report_skipped_components()
     return ok
 
 
@@ -3576,8 +3608,10 @@ BETA_CHECKS = {
 #                                           a target X
 #   --target all                            -> every target of whatever is selected
 #
-# TIERS is advisory: `list` shows "block"/"warn by default" per family, as a
-# hint for what a pre-commit hook should hard-fail on vs. just report.
+# TIERS is advisory and display-only: `list`/`show` render it as
+# "suggest: block"/"suggest: warn", a hint for what a pre-commit hook should
+# hard-fail on vs. just report. Nothing here changes how the tool exits --
+# every run is 0 clean / 1 on findings regardless of family.
 FAMILIES = {
     "chars": {                        # L0 -- Unicode / encoding
         "no-cyrillic":  {"pages": "pages-no-cyrillic", "examples": "examples-no-cyrillic"},
@@ -4837,7 +4871,7 @@ def _v2_list(what):
         if i:
             print()
         disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
-        print(f"{fam}  —  {FAMILY_DESC.get(fam, '')}  ({disp} by default)")
+        print(f"{fam}  —  {FAMILY_DESC.get(fam, '')}  (suggest: {disp})")
         for rule, targets in rules.items():
             primary = targets.get("pages") or next(iter(targets.values()))
             beta = "  [beta]" if primary in BETA_CHECKS else ""
@@ -4853,6 +4887,9 @@ def _v2_list(what):
     print("check all                      run everything")
     print("show <rule|rule-id>            one rule's full rationale")
     print("list rules | list targets      flat rule list · --target values")
+    print()
+    print("'suggest:' is advice for your pre-commit hook, not something the tool")
+    print("enforces -- every run exits 0 clean / 1 on findings, whatever the family.")
 
 
 def _v2_show(name):
@@ -4863,7 +4900,7 @@ def _v2_show(name):
     fam = _family_of(_rule_of(key)) or "?"
     disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
     beta = "  [beta -- heuristic, treat findings as a review list]" if key in BETA_CHECKS else ""
-    print(f"{RULE_IDS[key]}  {_check_command(key)}   ({disp}){beta}\n")
+    print(f"{RULE_IDS[key]}  {_check_command(key)}   (suggest: {disp}){beta}\n")
     print(SUMMARIES.get(key, ""))
     doc = (CHECKS[key].__doc__ or "").strip()
     if doc:

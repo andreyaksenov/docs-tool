@@ -29,7 +29,9 @@ the `chmod` and run `python docs_tool.py …`.
 ```
 
 Run with no arguments to print the full command list. A run exits `0` if everything
-passed, `1` if any rule found something.
+passed, `1` if any rule found something, `2` on a usage error. `list` labels each
+family `suggest: block` / `suggest: warn` — that's advice for your pre-commit hook,
+not something the tool enforces; the exit code is the same for every family.
 
 Rules are grouped into six **families**:
 
@@ -141,6 +143,14 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   ```bash
   ./docs_tool.py check refs --broken
   ./docs_tool.py check refs --broken --external-root ADCM=../docs-adcm
+  ```
+  A reference into a component with no `--external-root` can't be resolved either
+  way, so it's left unchecked rather than called broken. The run ends by naming
+  those components on stderr — an unverified component otherwise looks exactly
+  like a verified one:
+  ```
+  note: 2 referenced component(s) left unchecked -- docs-backup, docs-pxf
+        pass --external-root NAME=PATH for each one you have checked out locally
   ```
 
 - **`RF02`–`RF06` · `check refs --orphaned [--target …]`** — flags content that is
