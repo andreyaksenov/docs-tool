@@ -2807,14 +2807,23 @@ class ExternalLinkExtractionTests(unittest.TestCase):
             dt._extract_urls_from_line("https://api.arenadata.io/search?q=a+b next"),
             ["https://api.arenadata.io/search?q=a+b"])
 
-    def test_trailing_italic_underscore_stripped(self):
+    def test_formatting_wrapped_url_is_not_a_link(self):
+        # AsciiDoc renders _http://x_ as italic text, not an autolink
         self.assertEqual(
-            dt._extract_urls_from_line("visit _http://host.ru-central1.internal_ now"),
-            ["http://host.ru-central1.internal"])
-        self.assertEqual(dt._extract_urls_from_line("path https://x.io/a_b_c_ end"),
-                         ["https://x.io/a_b_c"])
-        self.assertEqual(dt._extract_urls_from_line("keep https://x.io/a_b_c here"),
-                         ["https://x.io/a_b_c"])
+            dt._extract_urls_from_line("looks like: _http://FQDN:8081_. To log in"), [])
+        self.assertEqual(
+            dt._extract_urls_from_line("`https://mono.example/x` shown as code"), [])
+        # ...but a URL merely near formatting is still a link
+        self.assertEqual(dt._extract_urls_from_line("keep _this_ https://real.io/a_b_c here"),
+                         ["https://real.io/a_b_c"])
+        self.assertEqual(dt._extract_urls_from_line("path https://real.io/a_b_c_ end"),
+                         ["https://real.io/a_b_c"])   # lone trailing _ still trimmed
+
+    def test_backslash_escaped_url_is_not_a_link(self):
+        self.assertEqual(
+            dt._extract_urls_from_line(r"for example \http://FQDN:9999 in the bar"), [])
+        self.assertEqual(
+            dt._extract_urls_from_line(r"example: _\http://10.20.30.40:11200_."), [])
 
     def test_attribute_value_url_is_caught(self):
         self.assertEqual(dt._extract_urls_from_line(":page-source: https://repo.example/tree/main"),

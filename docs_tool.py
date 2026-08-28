@@ -3656,16 +3656,30 @@ def _trim_url(url):
     return url
 
 
+# Constrained-formatting markers: a bare URL wrapped in a matching pair
+# (`_http://x_`, `` `http://x` ``) is rendered as text, not autolinked.
+_FMT_WRAP_MARKERS = "_*`+#"
+
+
 def _extract_urls_from_line(line):
-    """Every distinct http(s) URL on one already comment/code-filtered line.
-    Macro targets (`link:URL[..]`, `image:URL[..]`) are read first and
-    masked out so the bare-URL sweep doesn't double-count them."""
+    """Every distinct http(s) URL that AsciiDoc would render as a live link
+    on one already comment/code-filtered line. Macro targets
+    (`link:URL[..]`, `image:URL[..]`) are read first and masked out so the
+    bare-URL sweep doesn't double-count them. A bare URL is skipped when
+    AsciiDoc wouldn't autolink it: escaped with a backslash (`\\http://x`)
+    or wrapped in a formatting pair (`_http://x_`)."""
     urls = []
     masked = line
     for m in _LINK_MACRO_RE.finditer(line):
         urls.append(_trim_url(m.group(1)))
         masked = masked[:m.start(1)] + " " * (m.end(1) - m.start(1)) + masked[m.end(1):]
     for m in _BARE_URL_RE.finditer(masked):
+        before = masked[m.start() - 1] if m.start() else ""
+        after = masked[m.end()] if m.end() < len(masked) else ""
+        if before == "\\":
+            continue
+        if before and before == after and before in _FMT_WRAP_MARKERS:
+            continue
         urls.append(_trim_url(m.group(0)))
     # de-dup within the line, preserve order
     seen = set()
