@@ -4102,13 +4102,16 @@ def check_links_external(verbose=False) -> bool:
     # and things you'd re-test behind a VPN (UNREACHABLE, VPN?).
     # Collapsed to a count: the server answered, just not usefully -- 403
     # anti-bot walls, 429s, 5xx. --show-unverified / --verbose lists those.
+    # Worst first: dead links you must fix, then redirects to update, then
+    # the couldn't-reach list. URL-sorted within each group.
+    _ORDER = {"BROKEN": 0, "REDIRECT": 1, "UNREACHABLE": 2, "VPN?": 2}
     shown, collapsed = [], []
     for url in sorted(sites):
         label, detail, finding = results[url]
         if label == "OK":
             continue
-        (shown if label in ("BROKEN", "REDIRECT", "UNREACHABLE", "VPN?")
-         else collapsed).append((label, detail, url))
+        (shown if label in _ORDER else collapsed).append((label, detail, url))
+    shown.sort(key=lambda h: (_ORDER[h[0]], h[2]))
 
     def _print_hit(label, detail, url):
         print(f"{label:<11} {url}  ({detail})")
@@ -4118,8 +4121,12 @@ def check_links_external(verbose=False) -> bool:
         if not verbose and len(refs) > 3:
             print(f"        ... and {len(refs) - 3} more (--verbose for all)")
 
+    prev = None
     for label, detail, url in shown:
+        if prev is not None and _ORDER[label] != _ORDER[prev]:
+            print()                       # blank line between groups
         _print_hit(label, detail, url)
+        prev = label
 
     show_collapsed = verbose or LINK_SHOW_UNVERIFIED
     if collapsed and show_collapsed:

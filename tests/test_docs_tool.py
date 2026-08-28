@@ -3121,6 +3121,20 @@ class ExternalLinkCheckTests(FixtureTestCase):
         self.assertIn("REDIRECT", out)
         self.assertIn("https://new.example/p", out)
 
+    def test_hits_are_grouped_broken_then_redirect_then_unreachable(self):
+        self._page("a https://z-red.example/p\n"          # redirect, late alphabetically
+                    "b https://a-slow.example/q\n"         # unreachable, early alphabetically
+                    "c https://m-dead.example/r\n")        # broken, middle
+        dt._probe_url = _probe_table({
+            "https://z-red.example/p": dict(status=301, final_url="https://z-red.example/moved"),
+            "https://a-slow.example/q": ("err", "timeout", "no response"),
+            "https://m-dead.example/r": 404})
+        ok, out = self.run_check(dt.check_links_external)
+        self.assertFalse(ok)
+        order = [ln.split()[0] for ln in out.splitlines()
+                 if ln[:1].isalpha() and ln.split()[0] in ("BROKEN", "REDIRECT", "UNREACHABLE")]
+        self.assertEqual(order, ["BROKEN", "REDIRECT", "UNREACHABLE"])
+
     def test_unreachable_is_shown_but_blocked_is_collapsed(self):
         self._page("slow: https://slow.example/p\nblock: https://wall.example/q\n")
         dt._probe_url = _probe_table({
