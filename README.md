@@ -357,9 +357,25 @@ broken reference in the repo. Run `check refs` in CI, or by hand before a releas
 ## Legacy `--check-*` flags
 
 The pre-subcommand interface still works: `--check-<name>`, `--all-checks`,
-`--sync`, `--list-checks`, `--list-modules`. See the
+`--sync`, `--list-checks`, `--list-modules`. All 22 checks are reachable both
+ways — upgrading a vendored copy doesn't break an existing hook or CI job. See the
 [migration map](docs/proposals/cli-redesign.md#4-full-migration-map) for the
 `check <family>` equivalent of each `--check-*` flag, or run `./docs_tool.py --list-checks`.
+
+Dropped in the redesign, and only these: `sync --since REF`, and the `-v` / `-n`
+short aliases (spell out `--verbose` / `--dry-run`). Two silent no-ops also became
+errors — running outside a docs tree, and a `--page` that matches no file — since
+both previously reported a clean pass over nothing.
+
+If you need the pre-redesign script itself, it's frozen on the
+[`legacy-flags`](https://github.com/andreyaksenov/docs-tool/tree/legacy-flags) branch:
+
+```bash
+curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/legacy-flags/docs_tool.py
+```
+
+That branch is a snapshot for rollback, not a maintained release line — fixes land
+on `main`.
 
 ## Tab completion (optional)
 
