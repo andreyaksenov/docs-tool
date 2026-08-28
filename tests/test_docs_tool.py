@@ -2787,6 +2787,28 @@ class ExternalLinkExtractionTests(unittest.TestCase):
         self.assertEqual(dt._trim_url("https://en.wikipedia.org/wiki/Foo_(bar)"),
                          "https://en.wikipedia.org/wiki/Foo_(bar)")
 
+    def test_wikipedia_parenthesised_title_survives_extraction(self):
+        for line in (
+            "the https://en.wikipedia.org/wiki/Kerberos_(protocol)[Kerberos^] page",
+            "bare https://en.wikipedia.org/wiki/Kerberos_(protocol) here",
+            "trailing https://en.wikipedia.org/wiki/Kerberos_(protocol).",
+        ):
+            self.assertEqual(dt._extract_urls_from_line(line),
+                             ["https://en.wikipedia.org/wiki/Kerberos_(protocol)"], line)
+
+    def test_prose_parens_around_a_url_are_stripped(self):
+        self.assertEqual(
+            dt._extract_urls_from_line("see (https://real-site.io/page) for detail"),
+            ["https://real-site.io/page"])
+        self.assertEqual(
+            dt._extract_urls_from_line("(https://en.wikipedia.org/wiki/Foo_(bar)) note"),
+            ["https://en.wikipedia.org/wiki/Foo_(bar)"])
+
+    def test_two_urls_in_one_paren_group(self):
+        self.assertEqual(
+            dt._extract_urls_from_line("(https://a-site.io and https://b-site.io) both"),
+            ["https://a-site.io", "https://b-site.io"])
+
     def test_new_window_caret_stripped(self):
         self.assertEqual(dt._extract_urls_from_line("see https://docker.com^[Docker] now"),
                          ["https://docker.com"])

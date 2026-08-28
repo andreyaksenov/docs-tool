@@ -3623,7 +3623,10 @@ _GEO_SENSITIVE_SUFFIXES = (
 # attribute substitution). Both are stripped from the bare-URL sweep and
 # from a macro target.
 _LINK_MACRO_RE = re.compile(r'\b(?:link|image):{1,2}\+*(https?://[^\[\]\s^+]+)[+^]*\[')
-_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|)^]+(?:\([^\s\[\]<>"`|)^]*\))?[^\s\[\]<>"`|)^.,;:!?+_]')
+# Parens ARE allowed in the body -- Wikipedia et al. put them in real paths
+# (`/wiki/Kerberos_(protocol)`). An unbalanced trailing one picked up from
+# prose (`(see https://x)`) is stripped afterwards by _trim_url.
+_BARE_URL_RE = re.compile(r'https?://[^\s\[\]<>"`|^]+[^\s\[\]<>"`|^.,;:!?+_]')
 # A trailing `_` is almost always an AsciiDoc italic marker that ran into
 # the URL (`_http://host_`); a real URL essentially never ends in one.
 _URL_TRAILING_JUNK = '.,;:!?"\'»<>^+_'
