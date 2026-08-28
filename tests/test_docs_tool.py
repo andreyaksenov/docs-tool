@@ -591,6 +591,138 @@ class TagsOrphanedTests(FixtureTestCase):
             shutil.rmtree(external_root, ignore_errors=True)
 
 
+class PagesOrphanedTests(FixtureTestCase):
+    """check_pages_orphaned (RF02). Reachability here means *a nav.adoc
+    entry*, deliberately -- NOT "something, somewhere links to it".
+
+    That distinction is the whole rule, so it is pinned here. Antora
+    publishes a page whether or not the nav lists it, so it is tempting to
+    read a nav-absent-but-xref'd page as a false positive and "fix" the
+    rule to count prose xrefs. Don't: a repo part-way through adding a
+    section relies on this to list what still needs wiring into the nav,
+    and counting xrefs would hide exactly that. A page linked only from
+    body text has no sidebar entry, which is the finding."""
+
+    def test_page_missing_from_nav_is_orphaned(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:listed.adoc[Listed]\n")
+        self.write("en/modules/ROOT/pages/listed.adoc", "= L\n")
+        self.write("en/modules/ROOT/pages/stray.adoc", "= S\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("stray.adoc", out)
+        self.assertNotIn("listed.adoc", out)
+
+    def test_xref_from_another_page_does_not_count_as_reachable(self):
+        """The case most likely to be mistaken for a bug -- see the class
+        docstring. A page linked from prose but absent from the nav is
+        still reported."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:index.adoc[Index]\n")
+        self.write("en/modules/ROOT/pages/index.adoc",
+                   "= I\n\nSee xref:detail.adoc[the detail page].\n")
+        self.write("en/modules/ROOT/pages/detail.adoc", "= D\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("detail.adoc", out)
+
+    def test_nested_page_matched_by_its_path_relative_to_pages(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc",
+                   "* xref:reference/sql/select.adoc[SELECT]\n")
+        self.write("en/modules/ROOT/pages/reference/sql/select.adoc", "= S\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_module_qualified_nav_entry_counts(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:howto:guide.adoc[Guide]\n")
+        self.write("en/modules/howto/pages/guide.adoc", "= G\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_component_qualified_nav_entry_counts(self):
+        """nav.adoc may spell out its own component name instead of using
+        the shorter module-qualified form."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:TEST:howto:guide.adoc[Guide]\n")
+        self.write("en/modules/howto/pages/guide.adoc", "= G\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_a_sibling_modules_nav_can_do_the_linking(self):
+        """Navs are unioned: modules cross-reference each other, so a page
+        need not be listed by its *own* module's nav."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:howto:guide.adoc[Guide]\n")
+        self.write("en/modules/howto/nav.adoc", "* xref:ROOT:index.adoc[Index]\n")
+        self.write("en/modules/howto/pages/guide.adoc", "= G\n")
+        self.write("en/modules/ROOT/pages/index.adoc", "= I\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_nav_entry_inside_an_included_partial_counts(self):
+        """_combined_nav_text flattens include::partial$...[] first."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "include::partial$nav-extra.adoc[]\n")
+        self.write("en/modules/ROOT/partials/nav-extra.adoc", "* xref:deep.adoc[Deep]\n")
+        self.write("en/modules/ROOT/pages/deep.adoc", "= D\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_start_page_is_exempt(self):
+        """antora.yml's start_page is the component's entry point, so it
+        needs no nav entry of its own."""
+        self.write("en/antora.yml",
+                   "name: TEST\nversion: '1.0'\nstart_page: ROOT:home.adoc\n")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:other.adoc[Other]\n")
+        self.write("en/modules/ROOT/pages/home.adoc", "= H\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "= O\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_pdf_glossary_layout_page_is_exempt(self):
+        """:page-layout: pdf-glossary marks a page built for the PDF only,
+        which is intentionally absent from the site nav."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:other.adoc[Other]\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "= O\n")
+        self.write("en/modules/ROOT/pages/glossary.adoc",
+                   "= G\n:page-layout: pdf-glossary\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_a_language_with_no_nav_at_all_is_skipped(self):
+        """No nav to compare against means no evidence either way -- every
+        page would otherwise be reported."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc", "= P\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertTrue(ok, out)
+
+    def test_en_and_ru_are_both_scanned(self):
+        self.antora_yml("en", "TEST")
+        self.antora_yml("ru", "TEST")
+        for lang in ("en", "ru"):
+            self.write(f"{lang}/modules/ROOT/nav.adoc", "* xref:listed.adoc[L]\n")
+            self.write(f"{lang}/modules/ROOT/pages/listed.adoc", "= L\n")
+        self.write("ru/modules/ROOT/pages/zabytaya.adoc", "= Z\n")
+
+        ok, out = self.run_check(dt.check_pages_orphaned)
+        self.assertFalse(ok)
+        self.assertIn("zabytaya.adoc", out)
+
+
 class PartialsOrphanedTests(FixtureTestCase):
     def test_whole_file_partial_with_no_tags_and_no_include_is_orphaned(self):
         """Regression test: a partials/ file with no tag::/end:: markers at
