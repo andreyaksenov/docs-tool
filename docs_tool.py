@@ -4420,6 +4420,16 @@ def _complete_page_or_dir_name(**kwargs):
     return sorted(names | dirs)
 
 
+def _complete_family(prefix="", **kwargs):
+    """argcomplete completer for the 'check' FAMILY positional. Returns an
+    ordered {name: description} map so the shell lists the families in
+    writing-quality-pyramid order (chars -> l10n), not sorted, and shows
+    each one's one-liner instead of a shared blob."""
+    items = dict(FAMILY_DESC)
+    items["all"] = "every family"
+    return {k: v for k, v in items.items() if k.startswith(prefix)}
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="docs_tool.py",
@@ -4619,10 +4629,11 @@ def _build_v2_parser():
                        epilog="Each family has --<subcheck> flags (e.g. --no-yo, --structure) "
                               "and, where relevant, --target NAME. Run 'docs_tool list' "
                               "for the full map.")
-    c.add_argument("families", nargs="+", metavar="FAMILY",
+    fam = c.add_argument("families", nargs="+", metavar="FAMILY",
                    choices=list(FAMILIES) + ["all"],
                    help="one or more of: chars, markup, refs, style, terms, l10n, all. "
                         "--<subcheck> flags need exactly one family.")
+    fam.completer = _complete_family
     for sc in _ALL_SUBCHECKS:
         c.add_argument(f"--{sc}", dest=sc.replace("-", "_"), action="store_true",
                        help=argparse.SUPPRESS)
