@@ -24,7 +24,8 @@ the `chmod` and run `python docs_tool.py …`.
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
 
 ./docs_tool.py show <rule|rule-id>            # one rule's full rationale
-./docs_tool.py list [rules|targets]           # the rule map, or a flat list
+./docs_tool.py list                           # the family tree, one line per rule
+./docs_tool.py list rules | list targets      # flat rule list · --target values
 ./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
 ```
 
@@ -45,7 +46,7 @@ Rules are grouped into six **families**:
 | `l10n`   | line-count / structure / nav parity, untranslated lines, `examples/` parity              |
 
 ```bash
-./docs_tool.py check style                  # the whole style family
+./docs_tool.py check style                   # the whole style family
 ./docs_tool.py check style --no-yo           # narrow to one rule
 ./docs_tool.py check chars markup            # several families
 ./docs_tool.py check all
@@ -54,6 +55,48 @@ Rules are grouped into six **families**:
 
 `--target NAME` picks a scan target other than the default `pages` (`pages/` +
 `partials/`) — see `list targets`.
+
+## Output
+
+A clean rule prints one line; a rule with findings lists them and totals up:
+
+```
+$ ./docs_tool.py check style --no-yo
+OK: no ё/Ё characters found in ru/ pages.
+
+$ ./docs_tool.py check chars --dashes
+FILE     en/modules/ROOT/pages/table_partitioning.adoc
+  en/modules/ROOT/pages/table_partitioning.adoc:821:97: … for dates March 1–15 and …
+
+Total: 1 line(s) with en/em dash characters.
+```
+
+Every finding starts with an uppercase label and a path, so runs are easy to `grep`
+by kind:
+
+| Label | Means |
+|-------|-------|
+| `FILE` | header for the `path:line:col:` findings indented under it |
+| `BROKEN` | a reference that doesn't resolve (`path:line`) |
+| `ORPHANED` | a file nothing points at — no line, the whole file is the finding |
+| `MISSING` | an EN or RU counterpart that doesn't exist |
+| `DIFF` | the EN/RU pair that diverged, one path per line |
+
+Where a specific line is meaningful it's `path:line` or `path:line:col`, which most
+editors and terminals turn into a clickable link. Running more than one rule puts a
+header before each, naming the command that re-runs just that rule on its own:
+
+```
+$ ./docs_tool.py check chars markup
+=== CH01  check chars --no-cyrillic ===
+OK: no Cyrillic characters found in en/ pages.
+
+=== CH04  check chars --dashes ===
+...
+```
+
+Advisory lines (`note:`, `warning:`, `info:`) go to stderr, so `> findings.txt`
+keeps them out of the findings themselves.
 
 ## Rules
 
@@ -330,11 +373,18 @@ pip install --user argcomplete        # or: sudo apt install python3-argcomplete
 Add to `~/.zshrc` / `~/.bashrc` and open a new shell:
 
 ```bash
-eval "$(register-python-argcomplete docs_tool.py)"
+eval "$(python3 -m argcomplete.scripts.register_python_argcomplete docs_tool.py)"
 ```
 
-Then `./docs_tool.py <TAB>` completes subcommands, families, and flags; `--page` and
-`sync`'s file argument complete real filenames from the current site.
+The module form is used deliberately: `pip install --user` puts the
+`register-python-argcomplete` wrapper in a bin directory that often isn't on
+`PATH`, and the failure is silent — `eval` of an empty string leaves you with no
+completion and no explanation.
+
+Then `./docs_tool.py <TAB>` completes subcommands and families, and completion is
+family-aware: `check l10n <TAB>` offers `--lines`, `--structure`, … and not
+`--no-yo`. `--page` and `sync`'s file argument complete real filenames from the
+current site.
 </details>
 
 ## Tests
