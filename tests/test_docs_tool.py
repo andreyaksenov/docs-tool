@@ -2896,6 +2896,26 @@ class ExternalLinkClassifyTests(unittest.TestCase):
             "http://h.example/p", status=301, final_url="https://h.example/p"))
         self.assertEqual(label, "OK")
 
+    def test_cosmetic_redirects_are_not_flagged(self):
+        trivial = [
+            ("https://nvd.nist.gov/vuln/detail/CVE-2026-0994",
+             "https://nvd.nist.gov/vuln/detail/cve-2026-0994"),          # case only
+            ("http://hbase.apache.org/book.html#completebulkload",
+             "https://hbase.apache.org/book.html"),                     # https + dropped #frag
+            ("https://dask.org/", "https://www.dask.org/"),             # +www
+        ]
+        for src, dst in trivial:
+            self.assertEqual(
+                dt._classify_probe(dt._Probe(src, status=301, final_url=dst))[0],
+                "OK", f"{src} -> {dst}")
+
+    def test_real_redirect_is_still_flagged(self):
+        label, detail, _ = dt._classify_probe(dt._Probe(
+            "https://phoenix.apache.org/language/index.html", status=301,
+            final_url="https://phoenix.apache.org/docs/grammar/"))
+        self.assertEqual(label, "REDIRECT")
+        self.assertIn("docs/grammar", detail)
+
     def test_temporary_redirect_is_ok(self):
         self.assertEqual(dt._classify_probe(
             dt._Probe("https://h.example/p", status=200,

@@ -3919,9 +3919,15 @@ class _LinkProgress:
 
 
 def _trivial_redirect(a, b):
-    """A 301 that only appends a trailing slash or upgrades http->https is
-    not something to go and edit in the source -- treat it as clean."""
-    norm = lambda u: u.rstrip("/").replace("https://", "http://", 1)
+    """True when a 301/308 only cosmetically rewrites the URL and points at
+    the same page -- an http->https upgrade, a +/- `www.`, a +/- trailing
+    slash, a dropped #fragment (servers strip it; the browser reapplies
+    it), or a change of letter case (e.g. NVD's CVE-1234 -> cve-1234).
+    None of those is worth editing in the source."""
+    def norm(u):
+        u = u.split("#", 1)[0].rstrip("/").lower()
+        u = re.sub(r'^https?://(www\.)?', '', u)
+        return u
     return norm(a) == norm(b)
 
 
