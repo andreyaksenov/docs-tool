@@ -14,10 +14,13 @@ Commands:
     ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
 
-Checks are grouped into six families, ordered by where a rule's authority
+Rules are grouped into six families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
 resolution), style (house style), terms (glossary), l10n (EN<->RU parity).
-Run "docs_tool.py list" for the full map.
+
+%RULES%
+"docs_tool.py show <id>" explains one rule and gives runnable examples for it;
+"docs_tool.py show all" prints those examples for every rule at once.
 
 Examples:
     ./docs_tool.py check chars
@@ -25,8 +28,6 @@ Examples:
     ./docs_tool.py check l10n --structure --verbose --page resource_groups.adoc
     ./docs_tool.py check chars markup --page UNCOMMITTED
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
-
-Run "docs_tool.py show all" for runnable examples covering every rule.
 
 The legacy flag interface -- --check-<name>, --all-checks, --sync,
 --list-checks, --list-modules -- still works; see "docs_tool.py --list-checks".
@@ -3746,6 +3747,53 @@ _TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"
 #
 # The --page exceptions are listed rather than the rules that honour it: most
 # do, and the whole-site checks are the memorable minority.
+# Terse "what it flags" per rule, for the one-line-per-rule table in --help.
+# Deliberately shorter than SUMMARIES: the table has to fit a terminal, and at
+# a glance you want to pick the rule, not read its definition.
+RULE_FLAGS = {
+    "pages-no-cyrillic":           "Cyrillic in EN files",
+    "pages-no-invisible-chars":    "zero-width characters",
+    "pages-no-unicode-dashes":     "literal en/em dashes",
+    "pages-ru-latin-homoglyphs":   "Latin letters in RU prose",
+    "pages-stray-backticks":       "odd backtick count",
+    "pages-unbalanced-delimiters": "unclosed block delimiter",
+    "pages-broken-refs":           "dead xref / include / image",
+    "pages-orphaned":              "defined but never referenced",
+    "pages-no-yo":                 "ё in RU files",
+    "pages-file-path-italics":     "file path not in italics",
+    "pages-table-cell-periods":    "table cell ending in a period",
+    "pages-terminology":           "off-glossary RU translation",
+    "pages-line-parity":           "EN/RU line counts differ",
+    "pages-structure-parity":      "EN/RU skeletons differ",
+    "pages-translation":           "RU line still English",
+    "examples-parity":             "EN/RU examples differ",
+    "nav-structure-parity":        "EN/RU nav differs",
+}
+
+
+def _rules_table():
+    """One line per rule: ID, the command that runs it, what it flags. Built
+    from the same tables the tool dispatches on, so it cannot drift from the
+    real rule set. Multi-target rules collapse to a single row with an ID
+    range (RF02-RF06) -- five near-identical rows would crowd out everything
+    else in --help."""
+    rows = []
+    for fam, rules in FAMILIES.items():
+        for rule, targets in rules.items():
+            primary = targets.get("pages") or next(iter(targets.values()))
+            ids = sorted(RULE_IDS[k] for k in targets.values())
+            rid = ids[0] if len(ids) == 1 else f"{ids[0]}-{ids[-1]}"
+            cmd = _check_command(primary)
+            if len(targets) > 1:
+                cmd += " [--target ...]"
+            rows.append((rid, cmd, RULE_FLAGS.get(primary, SUMMARIES.get(primary, ""))))
+    w_id = max(len(r[0]) for r in rows)
+    w_cmd = max(len(r[1]) for r in rows)
+    out = ["Rules:"]
+    out += [f"    {rid:<{w_id}}  {cmd:<{w_cmd}}  {what}" for rid, cmd, what in rows]
+    return "\n".join(out) + "\n"
+
+
 _RULES_IGNORING_PAGE = {
     "examples-no-cyrillic", "examples-parity", "nav-structure-parity",
     "pages-broken-refs", "pages-orphaned", "examples-orphaned", "images-orphaned",
@@ -4803,7 +4851,10 @@ _V2_VERBS = ("check", "sync", "list", "show")
 def _build_v2_parser():
     p = argparse.ArgumentParser(
         prog="docs_tool.py",
-        description=__doc__,
+        # The rule table is generated, not written out here: --help is where
+        # people look for "what can this check and how do I run it", and a
+        # hand-kept copy would drift from FAMILIES the first time a rule moved.
+        description=__doc__.replace("%RULES%", _rules_table()),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="verb", required=True, metavar="{check,show,list,sync}")

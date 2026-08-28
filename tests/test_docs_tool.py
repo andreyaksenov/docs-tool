@@ -2069,6 +2069,46 @@ class SkippedComponentReportTests(FixtureTestCase):
         self.assertNotIn("docs-backup", out)
 
 
+class HelpRulesTableTests(unittest.TestCase):
+    """--help carries the rule table itself. Anything that makes you run a
+    second command to find out what the tool checks is one step too many --
+    this is the first thing people look at."""
+
+    def test_help_lists_every_rule_and_its_command(self):
+        help_text = dt._build_v2_parser().format_help()
+        for fam, rules in dt.FAMILIES.items():
+            for rule, targets in rules.items():
+                primary = targets.get("pages") or next(iter(targets.values()))
+                self.assertIn(dt.RULE_IDS[primary], help_text, primary)
+                self.assertIn(dt._check_command(primary), help_text, primary)
+
+    def test_table_is_generated_from_the_dispatch_tables(self):
+        """Not a hand-kept copy -- adding a rule must show up with no edit
+        to the docstring."""
+        table = dt._rules_table()
+        rules = [r for fam in dt.FAMILIES.values() for r in fam]
+        self.assertEqual(len(table.strip().splitlines()) - 1, len(rules))
+
+    def test_multi_target_rules_collapse_to_one_row(self):
+        """CH01/CH02 and RF02..RF06 are one rule each; five rows for refs
+        --orphaned would crowd out every other family."""
+        table = dt._rules_table()
+        self.assertIn("CH01-CH02", table)
+        self.assertIn("RF02-RF06", table)
+        self.assertNotIn("RF03 ", table)
+        self.assertIn("[--target ...]", table)
+
+    def test_every_rule_has_a_short_flags_label(self):
+        for fam, rules in dt.FAMILIES.items():
+            for rule, targets in rules.items():
+                primary = targets.get("pages") or next(iter(targets.values()))
+                self.assertIn(primary, dt.RULE_FLAGS, primary)
+
+    def test_table_fits_a_terminal(self):
+        widest = max(len(l) for l in dt._rules_table().splitlines())
+        self.assertLessEqual(widest, 90, "rule table is too wide for --help")
+
+
 class RuleExampleTests(unittest.TestCase):
     """`show <rule>` ends with runnable examples, one per flag that changes
     what that particular rule does."""
