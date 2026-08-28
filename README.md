@@ -3,7 +3,8 @@
 One self-contained Python script that checks an Antora docs repo's `en/` and `ru/`
 trees for consistency, and aligns a RU page's structure after an EN edit. Run it
 from the repo root; every module under `en/modules/` and `ru/modules/` is
-discovered and scanned automatically.
+discovered and scanned automatically. Run from anywhere else and `check`/`sync`
+refuse to start rather than report a clean pass over files they never read.
 
 ## Get it
 
@@ -257,6 +258,10 @@ If a bare filename matches two files, qualify it (`--page gp_toolkit/gp_ao.adoc`
 pass the full path. `--page UNCOMMITTED` with nothing uncommitted exits `0`
 immediately — which is what the pre-commit hook relies on.
 
+A `--page` value that matches no file warns on stderr (`--page nosuch.adoc matched
+no file`) instead of passing silently, since an empty run otherwise looks identical
+to a clean one.
+
 ## Sync
 
 `sync` aligns a RU page's structure to its EN counterpart. Heuristic aligner, not a
@@ -286,10 +291,14 @@ cd "$(git rev-parse --show-toplevel)"
 python3 docs_tool.py check chars markup --page UNCOMMITTED \
   || { echo "pre-commit: blocking check(s) failed" >&2; exit 1; }
 
-python3 docs_tool.py check style terms l10n refs --page UNCOMMITTED || true
+python3 docs_tool.py check style terms l10n --page UNCOMMITTED || true
 ```
 
 Move a family from the second line to the first once it runs clean in practice.
+
+**Don't put `refs` in the hook.** It ignores `--page` and always scans the whole
+site (see above), so every commit touching one `.adoc` would print every orphan and
+broken reference in the repo. Run `check refs` in CI, or by hand before a release.
 
 ## Legacy `--check-*` flags
 

@@ -1784,14 +1784,16 @@ class MainPageValueFormTests(unittest.TestCase):
     """CLI-level routing in main(): a --page NAME ending in .adoc is a file
     filter, one that doesn't is a directory filter (AsciiDoc/Antora has no
     separate topic-id, so there's no ambiguity to worry about), and
-    UNCOMMITTED is still the special sentinel. This routing happens before
-    any filesystem/module scanning, so no fixture tree is needed -- just
-    isolate real argv/cwd and the _PAGE_FILTER global."""
+    UNCOMMITTED is still the special sentinel. Only the --page parsing is
+    under test, but a bare en/modules/ROOT still has to exist: a check run
+    from a directory with no docs tree is refused outright (see
+    _require_a_docs_tree)."""
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_main_page_")
         self._orig_cwd = os.getcwd()
         os.chdir(self._tmpdir)
+        (Path(self._tmpdir) / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
         self._orig_argv = sys.argv
         self._orig_page_filter = dt._PAGE_FILTER
 
@@ -1804,7 +1806,7 @@ class MainPageValueFormTests(unittest.TestCase):
     def test_name_with_adoc_suffix_becomes_a_file_filter(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups.adoc"]
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 dt.main()
         self.assertEqual(dt._PAGE_FILTER, {"names": {("resource_groups",)}, "dirs": set()})
@@ -1812,7 +1814,7 @@ class MainPageValueFormTests(unittest.TestCase):
     def test_bare_name_becomes_a_directory_filter(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands"]
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 dt.main()
         self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
@@ -1820,7 +1822,7 @@ class MainPageValueFormTests(unittest.TestCase):
     def test_trailing_slash_on_directory_is_ignored(self):
         sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands/"]
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 dt.main()
         self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
@@ -1884,6 +1886,88 @@ class CompletePageNameTests(FixtureTestCase):
             "gp_toolkit/gp_ao_diskquota_no_perm_map.adoc",
             "reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc",
         })
+
+
+class NoDocsTreeTests(unittest.TestCase):
+    """A check run from a directory with no en/modules or ru/modules must
+    refuse to run. Scanning nothing and reporting "OK:" for every rule is a
+    clean pass over content that was never read -- the failure mode that
+    silently green-lights a CI job pointed at the wrong directory."""
+
+    def setUp(self):
+        self._argv, self._cwd = sys.argv, os.getcwd()
+        self._tmp = tempfile.mkdtemp(prefix="docs_tool_notree_")
+        os.chdir(self._tmp)
+
+    def tearDown(self):
+        sys.argv, _ = self._argv, os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _run(self, *args):
+        sys.argv = ["docs_tool.py", *args]
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, out.getvalue() + err.getvalue() + (str(code) if code else "")
+
+    def test_check_refuses_without_a_docs_tree(self):
+        code, out = self._run("check", "all")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("OK:", out)
+
+    def test_legacy_check_refuses_too(self):
+        code, out = self._run("--all-checks")
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("OK:", out)
+
+    def test_list_and_show_still_work_anywhere(self):
+        """They describe the rule set, not the content -- no tree needed."""
+        self.assertEqual(self._run("list")[0], 0)
+        self.assertEqual(self._run("show", "ST01")[0], 0)
+
+    def test_usage_errors_still_win_over_the_tree_check(self):
+        """A bad family is a usage error wherever it's typed -- the user
+        should get that, not a complaint about the working directory."""
+        code, out = self._run("check", "nosuchfamily")
+        self.assertEqual(code, 2)
+        self.assertIn("nosuchfamily", out)
+
+
+class UnmatchedPageWarningTests(FixtureTestCase):
+    """--page NAME that matches nothing has to say so: a silent run reads
+    as "that page is clean" when it means "nothing was checked"."""
+
+    def _no_yo_with_page(self, *pages):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            dt._apply_page_filter(list(pages))   # warns as a side effect
+        return err.getvalue()
+
+    def setUp(self):
+        super().setUp()
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/reference/vacuum.adoc", "= T\n")
+
+    def test_unknown_filename_warns(self):
+        self.assertIn("nosuch.adoc", self._no_yo_with_page("nosuch.adoc"))
+
+    def test_unknown_directory_warns(self):
+        self.assertIn("nosuchdir", self._no_yo_with_page("nosuchdir"))
+
+    def test_real_filename_is_silent(self):
+        self.assertEqual(self._no_yo_with_page("vacuum.adoc"), "")
+
+    def test_real_directory_is_silent(self):
+        self.assertEqual(self._no_yo_with_page("reference"), "")
+
+    def test_only_the_unmatched_one_is_named(self):
+        out = self._no_yo_with_page("vacuum.adoc", "nosuch.adoc")
+        self.assertIn("nosuch.adoc", out)
+        self.assertNotIn("--page vacuum.adoc", out)
 
 
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
@@ -2060,6 +2144,9 @@ class CliV2RoutingTests(unittest.TestCase):
         self._tmp = tempfile.mkdtemp(prefix="docs_tool_cli_")
         self._cwd = os.getcwd()
         os.chdir(self._tmp)
+        # Enough of a tree for _require_a_docs_tree to let a check run --
+        # these tests are about routing, not findings, so it stays empty.
+        (Path(self._tmp) / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
 
     def tearDown(self):
         sys.argv = self._argv
@@ -2161,6 +2248,18 @@ class CliV2RoutingTests(unittest.TestCase):
         code, out, _ = self._run("--check-pages-no-yo")
         self.assertEqual(code, 0)
         self.assertIn("OK:", out)
+
+    def test_multi_rule_run_headers_name_the_rule_not_the_registry_key(self):
+        """Section headers are what the user would type to re-run just that
+        rule -- internal CHECKS keys (pages-no-cyrillic) are not a surface."""
+        code, out, _ = self._run("check", "chars")
+        self.assertIn("=== CH01  check chars --no-cyrillic ===", out)
+        self.assertIn("=== CH02  check chars --no-cyrillic --target examples ===", out)
+        self.assertNotIn("=== pages-no-cyrillic ===", out)
+
+    def test_legacy_run_headers_still_name_the_legacy_flag(self):
+        code, out, _ = self._run("--check-pages-no-yo", "--check-pages-no-cyrillic")
+        self.assertIn("=== --check-pages-no-yo ===", out)
 
     def test_list_rules_prints_commands_sorted_by_id(self):
         code, out, _ = self._run("list", "rules")

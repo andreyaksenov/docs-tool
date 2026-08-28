@@ -4529,6 +4529,48 @@ def build_parser():
     return parser
 
 
+def _require_a_docs_tree():
+    """Abort unless this looks like a docs repo root. Without it, running
+    from the wrong directory scans nothing and every check reports "OK:" --
+    a clean pass over content that was never read, which is worse than an
+    error (same reasoning as the --external-root warning above)."""
+    if discover_module_names():
+        return
+    sys.exit(f"error: no {EN_MODULES_ROOT}/ or {RU_MODULES_ROOT}/ found in "
+             f"{Path.cwd()} -- run docs_tool from the docs repo root")
+
+
+def _warn_unmatched_page_filters(page_args):
+    """Warn about a --page NAME that matched no file. Silence there reads
+    as "this page is clean" when it actually means "nothing was checked",
+    so a typo'd filename would otherwise pass as a green run."""
+    explicit = [n for n in page_args if n != "UNCOMMITTED"]
+    if not explicit:
+        return
+    matched_names, matched_dirs = set(), set()
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for subdir in ("pages", "partials"):
+                for path in _iter_files(root / subdir, ".adoc"):
+                    relparts = _content_relparts_stem(path)
+                    if relparts is None:
+                        continue
+                    matched_names |= {n for n in _PAGE_FILTER["names"]
+                                      if _ends_with_parts(relparts, n)}
+                    matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
+                                     if relparts[:len(d)] == d}
+    for name in explicit:
+        if name.endswith(".adoc"):
+            key = tuple(p for p in name[:-len(".adoc")].split("/") if p)
+            hit = key in matched_names
+        else:
+            key = tuple(p for p in name.split("/") if p)
+            hit = key in matched_dirs
+        if not hit:
+            print(f"warning: --page {name} matched no file -- nothing was "
+                  f"checked for it", file=sys.stderr)
+
+
 def _apply_page_filter(page_args):
     """Turn --page NAME values into the _PAGE_FILTER global (shared by both
     the legacy and the `check` surface). Exits 0 immediately if --page
@@ -4548,6 +4590,7 @@ def _apply_page_filter(page_args):
         print("OK: no uncommitted .adoc changes to check.")
         sys.exit(0)
     _PAGE_FILTER = {"names": names, "dirs": dirs}
+    _warn_unmatched_page_filters(page_args)
 
 
 def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):
@@ -4576,7 +4619,12 @@ def _run_selected(selected, verbose, glossary_paths, legacy_headers=False):
         if len(selected) > 1:
             if i:
                 print()
-            print(f"=== {'--check-' + name if legacy_headers else name} ===")
+            # The `check` surface labels each section the way the user would
+            # re-run it (rule ID + command); the legacy surface keeps naming
+            # the --check-* flag that selected it.
+            header = f"--check-{name}" if legacy_headers else \
+                f"{RULE_IDS[name]}  {_check_command(name)}"
+            print(f"=== {header} ===")
         if not CHECKS[name](verbose=verbose):
             overall_ok = False
     return overall_ok
@@ -4616,10 +4664,9 @@ def _main_legacy():
         return
 
     if args.sync:
+        _require_a_docs_tree()
         run_sync(args.sync, dry_run=args.dry_run)
         return
-
-    _apply_page_filter(args.page)
 
     selected = list(CHECKS) if args.all_checks else [
         name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
@@ -4628,6 +4675,9 @@ def _main_legacy():
     if not selected:
         parser.print_help()
         sys.exit(2)
+
+    _require_a_docs_tree()
+    _apply_page_filter(args.page)
 
     overall_ok = _run_selected(selected, args.verbose, args.glossary, legacy_headers=True)
     sys.exit(0 if overall_ok else 1)
@@ -4821,13 +4871,13 @@ def _main_v2():
     if args.verb == "show":
         return _v2_show(args.name)
     if args.verb == "sync":
+        _require_a_docs_tree()
         run_sync(args.file, dry_run=args.dry_run)
         return
 
     # verb == "check"
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
     glossary = args.glossary
-    _apply_page_filter(args.page)
 
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
     picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
@@ -4851,6 +4901,9 @@ def _main_v2():
         print(f"check: that selection matched no rules "
               f"({' '.join(families)}, --target={args.target}).", file=sys.stderr)
         sys.exit(2)
+
+    _require_a_docs_tree()
+    _apply_page_filter(args.page)
 
     ok = _run_selected(selected, args.verbose, glossary)
     sys.exit(0 if ok else 1)
