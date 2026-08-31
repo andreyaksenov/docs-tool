@@ -147,3 +147,5 @@ leaf partition|листовая партиция|листов<> партици<>
 security definer|контекст безопасности (определяющий контекст безопасности)|контекст<> безопасност<>|
 shared library|разделяемая библиотека|разделяем<> библиотек<>|standard RU CS term (cf. "разделяемый объект" for .so)
 transform|трансформация|трансформаци<>|
+leakproof|герметичная|герметичн<>|the LEAKPROOF function attribute (no side effects observable to security-barrier-protected data)
+leakproof|негерметичная|негерметичн<>|sense: the negated form ("not leakproof" / "non-leakproof" functions)
