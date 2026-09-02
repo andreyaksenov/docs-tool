@@ -150,3 +150,5 @@ transform|трансформация|трансформаци<>|
 leakproof|герметичная|герметичн<>|the LEAKPROOF function attribute (no side effects observable to security-barrier-protected data)
 leakproof|негерметичная|негерметичн<>|sense: the negated form ("not leakproof" / "non-leakproof" functions)
 autocommit|автофиксация|автофиксаци<>|the implicit-commit-per-statement mode; longest-first key ordering keeps this from colliding with "commit"
+ordered-set aggregate|агрегат упорядоченного набора|агрегат<> упорядоченн<> набор<>|
+hypothetical-set aggregate|агрегат гипотетического набора|агрегат<> гипотетическ<> набор<>|
