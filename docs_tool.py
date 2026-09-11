@@ -3598,6 +3598,110 @@ def check_pages_table_cell_periods() -> bool:
     return ok
 
 
+_CURLY_QUOTE_RE = re.compile(r'[‘’“”]')
+
+
+def check_pages_no_curly_quotes() -> bool:
+    """New check (not a port of an existing shell script): house style
+    requires straight quotes everywhere -- `'` for an apostrophe/single
+    quote, `"` for a double quote -- in both en/ and ru/. Curly quotes
+    (`' ' " "`) usually creep in from pasting out of Word or a smart-quote
+    editor, so this scans pages/partials in both languages the same shape
+    as check_pages_no_unicode_dashes."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = list(_first_match_hits(lines, _CURLY_QUOTE_RE))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, col, l in hits:
+                        print(f"  {f}:{i}:{col}: {l}")
+    if ok:
+        print("OK: no curly quote characters (‘ ’ “ ”) found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with curly quote characters.")
+    return ok
+
+
+_COPYRIGHT_SYMBOL_RE = re.compile(r'[©®™]')
+
+
+def check_pages_no_copyright_symbols() -> bool:
+    """New check (not a port of an existing shell script): house style
+    drops ©/®/™ even for real trademarks -- write `Hive` instead of
+    `Hive®`. Scans pages/partials in both languages, same shape as
+    check_pages_no_unicode_dashes."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = list(_first_match_hits(lines, _COPYRIGHT_SYMBOL_RE))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, col, l in hits:
+                        print(f"  {f}:{i}:{col}: {l}")
+    if ok:
+        print("OK: no ©/®/™ characters found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with ©/®/™ characters.")
+    return ok
+
+
+# Order they're reported in on a MISSING line, not a priority order.
+_REQUIRED_PAGE_ATTRS = ("page-productlogo", "page-author", "page-htmltitle", "description")
+
+
+def check_pages_required_attrs() -> bool:
+    """New check (not a port of an existing shell script): every
+    documentation page needs a product logo, an author, and title/
+    description meta tags -- set via the `:page-productlogo:`,
+    `:page-author:`, `:page-htmltitle:`, and `:description:` page
+    attributes (SEO recommendations for texts). Reuses _collect_doc_attrs,
+    the same attribute scan _check_refs_in_file uses to resolve `{attr}`
+    substitutions, so an attribute defined anywhere in the file (not just
+    above the title) counts. partials/ are excluded -- they're not
+    standalone pages and carry no metadata of their own."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in _iter_files(root / "pages", ".adoc"):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                attrs = _collect_doc_attrs(lines)
+                missing = [a for a in _REQUIRED_PAGE_ATTRS if a not in attrs]
+                if missing:
+                    ok = False
+                    total_hits += 1
+                    print(f"MISSING  {f}  ({', '.join(missing)})")
+    if ok:
+        print("OK: every page defines :page-productlogo:, :page-author:, "
+              ":page-htmltitle:, and :description:.")
+    else:
+        print(f"\nTotal: {total_hits} page(s) missing required attributes.")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: glossary terminology consistency
 # --------------------------------------------------------------------------
@@ -4576,11 +4680,14 @@ CHECKS = {
     "pages-line-parity": check_pages_line_parity,
     "pages-link-parity": check_pages_link_parity,
     "pages-literal-parity": check_pages_literal_parity,
+    "pages-no-copyright-symbols": check_pages_no_copyright_symbols,
+    "pages-no-curly-quotes": check_pages_no_curly_quotes,
     "pages-no-cyrillic": check_pages_no_cyrillic,
     "pages-no-invisible-chars": check_pages_no_invisible_chars,
     "pages-no-unicode-dashes": check_pages_no_unicode_dashes,
     "pages-no-yo": check_pages_no_yo,
     "pages-orphaned": check_pages_orphaned,
+    "pages-required-attrs": check_pages_required_attrs,
     "pages-ru-latin-homoglyphs": check_pages_ru_latin_homoglyphs,
     "pages-stray-backticks": check_pages_stray_backticks,
     "pages-structure-parity": check_pages_structure_parity,
@@ -4664,6 +4771,9 @@ FAMILIES = {
         "no-yo":              {"pages": "pages-no-yo"},
         "file-path-italics":  {"pages": "pages-file-path-italics"},
         "table-cell-periods": {"pages": "pages-table-cell-periods"},
+        "no-curly-quotes":    {"pages": "pages-no-curly-quotes"},
+        "no-copyright-symbols": {"pages": "pages-no-copyright-symbols"},
+        "required-attrs":     {"pages": "pages-required-attrs"},
     },
     "terms": {                        # L4 -- controlled vocabulary (glossary)
         "terminology": {"pages": "pages-terminology"},
@@ -4726,6 +4836,9 @@ RULE_IDS = {
     "pages-no-yo":                "ST01",
     "pages-file-path-italics":    "ST02",
     "pages-table-cell-periods":   "ST03",
+    "pages-no-curly-quotes":      "ST04",
+    "pages-no-copyright-symbols": "ST05",
+    "pages-required-attrs":       "ST06",
     "pages-terminology":          "TM01",
     "pages-line-parity":          "LN01",
     "pages-structure-parity":     "LN02",
@@ -4757,6 +4870,9 @@ SUMMARIES = {
     "pages-no-yo":                 "no ё/Ё in ru/ files (:page-author: exempt)",
     "pages-file-path-italics":     "file / directory names in prose need _italics_",
     "pages-table-cell-periods":    "a table cell's last sentence shouldn't end with a period (but the prose before a trailing NOTE should)",
+    "pages-no-curly-quotes":       "no curly quotes (‘ ’ “ ”) -- house style uses straight ' and \"",
+    "pages-no-copyright-symbols":  "no ©/®/™ -- write Hive, not Hive®",
+    "pages-required-attrs":        ":page-productlogo:/:page-author:/:page-htmltitle:/:description: must all be set",
     "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
     "pages-line-parity":           "EN file and its RU counterpart have the same line count",
     "pages-structure-parity":      "EN and RU structural skeletons must match",
@@ -4804,6 +4920,9 @@ RULE_FLAGS = {
     "pages-no-yo":                 "ё in RU files",
     "pages-file-path-italics":     "file path not in italics",
     "pages-table-cell-periods":    "unwanted or missing period",
+    "pages-no-curly-quotes":       "curly ’ “ ” quotes",
+    "pages-no-copyright-symbols":  "© ® ™ symbols",
+    "pages-required-attrs":        "missing page attribute",
     "pages-terminology":           "off-glossary RU translation",
     "pages-line-parity":           "EN/RU line counts differ",
     "pages-structure-parity":      "EN/RU skeletons differ",

@@ -45,7 +45,7 @@ Rules are grouped into seven **families**:
 | `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files               |
 | `markup` | stray backticks, unbalanced block delimiters                                             |
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
-| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods                                    |
+| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
 | `l10n`   | line-count / structure / nav parity, link & literal parity, untranslated lines, `examples/` parity |
 | `links`  | external `http(s)` links — `404`, permanent redirect, dead host (network; opt-in)        |
@@ -130,6 +130,9 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST01` | `check style --no-yo` | `ё` in RU files |
 | `ST02` | `check style --file-path-italics` | file path not in italics |
 | `ST03` | `check style --table-cell-periods` | table cell: unwanted trailing period, or one missing before a NOTE |
+| `ST04` | `check style --no-curly-quotes` | curly `’ “ ”` quotes |
+| `ST05` | `check style --no-copyright-symbols` | `© ® ™` symbols |
+| `ST06` | `check style --required-attrs` | missing page attribute |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -259,6 +262,29 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --table-cell-periods
   ./docs_tool.py check style --table-cell-periods --page resource_groups.adoc
+  ```
+
+- **`ST04` · `check style --no-curly-quotes`** — no curly quotes (`’ ‘ “ ”`) in
+  `en/` or `ru/`; house style uses straight `'`/`"`. Usually creeps in from
+  pasting out of Word or a smart-quote editor.
+  ```bash
+  ./docs_tool.py check style --no-curly-quotes
+  ./docs_tool.py check style --no-curly-quotes --page resource_groups.adoc
+  ```
+
+- **`ST05` · `check style --no-copyright-symbols`** — no `©`/`®`/`™` in `en/`
+  or `ru/`, even for a real trademark: write `Hive`, not `Hive®`.
+  ```bash
+  ./docs_tool.py check style --no-copyright-symbols
+  ./docs_tool.py check style --no-copyright-symbols --page resource_groups.adoc
+  ```
+
+- **`ST06` · `check style --required-attrs`** — every page (not partials) must
+  set `:page-productlogo:`, `:page-author:`, `:page-htmltitle:`, and
+  `:description:`, defined anywhere in the file.
+  ```bash
+  ./docs_tool.py check style --required-attrs
+  ./docs_tool.py check style --required-attrs --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary

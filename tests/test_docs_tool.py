@@ -1328,6 +1328,85 @@ class PagesTableCellPeriodsTests(FixtureTestCase):
         self.assertIn("Compression ratio.", output)
 
 
+class PagesNoCurlyQuotesTests(FixtureTestCase):
+    def test_curly_double_quotes_are_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", 'Set the “timeout” value.\n')
+        ok, output = self.run_check(dt.check_pages_no_curly_quotes)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_curly_single_quotes_are_flagged(self):
+        self.write("ru/modules/ROOT/pages/page.adoc", "Это ‘пример’ текста.\n")
+        ok, output = self.run_check(dt.check_pages_no_curly_quotes)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_straight_quotes_pass(self):
+        self.write("en/modules/ROOT/pages/page.adoc", 'Set the "timeout" value, it\'s required.\n')
+        ok, _ = self.run_check(dt.check_pages_no_curly_quotes)
+        self.assertTrue(ok)
+
+
+class PagesNoCopyrightSymbolsTests(FixtureTestCase):
+    def test_registered_trademark_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "Works with Hive® out of the box.\n")
+        ok, output = self.run_check(dt.check_pages_no_copyright_symbols)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_copyright_and_trademark_symbols_are_flagged(self):
+        self.write("ru/modules/ROOT/pages/page.adoc", "© 2024, Product™\n")
+        ok, output = self.run_check(dt.check_pages_no_copyright_symbols)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_plain_product_name_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "Works with Hive out of the box.\n")
+        ok, _ = self.run_check(dt.check_pages_no_copyright_symbols)
+        self.assertTrue(ok)
+
+
+class PagesRequiredAttrsTests(FixtureTestCase):
+    def test_page_missing_all_attrs_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Title\n\nSome text.\n")
+        ok, output = self.run_check(dt.check_pages_required_attrs)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc", output)
+        self.assertIn("page-productlogo", output)
+        self.assertIn("page-author", output)
+        self.assertIn("page-htmltitle", output)
+        self.assertIn("description", output)
+
+    def test_page_missing_one_attr_is_flagged_by_name(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            ":page-productlogo: ROOT:adh.svg\n"
+            ":page-author: Jane Doe\n"
+            ":page-htmltitle: Page title\n\n"
+            "= Title\n\nSome text.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_required_attrs)
+        self.assertFalse(ok)
+        self.assertIn("(description)", output)
+
+    def test_page_with_all_attrs_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            ":page-productlogo: ROOT:adh.svg\n"
+            ":page-author: Jane Doe\n"
+            ":page-htmltitle: Page title\n"
+            ":description: A page about something.\n\n"
+            "= Title\n\nSome text.\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_required_attrs)
+        self.assertTrue(ok)
+
+    def test_partials_are_not_scanned(self):
+        self.write("en/modules/ROOT/partials/snippet.adoc", "Some reusable text.\n")
+        ok, _ = self.run_check(dt.check_pages_required_attrs)
+        self.assertTrue(ok)
+
+
 class PagesTranslationTests(FixtureTestCase):
     def test_identical_line_is_flagged_as_untranslated(self):
         self.write("en/modules/ROOT/pages/page.adoc",
@@ -2714,7 +2793,9 @@ class FamilySelectionTests(unittest.TestCase):
     def test_whole_family_runs_every_target(self):
         self.assertEqual(
             set(dt._resolve_family_selection("style", None, None)),
-            {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods"},
+            {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods",
+             "pages-no-curly-quotes", "pages-no-copyright-symbols",
+             "pages-required-attrs"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),
