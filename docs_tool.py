@@ -3702,6 +3702,91 @@ def check_pages_required_attrs() -> bool:
     return ok
 
 
+# H1-H3 only (1-3 `=`), not _HEADING_ID_RE's `=+` -- house style caps
+# headings at three levels and is explicit that a 4+-equals line isn't a
+# real heading at all here ("If you need H4 - use the standard bold style
+# for your title (without ==== - as it does not work)"), so a `==== *Title*`
+# line is the *sanctioned* way to fake an H4, not a rule violation. Tested
+# against real doc sets: without this cap, 44 of 46 heading-markup hits in
+# one repo alone were exactly this pattern.
+_H1_H3_HEADING_RE = re.compile(r'^(={1,3})\s+(.*\S)\s*$')
+
+
+def check_pages_heading_no_period() -> bool:
+    """New check (not a port of an existing shell script): house style
+    says "Do not use a dot at the end of headers." Only H1-H3 count as
+    headings here -- see _H1_H3_HEADING_RE. Scans pages/partials in both
+    languages, same shape as check_pages_no_unicode_dashes."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                for i, l in enumerate(lines, 1):
+                    m = _H1_H3_HEADING_RE.match(l)
+                    if m and m.group(2).endswith('.'):
+                        hits.append((i, l))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}")
+    if ok:
+        print("OK: no heading ends with a period.")
+    else:
+        print(f"\nTotal: {total_hits} heading(s) ending with a period.")
+    return ok
+
+
+def check_pages_heading_no_markup() -> bool:
+    """New check (not a port of an existing shell script): house style
+    says "Do not use links in headers" and "Do not use any font styles in
+    headers" -- two rules folded into one check since they're both
+    "a heading's title text carries no markup at all", caught the same
+    way. Only H1-H3 count as headings here -- see _H1_H3_HEADING_RE; a
+    bold `==== *Title*` H4 workaround is sanctioned by the guide itself,
+    not a violation. Reuses _mask_formatted_spans (the same masking
+    check_pages_file_path_italics and check_pages_table_cell_periods
+    trust to blank out bold/italic/code spans, xref:/link:/image:-style
+    macros, the `<<anchor,text>>` shorthand, and bare URLs): if masking
+    changes a heading's title text, something in it was markup. Scans
+    pages/partials in both languages, same shape as check_pages_no_
+    unicode_dashes."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                for i, l in enumerate(lines, 1):
+                    m = _H1_H3_HEADING_RE.match(l)
+                    if m and _mask_formatted_spans(m.group(2)) != m.group(2):
+                        hits.append((i, l))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}")
+    if ok:
+        print("OK: no heading carries font styles or links.")
+    else:
+        print(f"\nTotal: {total_hits} heading(s) with font styles or links.")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: glossary terminology consistency
 # --------------------------------------------------------------------------
@@ -4677,6 +4762,8 @@ CHECKS = {
     "nav-structure-parity": check_nav_structure_parity,
     "pages-broken-refs": check_pages_broken_refs,
     "pages-file-path-italics": check_pages_file_path_italics,
+    "pages-heading-no-markup": check_pages_heading_no_markup,
+    "pages-heading-no-period": check_pages_heading_no_period,
     "pages-line-parity": check_pages_line_parity,
     "pages-link-parity": check_pages_link_parity,
     "pages-literal-parity": check_pages_literal_parity,
@@ -4780,6 +4867,8 @@ FAMILIES = {
         "no-curly-quotes":    {"pages": "pages-no-curly-quotes"},
         "no-copyright-symbols": {"pages": "pages-no-copyright-symbols"},
         "required-attrs":     {"pages": "pages-required-attrs"},
+        "heading-period":     {"pages": "pages-heading-no-period"},
+        "heading-markup":     {"pages": "pages-heading-no-markup"},
     },
     "terms": {                        # L4 -- controlled vocabulary (glossary)
         "terminology": {"pages": "pages-terminology"},
@@ -4845,6 +4934,8 @@ RULE_IDS = {
     "pages-no-curly-quotes":      "ST04",
     "pages-no-copyright-symbols": "ST05",
     "pages-required-attrs":       "ST06",
+    "pages-heading-no-period":    "ST07",
+    "pages-heading-no-markup":    "ST08",
     "pages-terminology":          "TM01",
     "pages-line-parity":          "LN01",
     "pages-structure-parity":     "LN02",
@@ -4879,6 +4970,8 @@ SUMMARIES = {
     "pages-no-curly-quotes":       "no curly quotes (‘ ’ “ ”) -- house style uses straight ' and \"",
     "pages-no-copyright-symbols":  "no ©/®/™ -- write Hive, not Hive®",
     "pages-required-attrs":        ":page-productlogo:/:page-author:/:page-htmltitle:/:description: must all be set",
+    "pages-heading-no-period":     "a heading's title text shouldn't end with a period",
+    "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
     "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
     "pages-line-parity":           "EN file and its RU counterpart have the same line count",
     "pages-structure-parity":      "EN and RU structural skeletons must match",
@@ -4929,6 +5022,8 @@ RULE_FLAGS = {
     "pages-no-curly-quotes":       "curly ’ “ ” quotes",
     "pages-no-copyright-symbols":  "© ® ™ symbols",
     "pages-required-attrs":        "missing page attribute",
+    "pages-heading-no-period":     "heading ends with a period",
+    "pages-heading-no-markup":     "heading has font styles or a link",
     "pages-terminology":           "off-glossary RU translation",
     "pages-line-parity":           "EN/RU line counts differ",
     "pages-structure-parity":      "EN/RU skeletons differ",

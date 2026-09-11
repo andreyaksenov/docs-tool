@@ -1407,6 +1407,99 @@ class PagesRequiredAttrsTests(FixtureTestCase):
         self.assertTrue(ok)
 
 
+class PagesHeadingNoPeriodTests(FixtureTestCase):
+    def test_h1_ending_with_period_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Configure the cluster.\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_period)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_subsection_ending_with_period_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "= Title\n\n== Overview.\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_period)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:3:", output)
+
+    def test_heading_without_period_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Configure the cluster\n\nText.\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_period)
+        self.assertTrue(ok)
+
+    def test_heading_ending_with_question_mark_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= What is a pg_hba.conf file?\n\nText.\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_period)
+        self.assertTrue(ok)
+
+    def test_bare_example_block_delimiter_is_not_mistaken_for_a_heading(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "= Title\n\n====\nSome example text.\n====\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_period)
+        self.assertTrue(ok)
+
+    def test_h4_bold_workaround_is_not_scanned(self):
+        """House style caps headings at H3 and says a 4+-equals line isn't a
+        real heading at all -- use bold text instead. A period after that
+        bold H4-workaround title isn't in scope for this check."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "= Title\n\n==== *Some fourth-level title.*\n\nText.\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_period)
+        self.assertTrue(ok)
+
+
+class PagesHeadingNoMarkupTests(FixtureTestCase):
+    def test_bold_in_heading_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Configure *cluster* settings\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_italic_in_heading_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Edit _postgresql.conf_ file\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_code_span_in_heading_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Configure `postgresql.conf`\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_xref_in_heading_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "= See xref:install.adoc[Installation] for details\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_bare_url_in_heading_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "= Overview: https://example.com\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_plain_heading_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Configure cluster settings\n\nText.\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertTrue(ok)
+
+    def test_underscore_inside_identifier_does_not_false_positive(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "= Set max_connections parameter\n\nText.\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertTrue(ok)
+
+    def test_h4_bold_workaround_is_not_scanned(self):
+        """House style's sanctioned way to fake an H4 -- a bold title after
+        a 4+-equals line -- must not be flagged as font styles in a heading;
+        that line isn't a real heading under this check's H1-H3 scope."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "= Title\n\n==== *Some fourth-level title*\n\nText.\n")
+        ok, _ = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertTrue(ok)
+
+
 class PagesTranslationTests(FixtureTestCase):
     def test_identical_line_is_flagged_as_untranslated(self):
         self.write("en/modules/ROOT/pages/page.adoc",
@@ -2795,7 +2888,7 @@ class FamilySelectionTests(unittest.TestCase):
             set(dt._resolve_family_selection("style", None, None)),
             {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods",
              "pages-no-curly-quotes", "pages-no-copyright-symbols",
-             "pages-required-attrs"},
+             "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),

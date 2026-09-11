@@ -45,7 +45,7 @@ Rules are grouped into seven **families**:
 | `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files               |
 | `markup` | stray backticks, unbalanced block delimiters                                             |
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
-| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes |
+| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
 | `l10n`   | line-count / structure / nav parity, link & literal parity, untranslated lines, `examples/` parity |
 | `links`  | external `http(s)` links — `404`, permanent redirect, dead host (network; opt-in)        |
@@ -133,6 +133,8 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST04` | `check style --no-curly-quotes` | curly `’ “ ”` quotes |
 | `ST05` | `check style --no-copyright-symbols` | `© ® ™` symbols |
 | `ST06` | `check style --required-attrs` | missing page attribute |
+| `ST07` | `check style --heading-period` | heading ends with a period |
+| `ST08` | `check style --heading-markup` | heading has font styles or a link |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -285,6 +287,21 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --required-attrs
   ./docs_tool.py check style --required-attrs --page resource_groups.adoc
+  ```
+
+- **`ST07` · `check style --heading-period`** — a heading's title text
+  shouldn't end with `.`.
+  ```bash
+  ./docs_tool.py check style --heading-period
+  ./docs_tool.py check style --heading-period --page resource_groups.adoc
+  ```
+
+- **`ST08` · `check style --heading-markup`** — a heading's title text
+  carries no font styles (`*bold*`/`_italic_`/`` `code` ``) and no link
+  (`xref:`, `link:`, `<<anchor,text>>`, a bare URL).
+  ```bash
+  ./docs_tool.py check style --heading-markup
+  ./docs_tool.py check style --heading-markup --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary
