@@ -4754,6 +4754,12 @@ FAMILIES = {
     "chars": {                        # L0 -- Unicode / encoding
         "no-cyrillic":  {"pages": "pages-no-cyrillic", "examples": "examples-no-cyrillic"},
         "no-invisible": {"pages": "pages-no-invisible-chars"},
+        # `dashes` is actually a style-guide rule ("every dash via --"), the
+        # same Grammar-section source as ST04/ST05 -- kept here, not moved to
+        # `style`, so it keeps chars' "suggest: block" tier. It's old and has
+        # no known false-positive class, unlike ST04/ST05's "warn" default,
+        # which reflects them being new/less battle-tested, not a difference
+        # in what kind of rule this is.
         "dashes":       {"pages": "pages-no-unicode-dashes"},
         "homoglyphs":   {"pages": "pages-ru-latin-homoglyphs"},
     },
