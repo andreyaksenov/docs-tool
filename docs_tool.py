@@ -3702,21 +3702,13 @@ def check_pages_required_attrs() -> bool:
     return ok
 
 
-# H1-H3 only (1-3 `=`), not _HEADING_ID_RE's `=+` -- house style caps
-# headings at three levels and is explicit that a 4+-equals line isn't a
-# real heading at all here ("If you need H4 - use the standard bold style
-# for your title (without ==== - as it does not work)"), so a `==== *Title*`
-# line is the *sanctioned* way to fake an H4, not a rule violation. Tested
-# against real doc sets: without this cap, 44 of 46 heading-markup hits in
-# one repo alone were exactly this pattern.
-_H1_H3_HEADING_RE = re.compile(r'^(={1,3})\s+(.*\S)\s*$')
-
-
 def check_pages_heading_no_period() -> bool:
     """New check (not a port of an existing shell script): house style
-    says "Do not use a dot at the end of headers." Only H1-H3 count as
-    headings here -- see _H1_H3_HEADING_RE. Scans pages/partials in both
-    languages, same shape as check_pages_no_unicode_dashes."""
+    says "Do not use a dot at the end of headers." Reuses _HEADING_ID_RE,
+    the same heading-line pattern _heading_autoids works from -- any
+    heading level counts, not just H1-H3 (the guide's old three-level
+    cap is gone; any number of levels is fine now). Scans pages/partials
+    in both languages, same shape as check_pages_no_unicode_dashes."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -3729,8 +3721,8 @@ def check_pages_heading_no_period() -> bool:
                     continue
                 hits = []
                 for i, l in enumerate(lines, 1):
-                    m = _H1_H3_HEADING_RE.match(l)
-                    if m and m.group(2).endswith('.'):
+                    m = _HEADING_ID_RE.match(l)
+                    if m and m.group(1).endswith('.'):
                         hits.append((i, l))
                 if hits:
                     ok = False
@@ -3750,15 +3742,14 @@ def check_pages_heading_no_markup() -> bool:
     says "Do not use links in headers" and "Do not use any font styles in
     headers" -- two rules folded into one check since they're both
     "a heading's title text carries no markup at all", caught the same
-    way. Only H1-H3 count as headings here -- see _H1_H3_HEADING_RE; a
-    bold `==== *Title*` H4 workaround is sanctioned by the guide itself,
-    not a violation. Reuses _mask_formatted_spans (the same masking
-    check_pages_file_path_italics and check_pages_table_cell_periods
-    trust to blank out bold/italic/code spans, xref:/link:/image:-style
-    macros, the `<<anchor,text>>` shorthand, and bare URLs): if masking
-    changes a heading's title text, something in it was markup. Scans
-    pages/partials in both languages, same shape as check_pages_no_
-    unicode_dashes."""
+    way. Any heading level counts, not just H1-H3 (the guide's old
+    three-level cap is gone; any number of levels is fine now). Reuses
+    _mask_formatted_spans (the same masking check_pages_file_path_italics
+    and check_pages_table_cell_periods trust to blank out bold/italic/
+    code spans, xref:/link:/image:-style macros, the `<<anchor,text>>`
+    shorthand, and bare URLs): if masking changes a heading's title text,
+    something in it was markup. Scans pages/partials in both languages,
+    same shape as check_pages_no_unicode_dashes."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -3771,8 +3762,8 @@ def check_pages_heading_no_markup() -> bool:
                     continue
                 hits = []
                 for i, l in enumerate(lines, 1):
-                    m = _H1_H3_HEADING_RE.match(l)
-                    if m and _mask_formatted_spans(m.group(2)) != m.group(2):
+                    m = _HEADING_ID_RE.match(l)
+                    if m and _mask_formatted_spans(m.group(1)) != m.group(1):
                         hits.append((i, l))
                 if hits:
                     ok = False

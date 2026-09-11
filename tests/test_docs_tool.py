@@ -1437,14 +1437,14 @@ class PagesHeadingNoPeriodTests(FixtureTestCase):
         ok, _ = self.run_check(dt.check_pages_heading_no_period)
         self.assertTrue(ok)
 
-    def test_h4_bold_workaround_is_not_scanned(self):
-        """House style caps headings at H3 and says a 4+-equals line isn't a
-        real heading at all -- use bold text instead. A period after that
-        bold H4-workaround title isn't in scope for this check."""
+    def test_fourth_level_heading_is_scanned(self):
+        """The old three-level cap is gone -- any heading level is fine now,
+        so a fourth-level (====) heading is in scope like any other."""
         self.write("en/modules/ROOT/pages/page.adoc",
-                    "= Title\n\n==== *Some fourth-level title.*\n\nText.\n")
-        ok, _ = self.run_check(dt.check_pages_heading_no_period)
-        self.assertTrue(ok)
+                    "= Title\n\n==== Some fourth-level title.\n\nText.\n")
+        ok, output = self.run_check(dt.check_pages_heading_no_period)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:3:", output)
 
 
 class PagesHeadingNoMarkupTests(FixtureTestCase):
@@ -1490,14 +1490,14 @@ class PagesHeadingNoMarkupTests(FixtureTestCase):
         ok, _ = self.run_check(dt.check_pages_heading_no_markup)
         self.assertTrue(ok)
 
-    def test_h4_bold_workaround_is_not_scanned(self):
-        """House style's sanctioned way to fake an H4 -- a bold title after
-        a 4+-equals line -- must not be flagged as font styles in a heading;
-        that line isn't a real heading under this check's H1-H3 scope."""
+    def test_fourth_level_heading_is_scanned(self):
+        """The old three-level cap is gone -- any heading level is fine now,
+        so a bold fourth-level (====) title is flagged like any other."""
         self.write("en/modules/ROOT/pages/page.adoc",
                     "= Title\n\n==== *Some fourth-level title*\n\nText.\n")
-        ok, _ = self.run_check(dt.check_pages_heading_no_markup)
-        self.assertTrue(ok)
+        ok, output = self.run_check(dt.check_pages_heading_no_markup)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:3:", output)
 
 
 class PagesTranslationTests(FixtureTestCase):
