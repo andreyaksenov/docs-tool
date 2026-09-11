@@ -3778,6 +3778,94 @@ def check_pages_heading_no_markup() -> bool:
     return ok
 
 
+# Splits a compact row on "|" the way check_pages_table_cell_periods does,
+# except an escaped `\|` (a literal pipe *inside* a cell, e.g. a regex
+# reference table documenting the `|` alternation operator) is not a cell
+# delimiter -- found via a real cell in config-object.adoc whose content
+# is exactly `\|`, which a plain line.split("|") tears in two, leaving an
+# empty trailing segment that isn't actually empty at all.
+_UNESCAPED_PIPE_RE = re.compile(r'(?<!\\)\|')
+
+
+def check_pages_table_empty_cells() -> bool:
+    """New check (not a port of an existing shell script): house style says
+    "tables should not have any empty cells. If there is no otherwise
+    meaningful value for a cell, enter -- ..." Reuses _TABLE_CELL_START_RE/
+    _A_CELL_START_RE, the same cell-boundary regexes check_pages_table_
+    cell_periods trusts, but the tracking is simpler here: a cell's whole
+    span (its start line's content plus every line up to the next cell
+    start or the closing `|===`, comments and blank lines aside) is
+    accumulated and flagged only if none of it has any non-whitespace
+    content -- there's no need to parse what that content *means* (prose,
+    a list, an admonition, an image) the way the periods check does, only
+    whether the cell is empty. A same-line compact row (`|A||C`, a bare
+    `|` cell only -- `a|`/`m|`/etc. always own the rest of their line) is
+    split the same way check_pages_table_cell_periods splits one (see
+    _UNESCAPED_PIPE_RE for the one difference), so an empty cell in the
+    middle of a packed header row is still caught."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                in_table = False
+                cell_buffer = None
+                cell_start_line = None
+
+                def flush_cell():
+                    if cell_buffer is not None and not cell_buffer.strip():
+                        hits.append(cell_start_line)
+
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if stripped == "|===":
+                        flush_cell()
+                        in_table = not in_table
+                        cell_buffer = cell_start_line = None
+                        continue
+                    if not in_table:
+                        continue
+
+                    is_cell_start = _TABLE_CELL_START_RE.match(line) is not None
+                    if is_cell_start:
+                        flush_cell()
+                        if _UNESCAPED_PIPE_RE.search(line[1:]) and not _A_CELL_START_RE.match(line):
+                            segments = _UNESCAPED_PIPE_RE.split(line)[1:]
+                            for seg in segments[:-1]:
+                                if not seg.strip():
+                                    hits.append(i + 1)
+                            cell_buffer = segments[-1]
+                        else:
+                            m = _TABLE_CELL_START_RE.match(line)
+                            cell_buffer = line[m.end():]
+                        cell_start_line = i + 1
+                        continue
+
+                    if cell_buffer is None or stripped.startswith("//"):
+                        continue
+                    cell_buffer += " " + line
+
+                flush_cell()
+
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for lineno in sorted(hits):
+                        print(f"  {f}:{lineno}: {lines[lineno - 1].rstrip()}")
+    if ok:
+        print("OK: no empty table cells found.")
+    else:
+        print(f"\nTotal: {total_hits} empty table cell(s).")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: glossary terminology consistency
 # --------------------------------------------------------------------------
@@ -4770,6 +4858,7 @@ CHECKS = {
     "pages-stray-backticks": check_pages_stray_backticks,
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
+    "pages-table-empty-cells": check_pages_table_empty_cells,
     "pages-terminology": check_pages_terminology,
     "pages-translation": check_pages_translation,
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
@@ -4860,6 +4949,7 @@ FAMILIES = {
         "required-attrs":     {"pages": "pages-required-attrs"},
         "heading-period":     {"pages": "pages-heading-no-period"},
         "heading-markup":     {"pages": "pages-heading-no-markup"},
+        "table-empty-cells":  {"pages": "pages-table-empty-cells"},
     },
     "terms": {                        # L4 -- controlled vocabulary (glossary)
         "terminology": {"pages": "pages-terminology"},
@@ -4927,6 +5017,7 @@ RULE_IDS = {
     "pages-required-attrs":       "ST06",
     "pages-heading-no-period":    "ST07",
     "pages-heading-no-markup":    "ST08",
+    "pages-table-empty-cells":    "ST09",
     "pages-terminology":          "TM01",
     "pages-line-parity":          "LN01",
     "pages-structure-parity":     "LN02",
@@ -4963,6 +5054,7 @@ SUMMARIES = {
     "pages-required-attrs":        ":page-productlogo:/:page-author:/:page-htmltitle:/:description: must all be set",
     "pages-heading-no-period":     "a heading's title text shouldn't end with a period",
     "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
+    "pages-table-empty-cells":     "a table cell with no meaningful value should hold -- instead of nothing",
     "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
     "pages-line-parity":           "EN file and its RU counterpart have the same line count",
     "pages-structure-parity":      "EN and RU structural skeletons must match",
@@ -5015,6 +5107,7 @@ RULE_FLAGS = {
     "pages-required-attrs":        "missing page attribute",
     "pages-heading-no-period":     "heading ends with a period",
     "pages-heading-no-markup":     "heading has font styles or a link",
+    "pages-table-empty-cells":     "empty table cell",
     "pages-terminology":           "off-glossary RU translation",
     "pages-line-parity":           "EN/RU line counts differ",
     "pages-structure-parity":      "EN/RU skeletons differ",

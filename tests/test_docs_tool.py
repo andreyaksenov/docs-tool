@@ -1500,6 +1500,73 @@ class PagesHeadingNoMarkupTests(FixtureTestCase):
         self.assertIn("page.adoc:3:", output)
 
 
+class PagesTableEmptyCellsTests(FixtureTestCase):
+    def test_same_line_empty_cell_in_compact_row_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|A||C\n|===\n")
+        ok, output = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:2:", output)
+
+    def test_own_line_empty_cell_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|Header\n\n|value1\n|\n\n|value2\n|===\n")
+        ok, output = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:5:", output)
+
+    def test_dash_placeholder_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|Header\n\n|value1\n|--\n|===\n")
+        ok, _ = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertTrue(ok)
+
+    def test_multiline_cell_with_content_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "|===\n|Header\n\na|First paragraph.\n\nSecond paragraph.\n|===\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertTrue(ok)
+
+    def test_empty_a_cell_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|Header\n\n|value1\na|\n|===\n")
+        ok, output = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:5:", output)
+
+    def test_comment_only_cell_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|Header\n\n|value1\n|\n// just a comment\n|===\n")
+        ok, output = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:5:", output)
+
+    def test_fully_populated_table_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|Algorithm |Default |Min |Max\n\n|zstd |1 |1 |19\n|===\n")
+        ok, _ = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertTrue(ok)
+
+    def test_escaped_pipe_cell_content_is_not_a_false_positive(self):
+        """A cell whose content is a literal escaped pipe (`\\|`, e.g. a
+        regex reference table documenting the `|` alternation operator)
+        must not be torn in two by a naive split-on-"|" and read as an
+        empty trailing cell."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|Symbol |Meaning\n\n|\\|\n|Alternation\n|===\n")
+        ok, _ = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertTrue(ok)
+
+    def test_packed_row_with_escaped_pipe_still_finds_the_real_empty_cell(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|A |B\n\n|\\| |\n|===\n")
+        ok, output = self.run_check(dt.check_pages_table_empty_cells)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:4:", output)
+
+
 class PagesTranslationTests(FixtureTestCase):
     def test_identical_line_is_flagged_as_untranslated(self):
         self.write("en/modules/ROOT/pages/page.adoc",
@@ -2888,7 +2955,8 @@ class FamilySelectionTests(unittest.TestCase):
             set(dt._resolve_family_selection("style", None, None)),
             {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods",
              "pages-no-curly-quotes", "pages-no-copyright-symbols",
-             "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup"},
+             "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
+             "pages-table-empty-cells"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),

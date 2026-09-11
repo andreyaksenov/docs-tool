@@ -45,7 +45,7 @@ Rules are grouped into seven **families**:
 | `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files               |
 | `markup` | stray backticks, unbalanced block delimiters                                             |
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
-| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup |
+| `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup, empty table cells |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
 | `l10n`   | line-count / structure / nav parity, link & literal parity, untranslated lines, `examples/` parity |
 | `links`  | external `http(s)` links — `404`, permanent redirect, dead host (network; opt-in)        |
@@ -135,6 +135,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST06` | `check style --required-attrs` | missing page attribute |
 | `ST07` | `check style --heading-period` | heading ends with a period |
 | `ST08` | `check style --heading-markup` | heading has font styles or a link |
+| `ST09` | `check style --table-empty-cells` | empty table cell |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -302,6 +303,13 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --heading-markup
   ./docs_tool.py check style --heading-markup --page resource_groups.adoc
+  ```
+
+- **`ST09` · `check style --table-empty-cells`** — a table cell with no
+  otherwise meaningful value should hold `--`, not nothing.
+  ```bash
+  ./docs_tool.py check style --table-empty-cells
+  ./docs_tool.py check style --table-empty-cells --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary
