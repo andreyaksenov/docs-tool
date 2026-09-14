@@ -117,49 +117,18 @@ runnable examples. `show all` prints every rule with its examples but without th
 rationales — the terminal equivalent of this section. `beta` rules are heuristics
 — treat their output as a review list, not a hard gate.
 
+Name the families you want to run — there's no "run everything" keyword. `links`
+reaches the network and only runs when named. Each family below opens with its
+own ID/Command/Flags table.
+
+### `chars` — Unicode / encoding
+
 | ID | Command | Flags |
 |----|---------|-------|
 | `CH01` | `check chars --no-cyrillic` | Cyrillic in EN files |
 | `CH03` | `check chars --no-invisible` | zero-width characters |
 | `CH04` | `check chars --dashes` | literal en/em dashes |
 | `CH05` | `check chars --homoglyphs` | Latin letters in RU prose |
-| `MK01` | `check markup --backticks` | odd backtick count |
-| `MK02` | `check markup --delimiters` | unclosed block delimiter |
-| `MK03` | `check markup --divs` | unclosed/unmatched `<div>` (in a `++++` block) |
-| `RF01` | `check refs --broken` | dead xref / include / image |
-| `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
-| `ST01` | `check style --no-yo` | `ё` in RU files |
-| `ST02` | `check style --file-path-italics` | file path not in italics |
-| `ST03` | `check style --table-cell-periods` | table cell: unwanted trailing period, or one missing before a NOTE |
-| `ST04` | `check style --no-curly-quotes` | curly `’ “ ”` quotes |
-| `ST05` | `check style --no-copyright-symbols` | `© ® ™` symbols |
-| `ST06` | `check style --required-attrs` | missing page attribute |
-| `ST07` | `check style --heading-period` | heading ends with a period |
-| `ST08` | `check style --heading-markup` | heading has font styles or a link |
-| `ST09` | `check style --table-empty-cells` | empty table cell |
-| `ST10` | `check style --link-new-tab` | link missing `^` / `opts=nofollow` |
-| `ST11` | `check style --xref-own-product` | `xref:` names its own product |
-| `ST12` | `check style --image-alt` | image with no alt text |
-| `ST13` | `check style --image-caption` | image with no caption |
-| `ST14` | `check style --admonition-caption` | admonition with no caption |
-| `ST15` | `check style --heading-article` | heading starts with a/an/the |
-| `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
-| `ST18` | `check style --table-header` | table has no header row |
-| `ST19` | `check style --shell-block-lang` | $-prompted block not [source,console] |
-| `TM01` | `check terms` | off-glossary RU translation |
-| `LN01` | `check l10n --lines` | EN/RU line counts differ |
-| `LN02` | `check l10n --structure` | EN/RU skeletons differ |
-| `LN03` | `check l10n --untranslated` | RU line still English |
-| `LN04` | `check l10n --examples` | EN/RU examples differ |
-| `LN05` | `check l10n --nav` | EN/RU nav differs |
-| `LN06` | `check l10n --links` | EN/RU reference different xref / image / URL targets |
-| `LN07` | `check l10n --literals` | EN/RU carry different back-ticked literals |
-| `LK01` | `check links` | dead / redirected / unreachable external links (404 fails; the rest are flagged) |
-
-Name the families you want to run — there's no "run everything" keyword. `links`
-reaches the network and only runs when named.
-
-### `chars` — Unicode / encoding
 
 - **`CH01` · `check chars --no-cyrillic`** — no Cyrillic in `en/` files (RU text
   left in an EN file). `--target examples` also scans `examples/` → `CH02`.
@@ -192,6 +161,12 @@ reaches the network and only runs when named.
 
 ### `markup` — AsciiDoc syntax
 
+| ID | Command | Flags |
+|----|---------|-------|
+| `MK01` | `check markup --backticks` | odd backtick count |
+| `MK02` | `check markup --delimiters` | unclosed block delimiter |
+| `MK03` | `check markup --divs` | unclosed/unmatched `<div>` (in a `++++` block) |
+
 - **`MK01` · `check markup --backticks`** — no line with an odd number of
   backticks (usually a stray or missing `` ` `` around inline monospace).
   ```bash
@@ -219,6 +194,11 @@ reaches the network and only runs when named.
   ```
 
 ### `refs` — Antora reference resolution
+
+| ID | Command | Flags |
+|----|---------|-------|
+| `RF01` | `check refs --broken` | dead xref / include / image |
+| `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
 
 Always scans the whole site. `--page` only narrows *which files are reported* for
 `--orphaned --target tags|partials`; everything else in `refs` ignores it. Bare
@@ -261,6 +241,27 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   ```
 
 ### `style` — Arenadata style guide
+
+| ID | Command | Flags |
+|----|---------|-------|
+| `ST01` | `check style --no-yo` | `ё` in RU files |
+| `ST02` | `check style --file-path-italics` | file path not in italics |
+| `ST03` | `check style --table-cell-periods` | table cell: unwanted trailing period, or one missing before a NOTE |
+| `ST04` | `check style --no-curly-quotes` | curly `’ “ ”` quotes |
+| `ST05` | `check style --no-copyright-symbols` | `© ® ™` symbols |
+| `ST06` | `check style --required-attrs` | missing page attribute |
+| `ST07` | `check style --heading-period` | heading ends with a period |
+| `ST08` | `check style --heading-markup` | heading has font styles or a link |
+| `ST09` | `check style --table-empty-cells` | empty table cell |
+| `ST10` | `check style --link-new-tab` | link missing `^` / `opts=nofollow` |
+| `ST11` | `check style --xref-own-product` | `xref:` names its own product |
+| `ST12` | `check style --image-alt` | image with no alt text |
+| `ST13` | `check style --image-caption` | image with no caption |
+| `ST14` | `check style --admonition-caption` | admonition with no caption |
+| `ST15` | `check style --heading-article` | heading starts with a/an/the |
+| `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
+| `ST18` | `check style --table-header` | table has no header row |
+| `ST19` | `check style --shell-block-lang` | $-prompted block not [source,console] |
 
 Heuristic family — treat findings as a review list, not a hard gate.
 
@@ -442,6 +443,10 @@ Heuristic family — treat findings as a review list, not a hard gate.
 
 ### `terms` — controlled vocabulary
 
+| ID | Command | Flags |
+|----|---------|-------|
+| `TM01` | `check terms` | off-glossary RU translation |
+
 Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or any
 `*-glossary.psv` in the current directory (auto-discovered).
 
@@ -455,6 +460,16 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```
 
 ### `l10n` — EN↔RU parity
+
+| ID | Command | Flags |
+|----|---------|-------|
+| `LN01` | `check l10n --lines` | EN/RU line counts differ |
+| `LN02` | `check l10n --structure` | EN/RU skeletons differ |
+| `LN03` | `check l10n --untranslated` | RU line still English |
+| `LN04` | `check l10n --examples` | EN/RU examples differ |
+| `LN05` | `check l10n --nav` | EN/RU nav differs |
+| `LN06` | `check l10n --links` | EN/RU reference different xref / image / URL targets |
+| `LN07` | `check l10n --literals` | EN/RU carry different back-ticked literals |
 
 - **`LN01` · `check l10n --lines`** — every EN `.adoc` has a RU counterpart with
   the same line count, and vice versa.
@@ -523,6 +538,10 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```
 
 ### `links` — external URL health
+
+| ID | Command | Flags |
+|----|---------|-------|
+| `LK01` | `check links` | dead / redirected / unreachable external links (404 fails; the rest are flagged) |
 
 - **`LK01` · `check links`** · beta — fetches every `http(s)` link in `pages/` and
   `partials/` (both languages). De-duplicates site-wide (one request per distinct
