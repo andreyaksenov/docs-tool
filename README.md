@@ -145,6 +145,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST15` | `check style --heading-article` | heading starts with a/an/the |
 | `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
 | `ST18` | `check style --table-header` | table has no header row |
+| `ST19` | `check style --shell-block-lang` | $-prompted block not [source,console] |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -412,6 +413,31 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --table-header
   ./docs_tool.py check style --table-header --page resource_groups.adoc
+  ```
+
+- **`ST19` · `check style --shell-block-lang`** · beta — both directions of
+  the same rule for a `----`-delimited source block: a first line that's a
+  shell prompt (`$ some-command`) should be tagged `[source,console]`
+  (flags a missing `[source,...]` attribute entirely, or the wrong
+  language -- `bash`, `shell`, `sql`, etc.), and a block already tagged
+  `[source,console]` should open with `$`. A `console` tag with
+  comma-spacing variants or extra `subs=` attributes is accepted either
+  way. The `$`-required-console direction is clean; the
+  console-requires-`$` direction is a genuine review list, not a
+  zero-false-positive gate -- a command typed inside a different
+  already-entered shell (HBase shell, SSM shell), a config-file excerpt
+  styled as console, or a bracketed usage/syntax template all legitimately
+  have no `$` and get flagged anyway, since there's no reliable mechanical
+  way to tell those apart from a real miss. One case IS exempted
+  reliably: a first line starting with a leading backslash (`\dt`,
+  `\d+ table_name`, ...) is a psql/Greenplum meta-command and never gets
+  a `$` by convention -- confirmed against 60 real occurrences with no
+  conflicting cases. `....`-delimited literal
+  blocks are out of scope for either direction (no language-attribute
+  mechanism to fix).
+  ```bash
+  ./docs_tool.py check style --shell-block-lang
+  ./docs_tool.py check style --shell-block-lang --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary

@@ -2164,6 +2164,156 @@ class PagesTableHeaderTests(FixtureTestCase):
         self.assertTrue(ok)
 
 
+class PagesShellBlockLangTests(FixtureTestCase):
+    def test_console_lang_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n----\n$ hdfs mover -p /path\n----\n")
+        ok, _ = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok)
+
+    def test_no_attribute_at_all_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "----\n$ hdfs mover -p /path\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+        self.assertIn("no [source,console]", output)
+
+    def test_wrong_lang_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,bash]\n----\n$ stty cols 400\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("[source,bash], not [source,console]", output)
+
+    def test_sql_lang_on_shell_prompt_is_flagged(self):
+        """Real docs-adh mistake: a genuine shell command (`ozone fs -ls`)
+        mislabeled [source, sql]."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source, sql]\n----\n$ ozone fs -ls ofs://cluster/path\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("[source,sql], not [source,console]", output)
+
+    def test_comma_spacing_variant_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source, console]\n----\n$ hdfs mover -p /path\n----\n")
+        ok, _ = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok)
+
+    def test_console_with_extra_subs_attribute_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            '[source,console,subs="+attributes"]\n----\n$ hdfs mover -p /path\n----\n',
+        )
+        ok, _ = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok)
+
+    def test_non_shell_prompt_block_is_not_scanned(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,sql]\n----\nSELECT * FROM t;\n----\n")
+        ok, _ = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok)
+
+    def test_dot_delimited_literal_block_is_out_of_scope(self):
+        """Literal (....) blocks have no language-attribute mechanism at
+        all -- deliberately excluded, see the function's docstring."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "....\n$ hdfs envvars\nJAVA_HOME=/usr/lib/jvm\n....\n")
+        ok, _ = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok)
+
+    def test_blank_line_between_attrs_and_block_breaks_association(self):
+        """Real docs-adh case (hdfs-commands/mover.adoc): a correct
+        [source,console] two lines above the block, separated by a blank
+        line, doesn't actually apply in real AsciiDoc -- same rule
+        check_pages_table_header relies on."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n\n----\n$ hdfs mover -p /path\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("no [source,console]", output)
+
+    def test_table_cell_prefixed_attribute_is_recognized(self):
+        """Real docs-adh pattern (hive/beeline-cli.adoc): a|[source,console]
+        inside a table cell. A plain ^\\[...\\]$ match would miss this
+        entirely and misreport a correctly-tagged block as untagged."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "|===\n|Option\n\na|[source,console]\n----\n$ beeline -u db_URL\n----\n|===\n",
+        )
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok, output)
+
+    def test_unrelated_content_line_resets_pending_attrs(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "[source,console]\nSome unrelated prose.\n----\n$ hdfs mover -p /path\n----\n",
+        )
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("no [source,console]", output)
+
+    def test_console_block_not_starting_with_dollar_is_flagged(self):
+        """Real docs-adh miss: a genuine shell command styled as console
+        but missing its $ prompt."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n----\nmkdir /usr/lib/hadoop/logs\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:2:", output)
+        self.assertIn("doesn't start with a $ prompt", output)
+
+    def test_non_console_block_not_starting_with_dollar_is_not_scanned(self):
+        """The reverse direction only applies to blocks actually tagged
+        console -- a [source,bash] block missing $ is out of scope for
+        this half of the rule (it's still caught by the forward
+        direction, since content that looks like a shell command with no
+        $ isn't recognized as shell-prompt content at all here)."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,bash]\n----\nmkdir /usr/lib/hadoop/logs\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok, output)
+
+    def test_console_block_with_dollar_prompt_still_passes(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n----\n$ mkdir /usr/lib/hadoop/logs\n----\n")
+        ok, _ = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok)
+
+    def test_console_comma_spacing_variant_without_dollar_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source, console]\n----\nlist_deadservers\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("doesn't start with a $ prompt", output)
+
+    def test_psql_meta_command_is_not_flagged(self):
+        """Real docs-adb/docs-adbes/docs-greengagedb pattern: a psql
+        meta-command typed inside an already-open psql session never gets
+        a $ prompt."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n----\n\\d+ book_type\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok, output)
+
+    def test_short_psql_meta_command_is_not_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n----\n\\dt\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertTrue(ok, output)
+
+    def test_trailing_line_continuation_backslash_is_still_flagged(self):
+        """A trailing continuation backslash at the END of the first line
+        is not the same signal as a LEADING one -- this is still a real
+        bash command missing its $ prompt."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "[source,console]\n----\n/bin/spark3-submit \\\n  --master yarn\n----\n")
+        ok, output = self.run_check(dt.check_pages_shell_block_lang)
+        self.assertFalse(ok)
+        self.assertIn("doesn't start with a $ prompt", output)
+
+
 class PagesTranslationTests(FixtureTestCase):
     def test_identical_line_is_flagged_as_untranslated(self):
         self.write("en/modules/ROOT/pages/page.adoc",
@@ -3555,7 +3705,8 @@ class FamilySelectionTests(unittest.TestCase):
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
              "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
              "pages-image-alt", "pages-image-caption", "pages-admonition-caption",
-             "pages-heading-article", "pages-heading-gerund", "pages-table-header"},
+             "pages-heading-article", "pages-heading-gerund", "pages-table-header",
+             "pages-shell-block-lang"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),

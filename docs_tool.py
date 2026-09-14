@@ -4092,6 +4092,136 @@ def check_pages_table_header() -> bool:
     return ok
 
 
+_SHELL_BLOCK_DELIM_RE = re.compile(r'^-{4,}\s*$')
+_SHELL_BLOCK_ATTR_RE = re.compile(r'^(?:[adehlmsv]\|)?\[([^\]]*)\]\s*$')
+_SHELL_BLOCK_LANG_RE = re.compile(r'\bsource\s*,\s*([\w+-]+)')
+
+
+def check_pages_shell_block_lang() -> bool:
+    """New check, both directions of the same house rule: a `----`-
+    delimited source block whose first content line is a shell prompt
+    (`$ some-command`) should be tagged `[source,console]`, AND a block
+    already tagged `[source,console]` should open with a `$` prompt. Real
+    survey of docs-adh's own `$`-prompted blocks found the house
+    convention overwhelmingly is `[source,console]` (with or without extra
+    `subs=` attributes and comma-spacing variants -- all accepted here, only
+    the language token itself is checked), plus a handful of genuine
+    mistakes the forward direction catches: no `[source,...]` attribute at
+    all, or the wrong language (`bash`, `shell`, even `sql` on an actual
+    shell command).
+
+    The reverse direction is deliberately noisier -- confirmed against real
+    docs-adh data before adding it, and kept anyway because catching every
+    one of these is part of this team's actual review process, not a nice-
+    to-have. About 130 real `[source,console]` blocks in docs-adh don't
+    open with `$`: some are genuine misses (`mkdir /usr/lib/hadoop/logs`,
+    `sudo -u hbase hbase shell`), but many are legitimate -- a command typed
+    inside a *different* already-entered interactive shell (`scan
+    'hive_test'` inside the HBase shell, `list -file ...` inside the SSM
+    shell), a config-file excerpt styled as console for the monospace look,
+    or a `[cols]`-bracketed usage/syntax template rather than a literal
+    command. There's no reliable mechanical signal in the block text alone
+    to separate most of those from a real miss, so every `[source,console]`
+    block not starting with `$` is flagged -- this half is a review list to
+    triage by hand, same tier as this tool's other beta checks, not a
+    zero-false-positive gate.
+
+    One such nested-shell case IS given a reliable mechanical exemption,
+    though: a first line starting with a leading backslash is a
+    psql/Greenplum meta-command (`\\dt`, `\\d+ table_name`, `\\q`, ...),
+    typed inside an already-open `psql` session and never `$`-prefixed by
+    convention -- confirmed against 60 real occurrences across docs-adb/
+    docs-adbes/docs-greengagedb/docs-adh, all genuine psql meta-commands,
+    with zero real bash `\\command`-alias-bypass usage found that this
+    would wrongly suppress (that idiom would anyway need its own `$` too,
+    since it still runs in bash, not psql -- a real conflict never showed
+    up in this corpus). Distinct from a trailing line-continuation
+    backslash (`/bin/spark3-submit \\`), which is a different position on
+    the line and
+    unaffected by this leading-backslash check.
+
+    Scoped to `----` (dash) source blocks only -- a `....` (dot) literal
+    block has no language-attribute mechanism at all, so "add/fix
+    [source,console]" doesn't apply to it the same way; converting one to
+    a source block is a different, bigger edit than this check's message
+    implies, and only 2 such blocks exist in the whole docs-adh corpus, so
+    they're deliberately out of scope rather than mis-worded.
+
+    Recognizes a `[...]` attribute line prefixed with a table-cell style
+    letter (`a|[source,console]`, etc.) -- a real pattern (beeline-cli.adoc
+    uses it) that a plain `^\\[...\\]$` match would miss entirely, silently
+    mistaking a correctly-tagged block for an untagged one. Also enforces
+    the same real AsciiDoc rule check_pages_table_header relies on: a blank
+    line between the attribute stack and the delimiter breaks the
+    association, so an orphaned `[source,console]` two lines above a block
+    (a real docs-adh case, hdfs-commands/mover.adoc) doesn't functionally
+    apply and the block is correctly still flagged."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                n = len(lines)
+                hits = []
+                pending_attrs = []
+                i = 0
+                while i < n:
+                    line = lines[i]
+                    m_attr = _SHELL_BLOCK_ATTR_RE.match(line)
+                    if m_attr:
+                        pending_attrs.append(m_attr.group(1))
+                        i += 1
+                        continue
+                    if _STRUCT_BLOCKTITLE_RE.match(line):
+                        i += 1
+                        continue
+                    if line.strip() == "":
+                        pending_attrs = []
+                        i += 1
+                        continue
+                    if _SHELL_BLOCK_DELIM_RE.match(line):
+                        delim = line.strip()
+                        close = None
+                        k = i + 1
+                        while k < n:
+                            if lines[k].strip() == delim:
+                                close = k
+                                break
+                            k += 1
+                        first_content = lines[i + 1].strip() if i + 1 < n else ""
+                        attrs = " ".join(pending_attrs)
+                        lang_m = _SHELL_BLOCK_LANG_RE.search(attrs)
+                        lang = lang_m.group(1) if lang_m else None
+                        if first_content.startswith("$ "):
+                            if lang is None:
+                                hits.append((i + 1, "shell-prompt block has no [source,console]"))
+                            elif lang != "console":
+                                hits.append((i + 1, f"shell-prompt block uses [source,{lang}], not [source,console]"))
+                        elif lang == "console" and not first_content.startswith("\\"):
+                            hits.append((i + 1, "[source,console] block doesn't start with a $ prompt"))
+                        pending_attrs = []
+                        i = (close + 1) if close is not None else (i + 1)
+                        continue
+                    pending_attrs = []
+                    i += 1
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for lineno, msg in hits:
+                        print(f"  {f}:{lineno}: {msg}")
+    if ok:
+        print("OK: every shell-prompt source block uses [source,console].")
+    else:
+        print(f"\nTotal: {total_hits} shell-prompt block(s) not tagged [source,console].")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: glossary terminology consistency
 # --------------------------------------------------------------------------
@@ -5516,6 +5646,7 @@ CHECKS = {
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-table-empty-cells": check_pages_table_empty_cells,
     "pages-table-header": check_pages_table_header,
+    "pages-shell-block-lang": check_pages_shell_block_lang,
     "pages-link-new-tab": check_pages_link_new_tab,
     "pages-xref-own-product": check_pages_xref_own_product,
     "pages-image-alt": check_pages_image_alt,
@@ -5543,6 +5674,7 @@ BETA_CHECKS = {
     "pages-structure-parity",
     "pages-table-cell-periods",
     "pages-table-header",
+    "pages-shell-block-lang",
     "pages-terminology",
     "pages-translation",
     "links-external",   # not heuristic parsing, but network flakiness makes it advisory
@@ -5618,6 +5750,7 @@ FAMILIES = {
         "heading-markup":     {"pages": "pages-heading-no-markup"},
         "table-empty-cells":  {"pages": "pages-table-empty-cells"},
         "table-header":       {"pages": "pages-table-header"},
+        "shell-block-lang":   {"pages": "pages-shell-block-lang"},
         "link-new-tab":       {"pages": "pages-link-new-tab"},
         "xref-own-product":   {"pages": "pages-xref-own-product"},
         "image-alt":          {"pages": "pages-image-alt"},
@@ -5695,6 +5828,7 @@ RULE_IDS = {
     "pages-heading-no-markup":    "ST08",
     "pages-table-empty-cells":    "ST09",
     "pages-table-header":         "ST18",
+    "pages-shell-block-lang":     "ST19",
     "pages-link-new-tab":         "ST10",
     "pages-xref-own-product":    "ST11",
     "pages-image-alt":            "ST12",
@@ -5741,6 +5875,7 @@ SUMMARIES = {
     "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
     "pages-table-empty-cells":     "a table cell with no meaningful value should hold -- instead of nothing",
     "pages-table-header":          "every table needs a header row (options=\"header\" / %header)",
+    "pages-shell-block-lang":      "a $-prompted block needs [source,console] and vice versa",
     "pages-link-new-tab":          "every external link opens in a new tab with opts=nofollow",
     "pages-xref-own-product":      "internal xref: must not name this product's own component",
     "pages-image-alt":             "every image:: needs alt text",
@@ -5803,6 +5938,7 @@ RULE_FLAGS = {
     "pages-heading-no-markup":     "heading has font styles or a link",
     "pages-table-empty-cells":     "empty table cell",
     "pages-table-header":          "table has no header row",
+    "pages-shell-block-lang":      "wrong/missing [source,console]",
     "pages-link-new-tab":          "link missing ^ / opts=nofollow",
     "pages-xref-own-product":      "xref: names its own product",
     "pages-image-alt":             "image with no alt text",
