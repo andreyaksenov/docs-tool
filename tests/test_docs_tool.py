@@ -238,6 +238,151 @@ class ScanDelimiterStackTests(unittest.TestCase):
         self.assertEqual(result, [("====", "f.adoc", 1)])
 
 
+class ScanDivStackTests(unittest.TestCase):
+    """Unit tests for _scan_div_stack -- no filesystem needed. Feeds plain
+    (file, lineno, text) triples through the stream directly, the same way
+    ScanDelimiterStackTests exercises _scan_delimiter_stack."""
+
+    @staticmethod
+    def stream(lines, file="f.adoc"):
+        return [(file, i, l) for i, l in enumerate(lines, 1)]
+
+    def test_balanced_div_in_passthrough_returns_empty(self):
+        lines = ["++++", '<div class="x">', "++++", "content",
+                 "++++", "</div>", "++++"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+
+    def test_div_outside_passthrough_is_ignored(self):
+        """AsciiDoc doesn't render this as live HTML -- it's escaped text --
+        so an unmatched <div> written as plain prose isn't a finding."""
+        lines = ['<div class="x">', "just text, never closed"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+
+    def test_unclosed_div_at_eof_is_reported(self):
+        lines = ["++++", '<div class="card-collapse-content">', "++++", "content"]
+        result = dt._scan_div_stack(self.stream(lines))
+        self.assertEqual(result, [("unclosed", '<div class="card-collapse-content">', "f.adoc", 2)])
+
+    def test_commented_out_closing_passthrough_leaves_div_unclosed(self):
+        """Regression test for the cluster-actions.adoc bug: the closing
+        `++++`/`</div>`/`++++` block is commented out (AsciiDoc // lines),
+        so those lines are just text -- the passthrough never re-closes and
+        the earlier <div> is never matched."""
+        lines = [
+            "++++",                                     # 1: open passthrough
+            '<div class="card-collapse-content">',       # 2: open div
+            "++++",                                      # 3: close passthrough
+            "card body",                                  # 4
+            "// ++++",                                    # 5: commented out -- not a real delimiter
+            "// </div>",                                   # 6
+            "// ++++",                                     # 7
+        ]
+        result = dt._scan_div_stack(self.stream(lines))
+        self.assertEqual(result, [("unclosed", '<div class="card-collapse-content">', "f.adoc", 2)])
+
+    def test_unmatched_closing_div_is_reported(self):
+        lines = ["++++", "</div>", "++++"]
+        result = dt._scan_div_stack(self.stream(lines))
+        self.assertEqual(result, [("unmatched", "</div>", "f.adoc", 2)])
+
+    def test_self_closing_pair_on_one_line_is_balanced(self):
+        lines = ["++++", '<div class="glossary-title"></div>', "++++"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+
+    def test_nested_divs_balance(self):
+        lines = ["++++", '<div class="outer">', '<div class="inner">',
+                 "</div>", "</div>", "++++"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+
+    def test_nested_divs_report_the_one_left_open(self):
+        lines = ["++++", '<div class="outer">', '<div class="inner">',
+                 "</div>", "++++"]
+        result = dt._scan_div_stack(self.stream(lines))
+        self.assertEqual(result, [("unclosed", '<div class="outer">', "f.adoc", 2)])
+
+    def test_different_length_passthrough_nests_independently(self):
+        lines = ["++++", "+++++", '<div class="x">', "+++++", "</div>", "++++"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+
+    def test_self_closing_div_is_not_unclosed(self):
+        """Regression test for the spark-overwrite-commit.adoc false
+        positive: a bare `<div/>` (or `<div ... />`) closes itself and has
+        no separate </div> anywhere -- must not be reported as unclosed."""
+        lines = ["++++", "<div/>", "++++"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+        lines = ["++++", '<div class="spacer" />', "++++"]
+        self.assertEqual(dt._scan_div_stack(self.stream(lines)), [])
+
+
+class PagesUnbalancedDivsTests(FixtureTestCase):
+    """End-to-end tests for check_pages_unbalanced_divs (MK03), mirroring
+    check_pages_unbalanced_delimiters' include-flattening behaviour."""
+
+    def test_balanced_page_is_ok(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc",
+                  '++++\n<div class="x">\n++++\ncontent\n++++\n</div>\n++++\n')
+        ok, out = self.run_check(dt.check_pages_unbalanced_divs)
+        self.assertTrue(ok, out)
+        self.assertIn("OK:", out)
+
+    def test_unclosed_div_is_flagged(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc",
+                  '++++\n<div class="card-collapse-content">\n++++\ncontent\n')
+        ok, out = self.run_check(dt.check_pages_unbalanced_divs)
+        self.assertFalse(ok)
+        self.assertIn("FILE", out)
+        self.assertIn("p.adoc:2: unclosed <div>", out)
+        self.assertIn("card-collapse-content", out)
+
+    def test_div_prose_outside_passthrough_is_not_flagged(self):
+        """A <div> written as plain prose (a tutorial talking about HTML,
+        say) isn't inside a passthrough block, so AsciiDoc never renders it
+        as live HTML -- not this rule's concern."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc",
+                  "Here is a <div> tag shown as an example, never closed.\n")
+        ok, out = self.run_check(dt.check_pages_unbalanced_divs)
+        self.assertTrue(ok, out)
+
+    def test_div_closed_across_an_include_boundary_is_not_a_false_positive(self):
+        """Mirrors check_pages_unbalanced_delimiters' own rationale: a page
+        that opens a <div> and relies on an included partial to close it
+        must be balanced against the flattened, actually-rendered document,
+        not flagged just because the page file alone looks unclosed."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc",
+                  '++++\n<div class="wrap">\n++++\nbody\ninclude::partial$closer.adoc[]\n')
+        self.write("en/modules/ROOT/partials/closer.adoc", "++++\n</div>\n++++\n")
+        ok, out = self.run_check(dt.check_pages_unbalanced_divs)
+        self.assertTrue(ok, out)
+
+    def test_unreached_partial_is_checked_standalone(self):
+        """A partial no page's include chain ever reaches is still checked
+        on its own, so an unbalanced div in it isn't silently skipped."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", "nothing interesting here\n")
+        self.write("en/modules/ROOT/partials/orphan.adoc",
+                  '++++\n<div class="x">\n++++\n')
+        ok, out = self.run_check(dt.check_pages_unbalanced_divs)
+        self.assertFalse(ok)
+        self.assertIn("orphan.adoc", out)
+        self.assertIn("not reached by any page's includes", out)
+
+    def test_ru_side_is_checked_independently(self):
+        self.antora_yml("en", "TEST")
+        self.antora_yml("ru", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc",
+                  '++++\n<div class="x">\n++++\ncontent\n++++\n</div>\n++++\n')
+        self.write("ru/modules/ROOT/pages/p.adoc",
+                  '++++\n<div class="x">\n++++\ncontent, never closed\n')
+        ok, out = self.run_check(dt.check_pages_unbalanced_divs)
+        self.assertFalse(ok, out)
+        self.assertIn(str(Path("ru/modules/ROOT/pages/p.adoc")), out)
+        self.assertNotIn("en/modules/ROOT/pages/p.adoc:", out)
+
+
 class ComponentPrefixRegexTests(unittest.TestCase):
     def test_plain_module_prefix(self):
         m = dt._COMPONENT_PREFIX_RE.match("how-to:page.adoc")

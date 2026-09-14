@@ -125,6 +125,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `CH05` | `check chars --homoglyphs` | Latin letters in RU prose |
 | `MK01` | `check markup --backticks` | odd backtick count |
 | `MK02` | `check markup --delimiters` | unclosed block delimiter |
+| `MK03` | `check markup --divs` | unclosed/unmatched `<div>` (in a `++++` block) |
 | `RF01` | `check refs --broken` | dead xref / include / image |
 | `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
 | `ST01` | `check style --no-yo` | `ё` in RU files |
@@ -194,6 +195,18 @@ reaches the network and only runs when named.
   ```bash
   ./docs_tool.py check markup --delimiters
   ./docs_tool.py check markup --delimiters --page resource_groups.adoc
+  ```
+
+- **`MK03` · `check markup --divs`** — a literal HTML `<div>` injected via an
+  AsciiDoc passthrough block (`++++` … `++++` — the only form used for this) gets
+  its matching `</div>`, checked on the same flattened include chain as `--delimiters`.
+  AsciiDoc's own delimiters can be perfectly balanced while the HTML *inside* them
+  isn't — e.g. commenting out a closing `++++`/`</div>`/`++++` block leaves the
+  opening `<div>` live with no `--delimiters` complaint. A `<div>` outside a
+  passthrough block isn't live HTML, so it's not checked.
+  ```bash
+  ./docs_tool.py check markup --divs
+  ./docs_tool.py check markup --divs --page resource_groups.adoc
   ```
 
 ### `refs` — Antora reference resolution

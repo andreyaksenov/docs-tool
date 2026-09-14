@@ -2221,6 +2221,128 @@ def check_pages_unbalanced_delimiters() -> bool:
     return ok
 
 
+# AsciiDoc doesn't render a literal `<div>` as HTML unless it's inside a
+# passthrough region -- everywhere across these repos that's the *block*
+# form, one delimiter line, the tag(s) on their own line(s), the closing
+# delimiter, e.g. a `[.card-collapse-wrapper]` card's
+#   ++++
+#   <div class="card-collapse-content">
+#   ++++
+# Outside such a block a `<div>` is just escaped text, so it's ignored.
+_PASSTHROUGH_BLOCK_RE = re.compile(r'^(\+{4,})\s*$')
+_HTML_DIV_TAG_RE = re.compile(r'<div\b[^>]*>|</div\s*>', re.IGNORECASE)
+
+
+def _scan_div_stack(line_stream):
+    """LIFO balance check for literal <div>/</div> tags found inside a
+    passthrough block, over `line_stream` -- the same (source_file,
+    source_lineno, line_text) stream _flatten_delimiter_lines produces, so
+    an include chain is handled identically to check_pages_unbalanced_delimiters
+    (a <div> opened in a partial and closed by whichever page includes it
+    is not a false positive).
+
+    A `++++` delimiter of a different length nests independently, the same
+    rule _scan_delimiter_stack applies to other container blocks; matched
+    by exact text so a 5-plus passthrough nested inside a 4-plus one pairs
+    correctly with its own close. A self-closing `<div/>` / `<div ... />`
+    is balanced on its own and never pushed -- it has no separate `</div>`.
+
+    Returns [(kind, text, source_file, source_lineno), ...]: "unclosed"
+    for an open <div ...> with no matching </div> by the end of the
+    stream, "unmatched" for a </div> with nothing open to close."""
+    passthrough_stack = []
+    div_stack = []
+    problems = []
+    for source_file, source_lineno, line in line_stream:
+        m = _PASSTHROUGH_BLOCK_RE.match(line)
+        if m:
+            text = m.group(1)
+            if passthrough_stack and passthrough_stack[-1] == text:
+                passthrough_stack.pop()
+            else:
+                passthrough_stack.append(text)
+            continue
+        if not passthrough_stack:
+            continue  # <div> outside a passthrough block isn't live HTML
+        for tag in _HTML_DIV_TAG_RE.findall(line):
+            if tag.lower().startswith("</div"):
+                if div_stack:
+                    div_stack.pop()
+                else:
+                    problems.append(("unmatched", tag, source_file, source_lineno))
+            elif tag.endswith("/>"):
+                continue  # self-closing <div/> / <div ... /> -- balanced on its own
+            else:
+                div_stack.append((tag, source_file, source_lineno))
+    problems.extend(("unclosed", text, f, ln) for text, f, ln in div_stack)
+    return problems
+
+
+def check_pages_unbalanced_divs() -> bool:
+    """Flags a literal HTML <div> (injected via an AsciiDoc passthrough
+    block -- see _scan_div_stack) left without its matching </div> once a
+    page's full include chain is flattened, the same way
+    check_pages_unbalanced_delimiters is (see _flatten_delimiter_lines).
+
+    AsciiDoc's own delimiters can be perfectly balanced while the HTML
+    *inside* them isn't -- e.g. commenting out a closing
+    `++++` / `</div>` / `++++` block leaves the opening <div> live in the
+    rendered page with its close gone, and --delimiters has nothing to say
+    about it since every `++++` there is still paired.
+
+    Every page is checked this way; partials never reached by any page's
+    include chain (in this language) are still checked standalone
+    afterward, same two-pass structure as --delimiters."""
+    ok = True
+    total_hits = 0
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+
+    for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
+        own_name = _own_component_name(lang)
+        visited = set()
+        for root in lang_module_roots.values():
+            for page in _iter_files(root / "pages", ".adoc"):
+                if not _page_allowed(page):
+                    continue
+                stream = _flatten_delimiter_lines(page, root, lang_module_roots, lang, own_name, [], visited)
+                problems = _scan_div_stack(stream)
+                if not problems:
+                    continue
+                ok = False
+                total_hits += len(problems)
+                print(f"FILE     {page}")
+                for kind, text, sfile, slineno in problems:
+                    label = "unclosed <div>" if kind == "unclosed" else "unmatched </div>"
+                    if sfile == page:
+                        print(f"  {sfile}:{slineno}: {label}: {text!r}")
+                    else:
+                        print(f"  {sfile}:{slineno}: {label}: {text!r}  (included from {page})")
+
+        for root in lang_module_roots.values():
+            for partial in _iter_files(root / "partials", ".adoc"):
+                if partial in visited or not _page_allowed(partial):
+                    continue
+                lines = _read_lines(partial)
+                if lines is None:
+                    continue
+                problems = _scan_div_stack((partial, i, l) for i, l in enumerate(lines, 1))
+                if not problems:
+                    continue
+                ok = False
+                total_hits += len(problems)
+                print(f"FILE     {partial}  (not reached by any page's includes -- checked standalone)")
+                for kind, text, sfile, slineno in problems:
+                    label = "unclosed <div>" if kind == "unclosed" else "unmatched </div>"
+                    print(f"  {sfile}:{slineno}: {label}: {text!r}")
+    if ok:
+        print("OK: no unbalanced <div> tags found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} unbalanced <div>/</div> tag(s).")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: orphaned (not reachable from nav.adoc)
 # --------------------------------------------------------------------------
@@ -4862,6 +4984,7 @@ CHECKS = {
     "pages-terminology": check_pages_terminology,
     "pages-translation": check_pages_translation,
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
+    "pages-unbalanced-divs": check_pages_unbalanced_divs,
     "partials-orphaned": check_partials_orphaned,
     "tags-orphaned": check_tags_orphaned,
     "links-external": check_links_external,
@@ -4933,6 +5056,7 @@ FAMILIES = {
     "markup": {                       # L1 -- AsciiDoc spec
         "backticks":  {"pages": "pages-stray-backticks"},
         "delimiters": {"pages": "pages-unbalanced-delimiters"},
+        "divs":       {"pages": "pages-unbalanced-divs"},
     },
     "refs": {                         # L2 -- Antora reference resolution
         "broken":   {"pages": "pages-broken-refs"},
@@ -5003,6 +5127,7 @@ RULE_IDS = {
     "pages-ru-latin-homoglyphs":  "CH05",
     "pages-stray-backticks":      "MK01",
     "pages-unbalanced-delimiters": "MK02",
+    "pages-unbalanced-divs":      "MK03",
     "pages-broken-refs":          "RF01",
     "pages-orphaned":             "RF02",
     "partials-orphaned":          "RF03",
@@ -5040,6 +5165,7 @@ SUMMARIES = {
     "pages-ru-latin-homoglyphs":   "Latin letters in ru/ prose that should be Cyrillic",
     "pages-stray-backticks":       "no line with an odd number of backticks",
     "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
+    "pages-unbalanced-divs":      "every passthrough-embedded <div> gets its </div>, includes flattened",
     "pages-broken-refs":           "every xref: / include:: / image: target resolves",
     "pages-orphaned":              "every pages/*.adoc reachable from some nav.adoc",
     "partials-orphaned":           "every tag-less partial pulled in by some include::",
@@ -5097,6 +5223,7 @@ RULE_FLAGS = {
     "pages-ru-latin-homoglyphs":   "Latin letters in RU prose",
     "pages-stray-backticks":       "odd backtick count",
     "pages-unbalanced-delimiters": "unclosed block delimiter",
+    "pages-unbalanced-divs":      "unclosed/unmatched <div>",
     "pages-broken-refs":           "dead xref / include / image",
     "pages-orphaned":              "defined but never referenced",
     "pages-no-yo":                 "ё in RU files",
@@ -5148,8 +5275,8 @@ _RULES_IGNORING_PAGE = {
     "pages-broken-refs", "pages-orphaned", "examples-orphaned", "images-orphaned",
 }
 _RULES_WITH_EXTERNAL_ROOT = {
-    "pages-unbalanced-delimiters", "pages-broken-refs", "partials-orphaned",
-    "images-orphaned", "tags-orphaned",
+    "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",
+    "partials-orphaned", "images-orphaned", "tags-orphaned",
 }
 
 
