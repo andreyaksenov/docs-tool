@@ -143,6 +143,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST13` | `check style --image-caption` | image with no caption |
 | `ST14` | `check style --admonition-caption` | admonition with no caption |
 | `ST15` | `check style --heading-article` | heading starts with a/an/the |
+| `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -387,6 +388,16 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --heading-article
   ./docs_tool.py check style --heading-article --page resource_groups.adoc
+  ```
+
+- **`ST17` · `check style --heading-gerund`** — a heading shouldn't start with
+  a gerund followed by a determiner/possessive object (use the infinitive:
+  `Create a table`, not `Creating a table`). A bare gerund heading with
+  nothing after it (`Logging`, `Monitoring`) is a legitimate topic-noun
+  section title and is not flagged.
+  ```bash
+  ./docs_tool.py check style --heading-gerund
+  ./docs_tool.py check style --heading-gerund --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary

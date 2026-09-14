@@ -5336,6 +5336,51 @@ def check_pages_heading_article() -> bool:
     return ok
 
 
+_HEADING_GERUND_OBJECT_RE = re.compile(
+    r'^[A-Z][a-z]*ing\s+(a|an|the|your|our|their|its|this|that|these|those)\b'
+)
+
+
+def check_pages_heading_gerund() -> bool:
+    """New check: house style says to use infinitives instead of gerunds in
+    headings, e.g. "Create a cluster" instead of "Creating a cluster". A bare
+    gerund heading ("Logging", "Monitoring", "Partitioning") is a legitimate
+    topic-noun section title and NOT a violation -- real-world survey across
+    all repos showed those dominate and are never followed by a
+    determiner/possessive. Only a gerund immediately followed by a
+    determiner-like word (a/an/the/your/our/their/its/this/that/these/those)
+    -- mirroring the wiki's own "Creating a cluster" example -- is flagged.
+    English-specific by construction, same reasoning as
+    check_pages_heading_article. Scans pages/ and partials/ in both
+    languages; any heading level counts."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                for i, l in enumerate(lines, 1):
+                    m = _HEADING_ID_RE.match(l)
+                    if m and _HEADING_GERUND_OBJECT_RE.match(m.group(1)):
+                        hits.append((i, l))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}  (use infinitive, e.g. 'Creating a table' -> 'Create a table')")
+    if ok:
+        print("OK: no heading starts with a gerund + object.")
+    else:
+        print(f"\nTotal: {total_hits} heading(s) starting with a gerund + object.")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # CHECK REGISTRY
 # --------------------------------------------------------------------------
@@ -5372,6 +5417,7 @@ CHECKS = {
     "pages-image-caption": check_pages_image_caption,
     "pages-admonition-caption": check_pages_admonition_caption,
     "pages-heading-article": check_pages_heading_article,
+    "pages-heading-gerund": check_pages_heading_gerund,
     "pages-terminology": check_pages_terminology,
     "pages-translation": check_pages_translation,
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
@@ -5471,6 +5517,7 @@ FAMILIES = {
         "image-caption":      {"pages": "pages-image-caption"},
         "admonition-caption": {"pages": "pages-admonition-caption"},
         "heading-article":    {"pages": "pages-heading-article"},
+        "heading-gerund":     {"pages": "pages-heading-gerund"},
     },
     "terms": {                        # L4 -- controlled vocabulary (glossary)
         "terminology": {"pages": "pages-terminology"},
@@ -5546,6 +5593,7 @@ RULE_IDS = {
     "pages-image-caption":        "ST13",
     "pages-admonition-caption":   "ST14",
     "pages-heading-article":      "ST15",
+    "pages-heading-gerund":       "ST17",
     "pages-terminology":          "TM01",
     "pages-line-parity":          "LN01",
     "pages-structure-parity":     "LN02",
@@ -5590,6 +5638,7 @@ SUMMARIES = {
     "pages-image-caption":         "every image needs a .Caption above it",
     "pages-admonition-caption":    "every NOTE/TIP/WARNING/IMPORTANT/CAUTION needs a .Caption above it",
     "pages-heading-article":       "a heading shouldn't start with a/an/the",
+    "pages-heading-gerund":        "a heading shouldn't start with a gerund + object -- use the infinitive",
     "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
     "pages-line-parity":           "EN file and its RU counterpart have the same line count",
     "pages-structure-parity":      "EN and RU structural skeletons must match",
@@ -5650,6 +5699,7 @@ RULE_FLAGS = {
     "pages-image-caption":         "image with no caption",
     "pages-admonition-caption":    "admonition with no caption",
     "pages-heading-article":       "heading starts with a/an/the",
+    "pages-heading-gerund":        "heading uses gerund + object",
     "pages-terminology":           "off-glossary RU translation",
     "pages-line-parity":           "EN/RU line counts differ",
     "pages-structure-parity":      "EN/RU skeletons differ",

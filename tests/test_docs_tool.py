@@ -680,6 +680,46 @@ class PagesHeadingArticleTests(FixtureTestCase):
         self.assertTrue(ok, out)
 
 
+class PagesHeadingGerundTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_gerund_followed_by_article_is_flagged(self):
+        self._page("= Creating a cluster\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_gerund)
+        self.assertFalse(ok)
+        self.assertIn("Creating a cluster", out)
+
+    def test_gerund_followed_by_the_is_flagged(self):
+        self._page("== Deleting the specified value\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_gerund)
+        self.assertFalse(ok)
+        self.assertIn("Deleting the specified value", out)
+
+    def test_bare_gerund_topic_noun_is_fine(self):
+        """'Logging' with no object after it is a topic-noun heading, not a
+        gerund-vs-infinitive violation."""
+        self._page("= Logging\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_gerund)
+        self.assertTrue(ok, out)
+
+    def test_gerund_followed_by_preposition_is_fine(self):
+        self._page("= Logging in Zeppelin\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_gerund)
+        self.assertTrue(ok, out)
+
+    def test_gerund_with_no_following_word_is_fine(self):
+        self._page("== Monitoring\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_gerund)
+        self.assertTrue(ok, out)
+
+    def test_heading_without_gerund_is_fine(self):
+        self._page("= Create a cluster\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_gerund)
+        self.assertTrue(ok, out)
+
+
 class ComponentPrefixRegexTests(unittest.TestCase):
     def test_plain_module_prefix(self):
         m = dt._COMPONENT_PREFIX_RE.match("how-to:page.adoc")
@@ -3400,7 +3440,7 @@ class FamilySelectionTests(unittest.TestCase):
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
              "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
              "pages-image-alt", "pages-image-caption", "pages-admonition-caption",
-             "pages-heading-article"},
+             "pages-heading-article", "pages-heading-gerund"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),
