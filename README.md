@@ -144,6 +144,7 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST14` | `check style --admonition-caption` | admonition with no caption |
 | `ST15` | `check style --heading-article` | heading starts with a/an/the |
 | `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
+| `ST18` | `check style --table-header` | table has no header row |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -398,6 +399,19 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --heading-gerund
   ./docs_tool.py check style --heading-gerund --page resource_groups.adoc
+  ```
+
+- **`ST18` · `check style --table-header`** · beta — a table needs a header row
+  so columns are labeled. "Has a header" mirrors real Asciidoctor rendering
+  (verified against the `asciidoctor` gem): an explicit `options=header` /
+  `%header` on the block-attribute line, or a first row packed onto one
+  source line immediately followed by a blank line (Asciidoctor's own
+  implicit-header rule). A header split one cell per line does **not** get a
+  header even with a correct `cols` attribute -- that's a real Asciidoctor
+  quirk, not a bug in this check.
+  ```bash
+  ./docs_tool.py check style --table-header
+  ./docs_tool.py check style --table-header --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary

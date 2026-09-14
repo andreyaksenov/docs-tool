@@ -3988,6 +3988,110 @@ def check_pages_table_empty_cells() -> bool:
     return ok
 
 
+_TABLE_HEADER_ATTR_RE = re.compile(r'options\s*=\s*"?[\w,]*\bheader\b[\w,]*"?|%header\b')
+_TABLE_NOHEADER_ATTR_RE = re.compile(r'options\s*=\s*"?[\w,]*\bnoheader\b[\w,]*"?|%noheader\b')
+
+
+def check_pages_table_header() -> bool:
+    """New check: house style wants every table to have a header row so
+    columns are labeled -- a table with no header renders every row as
+    plain body cells with nothing telling the reader what each column
+    holds.
+
+    "Has a header" is decided the same way Asciidoctor itself decides it --
+    verified empirically against the installed `asciidoctor` gem, not
+    assumed, because the real rule is narrower than it looks:
+      - an explicit `options=header`/`options="header"` (quotes optional --
+        both forms occur in this corpus) or `%header` shorthand on the
+        block-attribute line always wins (and `noheader`/`%noheader`
+        always loses, even over the implicit case below);
+      - otherwise, Asciidoctor *implicitly* treats the first row as a
+        header only when that whole row sits on one physical source line
+        immediately followed by a blank line (`|Command|Description` then
+        a blank line, e.g.) -- confirmed against this file's own
+        hbase-shell.adoc table. Splitting the same header across one line
+        per cell (`|Command` / `|Description` / blank line) does NOT get a
+        header, even with a correct `[cols="1,1"]` -- also confirmed with
+        the gem, and initially surprising enough that an early version of
+        this check assumed the opposite and had to be corrected.
+    This is necessarily an approximation of Asciidoctor's real table
+    parser (column-count mismatches, cell spans etc. aren't modeled), but
+    it matches everything found in this doc family's real tables.
+
+    Accumulates every consecutive `[...]` block-attribute line seen (real
+    AsciiDoc lets several stack, one per line, e.g. `[.divided]` /
+    `[options=header]` / `[cols="2,5,3"]` all applying to the same table --
+    a real pattern in this corpus; keeping only the last one, as an
+    earlier version of this check did, silently dropped `options=header`).
+    A `.Caption` title line between the stack and `|===` doesn't break the
+    association (real AsciiDoc syntax: attrs, then optional title, then
+    the block), but any other line -- including a blank one, which really
+    does break the association in AsciiDoc -- resets it, so an attribute
+    stack left over from an unrelated preceding block is never credited to
+    this table. Deliberately simple like check_pages_table_empty_cells: no
+    in_code tracking, so a `|===` shown as literal example text inside a
+    source block would be mistaken for a real table -- a known, accepted
+    gap shared with that check."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                n = len(lines)
+                hits = []
+                in_table = False
+                pending_attrs = []
+                table_start = None
+                has_header = False
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if stripped == "|===":
+                        if not in_table:
+                            in_table = True
+                            table_start = i + 1
+                            attrs = " ".join(pending_attrs)
+                            explicit_header = bool(attrs and _TABLE_HEADER_ATTR_RE.search(attrs))
+                            explicit_noheader = bool(attrs and _TABLE_NOHEADER_ATTR_RE.search(attrs))
+                            if explicit_noheader:
+                                has_header = False
+                            elif explicit_header:
+                                has_header = True
+                            else:
+                                first = lines[i + 1].strip() if i + 1 < n else ""
+                                second = lines[i + 2].strip() if i + 2 < n else None
+                                has_header = bool(first) and first != "|===" and second == ""
+                        else:
+                            in_table = False
+                            if not has_header:
+                                hits.append(table_start)
+                        pending_attrs = []
+                        continue
+                    if in_table:
+                        continue
+                    if _BLOCK_ATTR_LINE_RE.match(line):
+                        pending_attrs.append(line)
+                        continue
+                    if _STRUCT_BLOCKTITLE_RE.match(line):
+                        continue
+                    pending_attrs = []
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for lineno in hits:
+                        print(f"  {f}:{lineno}: table has no header row")
+    if ok:
+        print("OK: every table declares a header row.")
+    else:
+        print(f"\nTotal: {total_hits} table(s) with no header row.")
+    return ok
+
+
 # --------------------------------------------------------------------------
 # PAGES: glossary terminology consistency
 # --------------------------------------------------------------------------
@@ -5411,6 +5515,7 @@ CHECKS = {
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-table-empty-cells": check_pages_table_empty_cells,
+    "pages-table-header": check_pages_table_header,
     "pages-link-new-tab": check_pages_link_new_tab,
     "pages-xref-own-product": check_pages_xref_own_product,
     "pages-image-alt": check_pages_image_alt,
@@ -5437,6 +5542,7 @@ BETA_CHECKS = {
     "pages-ru-latin-homoglyphs",
     "pages-structure-parity",
     "pages-table-cell-periods",
+    "pages-table-header",
     "pages-terminology",
     "pages-translation",
     "links-external",   # not heuristic parsing, but network flakiness makes it advisory
@@ -5511,6 +5617,7 @@ FAMILIES = {
         "heading-period":     {"pages": "pages-heading-no-period"},
         "heading-markup":     {"pages": "pages-heading-no-markup"},
         "table-empty-cells":  {"pages": "pages-table-empty-cells"},
+        "table-header":       {"pages": "pages-table-header"},
         "link-new-tab":       {"pages": "pages-link-new-tab"},
         "xref-own-product":   {"pages": "pages-xref-own-product"},
         "image-alt":          {"pages": "pages-image-alt"},
@@ -5587,6 +5694,7 @@ RULE_IDS = {
     "pages-heading-no-period":    "ST07",
     "pages-heading-no-markup":    "ST08",
     "pages-table-empty-cells":    "ST09",
+    "pages-table-header":         "ST18",
     "pages-link-new-tab":         "ST10",
     "pages-xref-own-product":    "ST11",
     "pages-image-alt":            "ST12",
@@ -5632,6 +5740,7 @@ SUMMARIES = {
     "pages-heading-no-period":     "a heading's title text shouldn't end with a period",
     "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
     "pages-table-empty-cells":     "a table cell with no meaningful value should hold -- instead of nothing",
+    "pages-table-header":          "every table needs a header row (options=\"header\" / %header)",
     "pages-link-new-tab":          "every external link opens in a new tab with opts=nofollow",
     "pages-xref-own-product":      "internal xref: must not name this product's own component",
     "pages-image-alt":             "every image:: needs alt text",
@@ -5693,6 +5802,7 @@ RULE_FLAGS = {
     "pages-heading-no-period":     "heading ends with a period",
     "pages-heading-no-markup":     "heading has font styles or a link",
     "pages-table-empty-cells":     "empty table cell",
+    "pages-table-header":          "table has no header row",
     "pages-link-new-tab":          "link missing ^ / opts=nofollow",
     "pages-xref-own-product":      "xref: names its own product",
     "pages-image-alt":             "image with no alt text",

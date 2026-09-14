@@ -2049,6 +2049,121 @@ class PagesTableEmptyCellsTests(FixtureTestCase):
         self.assertIn("page.adoc:4:", output)
 
 
+class PagesTableHeaderTests(FixtureTestCase):
+    """"Has a header" mirrors real Asciidoctor behavior, verified with the
+    installed asciidoctor gem rather than assumed: a packed single-line
+    first row followed by a blank line gets an *implicit* header with no
+    attribute needed (this doc family's actual convention -- see
+    hbase-shell.adoc), but the same header split one cell per line does
+    NOT get a header even with a correct `cols` attribute -- confirmed
+    with the gem, and the reverse of what an early version of this check
+    assumed."""
+
+    def test_packed_first_row_with_blank_line_gets_implicit_header(self):
+        """The real docs-adh convention: no attrs at all, just a packed
+        row followed by a blank line."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|A |B\n\n|1 |2\n|===\n")
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok)
+
+    def test_header_split_one_cell_per_line_is_flagged(self):
+        """Confirmed with asciidoctor: this renders with NO <thead> at all,
+        even with a correct [cols="1,1"] -- splitting the header across
+        lines defeats Asciidoctor's own implicit-header detection."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[cols="1,1"]\n|===\n|A\n|B\n\n|1\n|2\n|===\n')
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:2:", output)
+
+    def test_no_blank_line_anywhere_is_flagged(self):
+        """A fully compact table (every row packed, no blank lines at all)
+        gives Asciidoctor nothing to detect a header from."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    "|===\n|A |B\n|1 |2\n|3 |4\n|===\n")
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:1:", output)
+
+    def test_options_header_attr_passes_even_with_split_rows(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[options="header"]\n|===\n|A\n|B\n\n|1\n|2\n|===\n')
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok)
+
+    def test_percent_header_shorthand_passes_even_with_split_rows(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[%header,cols="1,1"]\n|===\n|A\n|B\n\n|1\n|2\n|===\n')
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok)
+
+    def test_noheader_overrides_implicit_packed_header(self):
+        """Confirmed with asciidoctor: options="noheader" suppresses even
+        the packed-row-plus-blank-line implicit case."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[options="noheader"]\n|===\n|A |B\n\n|1 |2\n|===\n')
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:2:", output)
+
+    def test_caption_between_attrs_and_table_does_not_break_association(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[%header,cols="1,1"]\n.My table\n|===\n|A\n|B\n\n|1\n|2\n|===\n')
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok)
+
+    def test_blank_line_between_attrs_and_table_breaks_association(self):
+        """A blank line really does disconnect a block-attribute line from
+        the block that follows in AsciiDoc, so the header attrs shouldn't
+        be credited to this table."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[%header,cols="1,1"]\n\n|===\n|A\n|B\n\n|1\n|2\n|===\n')
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:3:", output)
+
+    def test_unrelated_attrs_line_for_a_different_block_is_not_credited(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            '[source,bash]\n----\necho hi\n----\n\n|===\n|A\n|B\n\n|1\n|2\n|===\n',
+        )
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertIn("page.adoc:6:", output)
+
+    def test_two_tables_one_with_header_one_without(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            '[%header]\n|===\n|A\n|B\n\n|1\n|2\n|===\n\n|===\n|C\n|D\n\n|3\n|4\n|===\n',
+        )
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertNotIn("page.adoc:2:", output)
+        self.assertIn("page.adoc:10:", output)
+
+    def test_stacked_attribute_lines_are_all_accumulated(self):
+        """Real docs-adh pattern: [.divided] / [options=header] /
+        [cols="1,1,4"] stacked, one attribute block per line. Keeping only
+        the last line, as an earlier version of this check did, silently
+        dropped options=header."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            '[.divided]\n[options=header]\n[cols="1,1"]\n|===\n|A\n|B\n\n|1\n|2\n|===\n',
+        )
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok)
+
+    def test_unquoted_options_header_is_recognized(self):
+        """options=header with no quotes is valid AsciiDoc and occurs in
+        this corpus -- confirmed rendering a <thead> with the asciidoctor
+        gem."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[options=header]\n|===\n|A\n|B\n\n|1\n|2\n|===\n')
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok)
+
+
 class PagesTranslationTests(FixtureTestCase):
     def test_identical_line_is_flagged_as_untranslated(self):
         self.write("en/modules/ROOT/pages/page.adoc",
@@ -3440,7 +3555,7 @@ class FamilySelectionTests(unittest.TestCase):
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
              "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
              "pages-image-alt", "pages-image-caption", "pages-admonition-caption",
-             "pages-heading-article", "pages-heading-gerund"},
+             "pages-heading-article", "pages-heading-gerund", "pages-table-header"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),
