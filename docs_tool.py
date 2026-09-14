@@ -4447,8 +4447,11 @@ def _extract_urls_from_line(line):
     on one already comment/code-filtered line. Macro targets
     (`link:URL[..]`, `image:URL[..]`) are read first and masked out so the
     bare-URL sweep doesn't double-count them. A bare URL is skipped when
-    AsciiDoc wouldn't autolink it: escaped with a backslash (`\\http://x`)
-    or wrapped in a formatting pair (`_http://x_`)."""
+    AsciiDoc wouldn't autolink it: escaped with a backslash (`\\http://x`),
+    wrapped in a formatting pair (`_http://x_`), or immediately preceded by
+    a quote -- an XML/HTML attribute value (`xmlns="http://.../svg"` in an
+    inline `+++<svg>+++` passthrough) or a JSON-ish string, not a link
+    AsciiDoc would ever see as prose."""
     urls = []
     masked = line
     for m in _LINK_MACRO_RE.finditer(line):
@@ -4457,7 +4460,7 @@ def _extract_urls_from_line(line):
     for m in _BARE_URL_RE.finditer(masked):
         before = masked[m.start() - 1] if m.start() else ""
         after = masked[m.end()] if m.end() < len(masked) else ""
-        if before == "\\":
+        if before in ("\\", '"', "'"):
             continue
         if before and before == after and before in _FMT_WRAP_MARKERS:
             continue
@@ -4952,6 +4955,388 @@ def check_links_external() -> bool:
 
 
 # --------------------------------------------------------------------------
+# STYLE: external link decoration, own-product xrefs, image/admonition
+# captions & alt text, heading articles, single-item lists -- from the
+# internal syntax & grammar wiki checklist
+# --------------------------------------------------------------------------
+
+# A link: macro or a bare autolink, both forms optionally ending in a
+# [...] attribute list. The macro form is matched and masked out first so
+# the bare-URL sweep on the remainder doesn't double-count it -- the same
+# two-pass shape check_links_external's URL extraction uses, though this
+# scans raw attrs rather than a cleaned URL. (?<![:\w]) keeps a
+# macro-prefixed URL (image:https://..., xref: never has one) out of the
+# bare sweep without having to enumerate macro names. The body excludes
+# <>"`|^ the same way _BARE_URL_RE does, so a URL embedded inside another
+# scheme and monospace-wrapped (`` `k8s://https://10.92.14.35` ``) doesn't
+# swallow the closing backtick into the "host" and defeat the private-IP
+# check in _should_probe.
+_STYLE_LINK_MACRO_RE = re.compile(r'\blink:{1,2}(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
+_STYLE_BARE_URL_RE = re.compile(r'(?<![:\w])(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
+# A caret immediately before a comma or end-of-attrs is AsciiDoc's
+# target=_blank shorthand (`text^,opts=nofollow` or bare `^`) -- a caret
+# elsewhere (inside the link text itself) doesn't count.
+_LINK_TARGET_BLANK_RE = re.compile(r'\^\s*(?:,|$)')
+
+
+def _iter_external_link_attrs(line):
+    """Yield (url, attrs) for every http(s) link: macro or bare autolink on
+    this line that AsciiDoc would actually render as a live link -- same
+    criteria check_links_external's _extract_urls_from_line uses: a bare
+    URL that's backslash-escaped (`\\http://x`), wrapped in a formatting
+    pair (`_http://x_`), or immediately preceded by a quote (an XML/HTML
+    attribute value, e.g. `xmlns="http://.../svg"` inside an inline
+    `+++<svg>+++` passthrough -- not a link at all) isn't a real link and
+    is skipped outright, since decorating example/illustrative text with
+    `^`/opts=nofollow would be meaningless. `url` is run through _trim_url
+    so trailing prose punctuation or a leftover markup character (an
+    italic-close `_`, a sentence period) never leaks into the reported
+    target or confuses the host check callers run on it. `attrs` is the
+    raw [...] content (empty string for `[]`, None if the URL carries no
+    brackets at all -- which AsciiDoc also can't decorate, so it's
+    reported the same way)."""
+    out = []
+    masked = line
+    for m in _STYLE_LINK_MACRO_RE.finditer(line):
+        out.append((_trim_url(m.group(1)), m.group(3)))
+        masked = masked[:m.start()] + " " * (m.end() - m.start()) + masked[m.end():]
+    for m in _STYLE_BARE_URL_RE.finditer(masked):
+        before = masked[m.start() - 1] if m.start() else ""
+        after = masked[m.end(1)] if m.end(1) < len(masked) else ""
+        if before in ("\\", '"', "'"):
+            continue
+        if before and before == after and before in _FMT_WRAP_MARKERS:
+            continue
+        out.append((_trim_url(m.group(1)), m.group(3)))
+    return out
+
+
+def _missing_link_decoration(attrs):
+    """None if `attrs` already carries both `^` and `opts=nofollow`;
+    otherwise a short reason string for the report. `attrs=None` means
+    the URL had no [...] at all."""
+    if attrs is None:
+        return "no [...] attrs at all"
+    missing = []
+    if not _LINK_TARGET_BLANK_RE.search(attrs):
+        missing.append("^")
+    if "nofollow" not in attrs:
+        missing.append("opts=nofollow")
+    return f"missing {' and '.join(missing)}" if missing else None
+
+
+def check_pages_link_new_tab() -> bool:
+    """New check (not a port of an existing shell script): house style says
+    every external http(s) link should open in a new tab (`^`) with
+    `opts=nofollow` set (SEO) -- e.g. `https://greenplum.org/[Greenplum^,
+    opts=nofollow]`. Internal xref: links are explicitly exempt in the
+    guide (a different macro entirely, never matched here).
+
+    Only checks a URL _should_probe would also consider a real,
+    checkable external link -- check_links_external's own filter for
+    "not actually a live link a browser would open": a private/
+    loopback/placeholder host (FQDN:PORT, 10.x, *.internal, ...), a
+    `.git` clone remote, an unsubstituted `{attribute}`, or an obvious
+    placeholder (TODO/CHANGEME/<...>). Decorating a `_http://FQDN:PORT_`
+    example shown as illustrative text with `^`/opts=nofollow would be
+    nonsensical, not a style gap. Comment lines and ---- / .... blocks
+    are skipped (_excluded_ref_lines). Scans pages/ and partials/ in
+    both languages."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, line in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    for url, attrs in _iter_external_link_attrs(line):
+                        if not _should_probe(url):
+                            continue
+                        reason = _missing_link_decoration(attrs)
+                        if reason:
+                            hits.append((i, url, reason))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, url, reason in hits:
+                        print(f"  {f}:{i}: {url}  ({reason})")
+    if ok:
+        print("OK: every external link opens in a new tab with opts=nofollow.")
+    else:
+        print(f"\nTotal: {total_hits} external link(s) missing ^ / opts=nofollow.")
+    return ok
+
+
+def check_pages_xref_own_product() -> bool:
+    """New check (not a port of an existing shell script): house style says
+    an internal xref: to this same product's own content must not carry
+    the product's own component name -- `xref:foo.adoc[]`, not
+    `xref:ADH:foo.adoc[]` -- because a qualified xref always resolves to
+    the *latest* published version. A reader on an older version who
+    clicks it is bounced to latest instead of staying on their version.
+    `xref:<version>@<product>:...` is the guide's own sanctioned way to
+    pin a specific version deliberately, and is exempt -- the same
+    _VERSION_PIN_RE check _check_refs_in_file uses to leave it unresolved.
+
+    Scoped to pages/ only: the guide's own stated exception -- a partial
+    meant to be include::'d into a *different* product's docs must use
+    the qualified form, since "this product" won't be true once it's
+    spliced in elsewhere -- would need to know every place a partial is
+    ever included from (including from other repos) to detect reliably.
+    A page is never itself an include target, so pages/ has no such
+    exception to worry about."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for lang, root in (("en", en_root), ("ru", ru_root)):
+            own_name = _own_component_name(lang)
+            if not own_name:
+                continue
+            for f in _iter_files(root / "pages", ".adoc"):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, line in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    for m in _REF_SCAN_RE.finditer(line):
+                        target = m.group(0)[:-1]  # strip trailing '['
+                        if not target.startswith("xref:"):
+                            continue
+                        t = target[len("xref:"):]
+                        if _VERSION_PIN_RE.match(t):
+                            continue  # version@component pin -- sanctioned, not this bug
+                        m_component = _COMPONENT_PREFIX_RE.match(t)
+                        if m_component and m_component.group(0)[:-1] == own_name:
+                            hits.append((i, target))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, target in hits:
+                        print(f"  {f}:{i}: {target}[]  "
+                              f"('{own_name}:' is this product's own name -- drop it)")
+    if ok:
+        print("OK: no internal xref: names this product's own component.")
+    else:
+        print(f"\nTotal: {total_hits} self-qualified xref: target(s).")
+    return ok
+
+
+_IMAGE_MACRO_ATTRS_RE = re.compile(r'\bimage:{1,2}([^\[\]\s]+)\[([^\]]*)\]')
+
+
+def _image_has_alt(attrs: str) -> bool:
+    """True if `attrs` (an image:: macro's raw [...] content) gives alt
+    text -- an explicit alt= key, or a non-empty first positional
+    attribute (Asciidoctor's implicit alt-text slot:
+    `image::x.png[Alt text,width=400]`). A first attribute that itself
+    looks like key=value (`image::x.png[width=400]`) means no alt text
+    was actually given positionally."""
+    if "alt=" in attrs:
+        return True
+    first = attrs.split(",", 1)[0].strip()
+    if not first:
+        return False
+    return not re.match(r'^[A-Za-z_][\w-]*=', first)
+
+
+def check_pages_image_alt() -> bool:
+    """New check (SEO recommendations for texts -> Pictures and
+    screenshots): every image:: needs alt text -- either the `alt=`
+    attribute or Asciidoctor's implicit first-positional-attribute slot
+    (see _image_has_alt). injectSvg:/inlineSVG: (a different raw-SVG
+    embedding mechanism with no alt slot of its own) are out of scope.
+    Scans pages/ and partials/ in both languages."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, line in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    for m in _IMAGE_MACRO_ATTRS_RE.finditer(line):
+                        if not _image_has_alt(m.group(2)):
+                            hits.append((i, m.group(0)))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, matched in hits:
+                        print(f"  {f}:{i}: {matched}  (no alt text)")
+    if ok:
+        print("OK: every image:: has alt text.")
+    else:
+        print(f"\nTotal: {total_hits} image(s) with no alt text.")
+    return ok
+
+
+# A `.Caption text` block title -- not a `....` literal-block delimiter
+# ((?!\.) excludes a second dot) or a numbered list item's `. text` (\S
+# requires the character right after the dot to be non-space).
+_CAPTION_LINE_RE = re.compile(r'^\.(?!\.)\S.*$')
+_BLOCK_ATTR_LINE_RE = re.compile(r'^\[[^\]]*\]\s*$')
+# Double-colon only: `image::x[]` is the block macro AsciiDoc gives its own
+# line and (optionally) a title/caption; `image:x[]` (single colon) is the
+# inline macro meant to sit mid-sentence -- e.g. a small UI icon wrapped
+# in `[.is-dark]#image:icon.svg[width=30]#` -- which structurally can't
+# take a caption at all. Using the shared _IMAGE_MACRO_ATTRS_RE (which
+# also matches the inline form) here would flag every such icon.
+_IMAGE_BLOCK_MACRO_RE = re.compile(r'\bimage::[^\[\]\s]+\[[^\]]*\]')
+
+
+def _has_caption_above(lines, idx):
+    """True if the (0-based) line at `idx` is preceded by a caption (see
+    _CAPTION_LINE_RE). One [attribute]-only line directly above (e.g. an
+    anchor `[#id]`) is skipped over first, so a caption separated from its
+    target only by an anchor still counts."""
+    j = idx - 1
+    if j >= 0 and _BLOCK_ATTR_LINE_RE.match(lines[j]):
+        j -= 1
+    return j >= 0 and bool(_CAPTION_LINE_RE.match(lines[j]))
+
+
+def check_pages_image_caption() -> bool:
+    """New check: house style says every image needs an introductory
+    caption -- a `.Caption text` block title placed directly above the
+    image:: (see _has_caption_above). Only the double-colon block macro
+    is in scope (see _IMAGE_BLOCK_MACRO_RE) -- a single-colon inline icon
+    embedded mid-sentence isn't a "figure" in the sense this rule means,
+    and AsciiDoc gives it no caption slot at all. Scans pages/ and
+    partials/ in both languages."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, line in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    if _IMAGE_BLOCK_MACRO_RE.search(line) and not _has_caption_above(lines, i - 1):
+                        hits.append((i, line.strip()))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}  (no caption above)")
+    if ok:
+        print("OK: every image has a caption.")
+    else:
+        print(f"\nTotal: {total_hits} image(s) with no caption.")
+    return ok
+
+
+def check_pages_admonition_caption() -> bool:
+    """New check: house style says every admonition (NOTE/TIP/WARNING/
+    IMPORTANT/CAUTION -- block `[TYPE]` form or inline `TYPE:` label form,
+    see _ADMONITION_BLOCK_RE/_ADMONITION_LABEL_RE) needs a caption, a
+    `.Caption text` block title placed directly above it (see
+    _has_caption_above). The guide also wants the caption text itself to
+    differ by language and to come from a controlled per-type list --
+    that part needs a maintained vocabulary (the same shape as the
+    terminology glossary) and is deferred; this only checks presence.
+    Scans pages/ and partials/ in both languages."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, line in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    if (_ADMONITION_BLOCK_RE.match(line) or _ADMONITION_LABEL_RE.match(line)) \
+                            and not _has_caption_above(lines, i - 1):
+                        hits.append((i, line.strip()))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}  (no caption above)")
+    if ok:
+        print("OK: every admonition has a caption.")
+    else:
+        print(f"\nTotal: {total_hits} admonition(s) with no caption.")
+    return ok
+
+
+_HEADING_STARTS_WITH_ARTICLE_RE = re.compile(r'^(A|An|The)\b')
+
+
+def check_pages_heading_article() -> bool:
+    """New check: house style says "Do not start headers with articles,
+    e.g. use Example instead of An example." English-specific by
+    construction -- an RU heading never starts with the literal Latin
+    words "A"/"An"/"The", so scanning both languages uniformly is
+    harmless. Reuses _HEADING_ID_RE, the same heading-line pattern
+    check_pages_heading_no_period/check_pages_heading_no_markup work
+    from; any heading level counts. Scans pages/ and partials/ in both
+    languages."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                hits = []
+                for i, l in enumerate(lines, 1):
+                    m = _HEADING_ID_RE.match(l)
+                    if m and _HEADING_STARTS_WITH_ARTICLE_RE.match(m.group(1)):
+                        hits.append((i, l))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}")
+    if ok:
+        print("OK: no heading starts with an article (a/an/the).")
+    else:
+        print(f"\nTotal: {total_hits} heading(s) starting with an article.")
+    return ok
+
+
+# --------------------------------------------------------------------------
 # CHECK REGISTRY
 # --------------------------------------------------------------------------
 
@@ -4981,6 +5366,12 @@ CHECKS = {
     "pages-structure-parity": check_pages_structure_parity,
     "pages-table-cell-periods": check_pages_table_cell_periods,
     "pages-table-empty-cells": check_pages_table_empty_cells,
+    "pages-link-new-tab": check_pages_link_new_tab,
+    "pages-xref-own-product": check_pages_xref_own_product,
+    "pages-image-alt": check_pages_image_alt,
+    "pages-image-caption": check_pages_image_caption,
+    "pages-admonition-caption": check_pages_admonition_caption,
+    "pages-heading-article": check_pages_heading_article,
     "pages-terminology": check_pages_terminology,
     "pages-translation": check_pages_translation,
     "pages-unbalanced-delimiters": check_pages_unbalanced_delimiters,
@@ -5074,6 +5465,12 @@ FAMILIES = {
         "heading-period":     {"pages": "pages-heading-no-period"},
         "heading-markup":     {"pages": "pages-heading-no-markup"},
         "table-empty-cells":  {"pages": "pages-table-empty-cells"},
+        "link-new-tab":       {"pages": "pages-link-new-tab"},
+        "xref-own-product":   {"pages": "pages-xref-own-product"},
+        "image-alt":          {"pages": "pages-image-alt"},
+        "image-caption":      {"pages": "pages-image-caption"},
+        "admonition-caption": {"pages": "pages-admonition-caption"},
+        "heading-article":    {"pages": "pages-heading-article"},
     },
     "terms": {                        # L4 -- controlled vocabulary (glossary)
         "terminology": {"pages": "pages-terminology"},
@@ -5143,6 +5540,12 @@ RULE_IDS = {
     "pages-heading-no-period":    "ST07",
     "pages-heading-no-markup":    "ST08",
     "pages-table-empty-cells":    "ST09",
+    "pages-link-new-tab":         "ST10",
+    "pages-xref-own-product":    "ST11",
+    "pages-image-alt":            "ST12",
+    "pages-image-caption":        "ST13",
+    "pages-admonition-caption":   "ST14",
+    "pages-heading-article":      "ST15",
     "pages-terminology":          "TM01",
     "pages-line-parity":          "LN01",
     "pages-structure-parity":     "LN02",
@@ -5181,6 +5584,12 @@ SUMMARIES = {
     "pages-heading-no-period":     "a heading's title text shouldn't end with a period",
     "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
     "pages-table-empty-cells":     "a table cell with no meaningful value should hold -- instead of nothing",
+    "pages-link-new-tab":          "every external link opens in a new tab with opts=nofollow",
+    "pages-xref-own-product":      "internal xref: must not name this product's own component",
+    "pages-image-alt":             "every image:: needs alt text",
+    "pages-image-caption":         "every image needs a .Caption above it",
+    "pages-admonition-caption":    "every NOTE/TIP/WARNING/IMPORTANT/CAUTION needs a .Caption above it",
+    "pages-heading-article":       "a heading shouldn't start with a/an/the",
     "pages-terminology":           "EN glossary term translated to a non-house-style RU word",
     "pages-line-parity":           "EN file and its RU counterpart have the same line count",
     "pages-structure-parity":      "EN and RU structural skeletons must match",
@@ -5235,6 +5644,12 @@ RULE_FLAGS = {
     "pages-heading-no-period":     "heading ends with a period",
     "pages-heading-no-markup":     "heading has font styles or a link",
     "pages-table-empty-cells":     "empty table cell",
+    "pages-link-new-tab":          "link missing ^ / opts=nofollow",
+    "pages-xref-own-product":      "xref: names its own product",
+    "pages-image-alt":             "image with no alt text",
+    "pages-image-caption":         "image with no caption",
+    "pages-admonition-caption":    "admonition with no caption",
+    "pages-heading-article":       "heading starts with a/an/the",
     "pages-terminology":           "off-glossary RU translation",
     "pages-line-parity":           "EN/RU line counts differ",
     "pages-structure-parity":      "EN/RU skeletons differ",

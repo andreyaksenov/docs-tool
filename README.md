@@ -137,6 +137,12 @@ rationales — the terminal equivalent of this section. `beta` rules are heurist
 | `ST07` | `check style --heading-period` | heading ends with a period |
 | `ST08` | `check style --heading-markup` | heading has font styles or a link |
 | `ST09` | `check style --table-empty-cells` | empty table cell |
+| `ST10` | `check style --link-new-tab` | link missing `^` / `opts=nofollow` |
+| `ST11` | `check style --xref-own-product` | `xref:` names its own product |
+| `ST12` | `check style --image-alt` | image with no alt text |
+| `ST13` | `check style --image-caption` | image with no caption |
+| `ST14` | `check style --admonition-caption` | admonition with no caption |
+| `ST15` | `check style --heading-article` | heading starts with a/an/the |
 | `TM01` | `check terms` | off-glossary RU translation |
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
 | `LN02` | `check l10n --structure` | EN/RU skeletons differ |
@@ -323,6 +329,64 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --table-empty-cells
   ./docs_tool.py check style --table-empty-cells --page resource_groups.adoc
+  ```
+
+- **`ST10` · `check style --link-new-tab`** — every external `http(s)` link opens in a
+  new tab (`^`) with `opts=nofollow` set, e.g.
+  `https://greenplum.org/[Greenplum^,opts=nofollow]`. `xref:` (internal links) is
+  exempt. A bare URL with no `[...]` at all is flagged too — it structurally can't
+  carry either marker. Only checks what `check links` (`LK01`) would also treat as
+  a real, live link — its `_should_probe` filter skips a private/placeholder host
+  (`http://FQDN:PORT`, `10.x`, `*.internal`), a `.git` clone remote, and a bare URL
+  that's backslash-escaped or formatting-wrapped (`_http://FQDN:8081_`) — "point
+  your browser at `http://HOST:PORT`" instructions aren't links to decorate.
+  ```bash
+  ./docs_tool.py check style --link-new-tab
+  ./docs_tool.py check style --link-new-tab --page resource_groups.adoc
+  ```
+
+- **`ST11` · `check style --xref-own-product`** — an internal `xref:` to this
+  product's own content must not name the product (`xref:foo.adoc[]`, not
+  `xref:ADH:foo.adoc[]`) — a qualified xref always resolves to the *latest*
+  version, so a reader on an older version who clicks it is bounced to latest.
+  `xref:<version>@<product>:...` (pinning a specific version deliberately) is
+  exempt. Scoped to `pages/` only — a partial meant to be `include::`'d into a
+  *different* product's docs is a documented exception this tool can't detect.
+  ```bash
+  ./docs_tool.py check style --xref-own-product
+  ./docs_tool.py check style --xref-own-product --page resource_groups.adoc
+  ```
+
+- **`ST12` · `check style --image-alt`** — every `image::`/`image:` needs alt
+  text, either the `alt=` attribute or Asciidoctor's implicit first-positional
+  slot (`image::x.png[Alt text,width=400]`).
+  ```bash
+  ./docs_tool.py check style --image-alt
+  ./docs_tool.py check style --image-alt --page resource_groups.adoc
+  ```
+
+- **`ST13` · `check style --image-caption`** — every image (the `image::` block
+  macro only — a single-colon inline icon mid-sentence has no caption slot in
+  AsciiDoc) needs an introductory `.Caption` line directly above it.
+  ```bash
+  ./docs_tool.py check style --image-caption
+  ./docs_tool.py check style --image-caption --page resource_groups.adoc
+  ```
+
+- **`ST14` · `check style --admonition-caption`** — every NOTE/TIP/WARNING/
+  IMPORTANT/CAUTION (block or inline-label form) needs a `.Caption` line directly
+  above it. The guide also wants the caption text to differ by language and come
+  from a controlled per-type list — not checked here, only presence is.
+  ```bash
+  ./docs_tool.py check style --admonition-caption
+  ./docs_tool.py check style --admonition-caption --page resource_groups.adoc
+  ```
+
+- **`ST15` · `check style --heading-article`** — a heading shouldn't start with
+  "A"/"An"/"The" (use `Example`, not `An example`).
+  ```bash
+  ./docs_tool.py check style --heading-article
+  ./docs_tool.py check style --heading-article --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary

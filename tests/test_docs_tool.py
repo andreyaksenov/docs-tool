@@ -383,6 +383,303 @@ class PagesUnbalancedDivsTests(FixtureTestCase):
         self.assertNotIn("en/modules/ROOT/pages/p.adoc:", out)
 
 
+class ExternalLinkAttrsTests(unittest.TestCase):
+    """Unit tests for _iter_external_link_attrs / _missing_link_decoration
+    -- no filesystem needed."""
+
+    def test_bare_url_with_full_decoration_is_fine(self):
+        urls = dt._iter_external_link_attrs("see https://greenplum.org/[Greenplum^, opts=nofollow] docs")
+        self.assertEqual(urls, [("https://greenplum.org/", "Greenplum^, opts=nofollow")])
+        self.assertIsNone(dt._missing_link_decoration("Greenplum^, opts=nofollow"))
+
+    def test_link_macro_with_full_decoration_is_fine(self):
+        urls = dt._iter_external_link_attrs("link:https://x.io/p[Label^,opts=nofollow]")
+        self.assertEqual(urls, [("https://x.io/p", "Label^,opts=nofollow")])
+
+    def test_missing_caret_is_flagged(self):
+        self.assertEqual(dt._missing_link_decoration("Label,opts=nofollow"), "missing ^")
+
+    def test_missing_nofollow_is_flagged(self):
+        self.assertEqual(dt._missing_link_decoration("Label^"), "missing opts=nofollow")
+
+    def test_missing_both_is_flagged(self):
+        self.assertEqual(dt._missing_link_decoration("Label"), "missing ^ and opts=nofollow")
+
+    def test_no_brackets_at_all_is_flagged(self):
+        urls = dt._iter_external_link_attrs("see https://bare.example/page here")
+        self.assertEqual(urls, [("https://bare.example/page", None)])
+        self.assertEqual(dt._missing_link_decoration(None), "no [...] attrs at all")
+
+    def test_image_macro_is_not_mistaken_for_a_bare_link(self):
+        """image:https://... is not a hyperlink at all -- must not be
+        picked up by the bare-URL sweep just because it lacks 'link:'."""
+        self.assertEqual(dt._iter_external_link_attrs('image::https://x.io/p.png[Alt,width=10]'), [])
+
+    def test_caret_inside_link_text_does_not_count(self):
+        """A caret that isn't immediately before a comma or end-of-attrs
+        is part of the link text, not the target=_blank shorthand."""
+        self.assertEqual(dt._missing_link_decoration("2^10 explained"), "missing ^ and opts=nofollow")
+
+    def test_backslash_escaped_bare_url_is_not_a_link(self):
+        """Regression test: house style example text like `_\\http://FQDN:8081_`
+        was being extracted as a real link needing decoration -- AsciiDoc
+        never autolinks it in the first place."""
+        self.assertEqual(dt._iter_external_link_attrs(r"looks like: _\http://FQDN:8081_."), [])
+
+    def test_formatting_wrapped_bare_url_is_not_a_link(self):
+        self.assertEqual(dt._iter_external_link_attrs("`https://mono.example/x` shown as code"), [])
+
+    def test_backtick_wrapped_embedded_url_does_not_swallow_the_backtick(self):
+        """Regression test for the spark-submit-k8s.adoc false positive:
+        `` `k8s://https://10.92.14.35`. `` -- the opening backtick isn't
+        adjacent to the https:// URL (there's a `k8s://` in between), so
+        the formatting-wrap check alone can't catch it; the fix is that
+        the URL body itself never captures the closing backtick, so
+        _should_probe's private-IP check sees a clean host."""
+        urls = dt._iter_external_link_attrs("`k8s://https://10.92.14.35`.")
+        self.assertEqual(urls, [("https://10.92.14.35", None)])
+        self.assertFalse(dt._should_probe(urls[0][0]))
+
+    def test_xml_attribute_value_is_not_a_link(self):
+        """Same nav-first-item.adoc fix, for the style-check's own
+        extractor: an inline SVG's xmlns="http://.../svg" isn't a link to
+        decorate with ^/opts=nofollow."""
+        line = ('* xref:install.adoc[+++<svg xmlns="http://www.w3.org/2000/svg" '
+               'width="24"></svg>+++Installation]')
+        self.assertEqual(dt._iter_external_link_attrs(line), [])
+
+
+class ImageAltTests(unittest.TestCase):
+    """Unit tests for _image_has_alt -- no filesystem needed."""
+
+    def test_explicit_alt_key(self):
+        self.assertTrue(dt._image_has_alt("alt=A screenshot,width=400"))
+
+    def test_positional_alt_text(self):
+        self.assertTrue(dt._image_has_alt("A screenshot,width=400"))
+
+    def test_only_key_value_attrs_is_no_alt(self):
+        self.assertFalse(dt._image_has_alt("width=400"))
+
+    def test_empty_attrs_is_no_alt(self):
+        self.assertFalse(dt._image_has_alt(""))
+
+
+class HasCaptionAboveTests(unittest.TestCase):
+    """Unit tests for _has_caption_above -- no filesystem needed."""
+
+    def test_caption_directly_above(self):
+        lines = [".My caption", "image::x.png[Alt]"]
+        self.assertTrue(dt._has_caption_above(lines, 1))
+
+    def test_no_caption_is_false(self):
+        lines = ["Some intro text.", "image::x.png[Alt]"]
+        self.assertFalse(dt._has_caption_above(lines, 1))
+
+    def test_anchor_line_between_caption_and_target_is_skipped(self):
+        lines = [".My caption", "[#fig-1]", "image::x.png[Alt]"]
+        self.assertTrue(dt._has_caption_above(lines, 2))
+
+    def test_literal_block_delimiter_is_not_a_caption(self):
+        lines = ["....", "image::x.png[Alt]"]
+        self.assertFalse(dt._has_caption_above(lines, 1))
+
+    def test_numbered_list_item_is_not_a_caption(self):
+        lines = [". Do this", "image::x.png[Alt]"]
+        self.assertFalse(dt._has_caption_above(lines, 1))
+
+    def test_at_start_of_file_is_false(self):
+        self.assertFalse(dt._has_caption_above(["image::x.png[Alt]"], 0))
+
+
+class PagesLinkNewTabTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_fully_decorated_link_is_ok(self):
+        self._page("See https://greenplum.org/[Greenplum^,opts=nofollow] docs.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+        self.assertIn("OK:", out)
+
+    def test_undecorated_link_is_flagged(self):
+        self._page("See https://greenplum.org/[Greenplum] docs.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("greenplum.org", out)
+
+    def test_xref_is_exempt(self):
+        self._page("See xref:other.adoc[Other page] for details.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_link_inside_code_block_is_skipped(self):
+        self._page("----\nSee https://bare.example/x\n----\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_placeholder_and_private_host_examples_are_not_flagged(self):
+        """Regression test: 'open http://FQDN:PORT in your browser'-style
+        instructions were being flagged as undecorated external links --
+        borrowing check_links_external's _should_probe filter (private/
+        loopback/placeholder hosts) means they're skipped the same way
+        the network checker itself skips them."""
+        self._page(
+            "For example: _\\http://FQDN:8081_.\n"
+            "Or directly: http://10.92.40.107:11200 in a browser.\n"
+            "Clone via https://github.com/arenadata/foo.git if needed.\n"
+        )
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_backtick_wrapped_embedded_private_ip_is_not_flagged(self):
+        self._page("Set `<master>` to `k8s://https://10.92.14.35`.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_real_link_alongside_placeholder_text_is_still_flagged(self):
+        """The filtering must not become so broad it silences genuine
+        findings sitting on a nearby line."""
+        self._page(
+            "For example: _\\http://FQDN:8081_.\n"
+            "See https://greenplum.org/[Greenplum] for details.\n"
+        )
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("greenplum.org", out)
+
+
+class PagesXrefOwnProductTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "ADH")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_own_product_qualified_xref_is_flagged(self):
+        self._page("See xref:ADH:other.adoc[Other page].\n")
+        ok, out = self.run_check(dt.check_pages_xref_own_product)
+        self.assertFalse(ok)
+        self.assertIn("xref:ADH:other.adoc", out)
+
+    def test_unqualified_xref_is_fine(self):
+        self._page("See xref:other.adoc[Other page].\n")
+        ok, out = self.run_check(dt.check_pages_xref_own_product)
+        self.assertTrue(ok, out)
+
+    def test_other_product_xref_is_fine(self):
+        self._page("See xref:ADCM:ROOT:other.adoc[Other page].\n")
+        ok, out = self.run_check(dt.check_pages_xref_own_product)
+        self.assertTrue(ok, out)
+
+    def test_version_pinned_own_product_xref_is_exempt(self):
+        self._page("See xref:1.0@ADH:other.adoc[Other page].\n")
+        ok, out = self.run_check(dt.check_pages_xref_own_product)
+        self.assertTrue(ok, out)
+
+
+class PagesImageAltTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_missing_alt_is_flagged(self):
+        self._page(".A screenshot\nimage::x.png[width=400]\n")
+        ok, out = self.run_check(dt.check_pages_image_alt)
+        self.assertFalse(ok)
+        self.assertIn("x.png", out)
+
+    def test_report_shows_the_real_attrs_not_a_fake_empty_bracket(self):
+        """Regression test: the report used to always print a hardcoded
+        `image::target[]`, which didn't match the real source line at all
+        (e.g. actual attrs `[width=30]` printed as `[]`)."""
+        self._page(".A screenshot\nimage::x.png[width=30]\n")
+        ok, out = self.run_check(dt.check_pages_image_alt)
+        self.assertFalse(ok)
+        self.assertIn("image::x.png[width=30]", out)
+        self.assertNotIn("x.png[]", out)
+
+    def test_positional_alt_is_fine(self):
+        self._page(".A screenshot\nimage::x.png[The main screen,width=400]\n")
+        ok, out = self.run_check(dt.check_pages_image_alt)
+        self.assertTrue(ok, out)
+
+
+class PagesImageCaptionTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_missing_caption_is_flagged(self):
+        self._page("Some intro.\n\nimage::x.png[Alt]\n")
+        ok, out = self.run_check(dt.check_pages_image_caption)
+        self.assertFalse(ok)
+        self.assertIn("x.png", out)
+
+    def test_caption_present_is_fine(self):
+        self._page(".A screenshot\nimage::x.png[Alt]\n")
+        ok, out = self.run_check(dt.check_pages_image_caption)
+        self.assertTrue(ok, out)
+
+    def test_inline_icon_mid_sentence_is_not_flagged(self):
+        """Regression test for the cluster-actions.adoc false positive: a
+        single-colon inline icon (`image:icon.svg[width=30]`) embedded in
+        running prose has no caption slot in AsciiDoc at all -- only the
+        double-colon block macro is this rule's concern."""
+        self._page("Click the [.is-dark]#image:icon.svg[width=30]# icon to continue.\n")
+        ok, out = self.run_check(dt.check_pages_image_caption)
+        self.assertTrue(ok, out)
+
+
+class PagesAdmonitionCaptionTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_block_form_missing_caption_is_flagged(self):
+        self._page("[NOTE]\n====\nSomething important.\n====\n")
+        ok, out = self.run_check(dt.check_pages_admonition_caption)
+        self.assertFalse(ok)
+        self.assertIn("[NOTE]", out)
+
+    def test_block_form_with_caption_is_fine(self):
+        self._page(".Note\n[NOTE]\n====\nSomething important.\n====\n")
+        ok, out = self.run_check(dt.check_pages_admonition_caption)
+        self.assertTrue(ok, out)
+
+    def test_label_form_missing_caption_is_flagged(self):
+        self._page("NOTE: Something important.\n")
+        ok, out = self.run_check(dt.check_pages_admonition_caption)
+        self.assertFalse(ok)
+
+    def test_label_form_with_caption_is_fine(self):
+        self._page(".Note\nNOTE: Something important.\n")
+        ok, out = self.run_check(dt.check_pages_admonition_caption)
+        self.assertTrue(ok, out)
+
+
+class PagesHeadingArticleTests(FixtureTestCase):
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_heading_starting_with_an_is_flagged(self):
+        self._page("= An example\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_article)
+        self.assertFalse(ok)
+        self.assertIn("An example", out)
+
+    def test_heading_without_article_is_fine(self):
+        self._page("= Example\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_article)
+        self.assertTrue(ok, out)
+
+    def test_word_merely_starting_with_article_letters_is_fine(self):
+        """'Ansible' must not match just because it starts with 'An'."""
+        self._page("= Ansible integration\n\ncontent\n")
+        ok, out = self.run_check(dt.check_pages_heading_article)
+        self.assertTrue(ok, out)
+
+
 class ComponentPrefixRegexTests(unittest.TestCase):
     def test_plain_module_prefix(self):
         m = dt._COMPONENT_PREFIX_RE.match("how-to:page.adoc")
@@ -3101,7 +3398,9 @@ class FamilySelectionTests(unittest.TestCase):
             {"pages-no-yo", "pages-file-path-italics", "pages-table-cell-periods",
              "pages-no-curly-quotes", "pages-no-copyright-symbols",
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
-             "pages-table-empty-cells"},
+             "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
+             "pages-image-alt", "pages-image-caption", "pages-admonition-caption",
+             "pages-heading-article"},
         )
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),
@@ -3404,6 +3703,16 @@ class ExternalLinkExtractionTests(unittest.TestCase):
         ):
             self.assertEqual(dt._extract_urls_from_line(line),
                              ["https://en.wikipedia.org/wiki/Kerberos_(protocol)"], line)
+
+    def test_xml_attribute_value_is_not_a_link(self):
+        """Regression test for the nav-first-item.adoc false positive: an
+        inline SVG passed through via +++<svg>+++ carries its XML
+        namespace as a quoted attribute value -- xmlns="http://.../svg"
+        -- which is not a link AsciiDoc renders, or a page anyone would
+        visit; check_links_external was probing it as if it were one."""
+        line = ('* xref:install.adoc[+++<svg xmlns="http://www.w3.org/2000/svg" '
+               'width="24"></svg>+++Installation]')
+        self.assertEqual(dt._extract_urls_from_line(line), [])
 
     def test_prose_parens_around_a_url_are_stripped(self):
         self.assertEqual(
