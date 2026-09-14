@@ -2819,6 +2819,53 @@ class PagesStructureParityTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("DIFF", output)
 
+    def test_missing_open_block_is_flagged(self):
+        """Real docs-adh bug found while prototyping a stronger l10n check:
+        an EN "--" open block (wrapping a block title + collapsible
+        example) entirely missing on the RU side. Previously invisible to
+        this check -- "--" wasn't in _STRUCT_LINE_RE's allowlist at all --
+        and also invisible to check_pages_unbalanced_delimiters, which only
+        flags an opened-but-never-closed "--", not one absent on one
+        language entirely."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\n--\n.Example\n====\nContent.\n====\n--\n\nAfter.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\n.Пример\n====\nКонтент.\n====\n\nПосле.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertFalse(ok)
+        self.assertIn("DIFF", output)
+
+    def test_matching_open_block_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\n--\n.Example\n====\nContent.\n====\n--\n\nAfter.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\n--\n.Пример\n====\nКонтент.\n====\n--\n\nПосле.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertTrue(ok, output)
+
+    def test_open_block_trailing_whitespace_is_not_a_false_positive(self):
+        """Real docs-adqm case: EN's "--" is clean, RU's has a trailing
+        space ("-- "). Both are the same open block delimiter and must
+        normalize to the same skeleton token."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "== Title\n\n--\nContent.\n--\n\nAfter.\n",
+        )
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "== Заголовок\n\n-- \nКонтент.\n-- \n\nПосле.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_structure_parity)
+        self.assertTrue(ok, output)
+
 
 class PagesLinkParityTests(FixtureTestCase):
     def test_matching_links_pass(self):

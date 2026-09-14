@@ -2459,6 +2459,13 @@ def check_pages_orphaned() -> bool:
 _STRUCT_LINE_RE = re.compile(
     r'^(=+ |\.[^. ]|----$|\.\.\.\.$|====$|\*\*\*\*$|\|===$|\[.*\]$|include::)'
 )
+# The open block delimiter -- exactly two dashes, nothing else. Its own
+# regex (not folded into _STRUCT_LINE_RE's catch-all, which appends the raw
+# line verbatim) so a real trailing-whitespace variant ("-- ", seen in the
+# wild in docs-adqm) normalizes to the same "--" token as the clean form --
+# otherwise a harmless whitespace difference between EN and RU would read
+# as a missing open block.
+_STRUCT_OPEN_BLOCK_RE = re.compile(r'^(--)\s*$')
 _STRUCT_HEADING_RE = re.compile(r'^(=+) .*')
 _STRUCT_BLOCKTITLE_RE = re.compile(r'^\.[^. ].*')
 # A line that is *only* "+": the AsciiDoc list-continuation marker that glues
@@ -2570,6 +2577,12 @@ def _structure_skeleton(path: Path):
             if delim and source_pending:
                 in_code = True
                 code_delim = delim
+            source_pending = False
+            continue
+
+        m = _STRUCT_OPEN_BLOCK_RE.match(line)
+        if m:
+            out.append((lineno, m.group(1)))
             source_pending = False
             continue
 
