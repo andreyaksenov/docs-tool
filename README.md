@@ -256,7 +256,6 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
 | `ST10` | `check style --link-new-tab` | link missing `^` / `opts=nofollow` |
 | `ST11` | `check style --xref-own-product` | `xref:` names its own product |
 | `ST12` | `check style --image-alt` | image with no alt text |
-| `ST13` | `check style --image-caption` | image with no caption |
 | `ST14` | `check style --admonition-caption` | admonition with no caption |
 | `ST15` | `check style --heading-article` | heading starts with a/an/the |
 | `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
@@ -367,14 +366,6 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --image-alt
   ./docs_tool.py check style --image-alt --page resource_groups.adoc
-  ```
-
-- **`ST13` · `check style --image-caption`** — every image (the `image::` block
-  macro only — a single-colon inline icon mid-sentence has no caption slot in
-  AsciiDoc) needs an introductory `.Caption` line directly above it.
-  ```bash
-  ./docs_tool.py check style --image-caption
-  ./docs_tool.py check style --image-caption --page resource_groups.adoc
   ```
 
 - **`ST14` · `check style --admonition-caption`** — every NOTE/TIP/WARNING/

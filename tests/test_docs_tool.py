@@ -604,32 +604,6 @@ class PagesImageAltTests(FixtureTestCase):
         self.assertTrue(ok, out)
 
 
-class PagesImageCaptionTests(FixtureTestCase):
-    def _page(self, body):
-        self.antora_yml("en", "TEST")
-        self.write("en/modules/ROOT/pages/p.adoc", body)
-
-    def test_missing_caption_is_flagged(self):
-        self._page("Some intro.\n\nimage::x.png[Alt]\n")
-        ok, out = self.run_check(dt.check_pages_image_caption)
-        self.assertFalse(ok)
-        self.assertIn("x.png", out)
-
-    def test_caption_present_is_fine(self):
-        self._page(".A screenshot\nimage::x.png[Alt]\n")
-        ok, out = self.run_check(dt.check_pages_image_caption)
-        self.assertTrue(ok, out)
-
-    def test_inline_icon_mid_sentence_is_not_flagged(self):
-        """Regression test for the cluster-actions.adoc false positive: a
-        single-colon inline icon (`image:icon.svg[width=30]`) embedded in
-        running prose has no caption slot in AsciiDoc at all -- only the
-        double-colon block macro is this rule's concern."""
-        self._page("Click the [.is-dark]#image:icon.svg[width=30]# icon to continue.\n")
-        ok, out = self.run_check(dt.check_pages_image_caption)
-        self.assertTrue(ok, out)
-
-
 class PagesAdmonitionCaptionTests(FixtureTestCase):
     def _page(self, body):
         self.antora_yml("en", "TEST")
@@ -3751,7 +3725,7 @@ class FamilySelectionTests(unittest.TestCase):
              "pages-no-curly-quotes", "pages-no-copyright-symbols",
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
              "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
-             "pages-image-alt", "pages-image-caption", "pages-admonition-caption",
+             "pages-image-alt", "pages-admonition-caption",
              "pages-heading-article", "pages-heading-gerund", "pages-table-header",
              "pages-shell-block-lang"},
         )

@@ -5444,13 +5444,6 @@ def check_pages_image_alt() -> bool:
 # requires the character right after the dot to be non-space).
 _CAPTION_LINE_RE = re.compile(r'^\.(?!\.)\S.*$')
 _BLOCK_ATTR_LINE_RE = re.compile(r'^\[[^\]]*\]\s*$')
-# Double-colon only: `image::x[]` is the block macro AsciiDoc gives its own
-# line and (optionally) a title/caption; `image:x[]` (single colon) is the
-# inline macro meant to sit mid-sentence -- e.g. a small UI icon wrapped
-# in `[.is-dark]#image:icon.svg[width=30]#` -- which structurally can't
-# take a caption at all. Using the shared _IMAGE_MACRO_ATTRS_RE (which
-# also matches the inline form) here would flag every such icon.
-_IMAGE_BLOCK_MACRO_RE = re.compile(r'\bimage::[^\[\]\s]+\[[^\]]*\]')
 
 
 def _has_caption_above(lines, idx):
@@ -5462,44 +5455,6 @@ def _has_caption_above(lines, idx):
     if j >= 0 and _BLOCK_ATTR_LINE_RE.match(lines[j]):
         j -= 1
     return j >= 0 and bool(_CAPTION_LINE_RE.match(lines[j]))
-
-
-def check_pages_image_caption() -> bool:
-    """New check: house style says every image needs an introductory
-    caption -- a `.Caption text` block title placed directly above the
-    image:: (see _has_caption_above). Only the double-colon block macro
-    is in scope (see _IMAGE_BLOCK_MACRO_RE) -- a single-colon inline icon
-    embedded mid-sentence isn't a "figure" in the sense this rule means,
-    and AsciiDoc gives it no caption slot at all. Scans pages/ and
-    partials/ in both languages."""
-    ok = True
-    total_hits = 0
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-                if not _page_allowed(f):
-                    continue
-                lines = _read_lines(f)
-                if lines is None:
-                    continue
-                excluded = _excluded_ref_lines(f)
-                hits = []
-                for i, line in enumerate(lines, 1):
-                    if i in excluded:
-                        continue
-                    if _IMAGE_BLOCK_MACRO_RE.search(line) and not _has_caption_above(lines, i - 1):
-                        hits.append((i, line.strip()))
-                if hits:
-                    ok = False
-                    total_hits += len(hits)
-                    print(f"FILE     {f}")
-                    for i, l in hits:
-                        print(f"  {f}:{i}: {l}  (no caption above)")
-    if ok:
-        print("OK: every image has a caption.")
-    else:
-        print(f"\nTotal: {total_hits} image(s) with no caption.")
-    return ok
 
 
 def check_pages_admonition_caption() -> bool:
@@ -5663,7 +5618,6 @@ CHECKS = {
     "pages-link-new-tab": check_pages_link_new_tab,
     "pages-xref-own-product": check_pages_xref_own_product,
     "pages-image-alt": check_pages_image_alt,
-    "pages-image-caption": check_pages_image_caption,
     "pages-admonition-caption": check_pages_admonition_caption,
     "pages-heading-article": check_pages_heading_article,
     "pages-heading-gerund": check_pages_heading_gerund,
@@ -5767,7 +5721,6 @@ FAMILIES = {
         "link-new-tab":       {"pages": "pages-link-new-tab"},
         "xref-own-product":   {"pages": "pages-xref-own-product"},
         "image-alt":          {"pages": "pages-image-alt"},
-        "image-caption":      {"pages": "pages-image-caption"},
         "admonition-caption": {"pages": "pages-admonition-caption"},
         "heading-article":    {"pages": "pages-heading-article"},
         "heading-gerund":     {"pages": "pages-heading-gerund"},
@@ -5845,7 +5798,6 @@ RULE_IDS = {
     "pages-link-new-tab":         "ST10",
     "pages-xref-own-product":    "ST11",
     "pages-image-alt":            "ST12",
-    "pages-image-caption":        "ST13",
     "pages-admonition-caption":   "ST14",
     "pages-heading-article":      "ST15",
     "pages-heading-gerund":       "ST17",
@@ -5892,7 +5844,6 @@ SUMMARIES = {
     "pages-link-new-tab":          "every external link opens in a new tab with opts=nofollow",
     "pages-xref-own-product":      "internal xref: must not name this product's own component",
     "pages-image-alt":             "every image:: needs alt text",
-    "pages-image-caption":         "every image needs a .Caption above it",
     "pages-admonition-caption":    "every NOTE/TIP/WARNING/IMPORTANT/CAUTION needs a .Caption above it",
     "pages-heading-article":       "a heading shouldn't start with a/an/the",
     "pages-heading-gerund":        "a heading shouldn't start with a gerund + object -- use the infinitive",
@@ -5955,7 +5906,6 @@ RULE_FLAGS = {
     "pages-link-new-tab":          "link missing ^ / opts=nofollow",
     "pages-xref-own-product":      "xref: names its own product",
     "pages-image-alt":             "image with no alt text",
-    "pages-image-caption":         "image with no caption",
     "pages-admonition-caption":    "admonition with no caption",
     "pages-heading-article":       "heading starts with a/an/the",
     "pages-heading-gerund":        "heading uses gerund + object",
