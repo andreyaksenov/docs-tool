@@ -43,7 +43,7 @@ Rules are grouped into seven **families**:
 | Family   | Covers                                                                                   |
 |----------|------------------------------------------------------------------------------------------|
 | `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files               |
-| `markup` | stray backticks, unbalanced block delimiters                                             |
+| `markup` | stray backticks, unbalanced block delimiters, comma-corrupted link text                  |
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
 | `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup, empty table cells |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
@@ -166,6 +166,7 @@ own ID/Command/Flags table.
 | `MK01` | `check markup --backticks` | odd backtick count |
 | `MK02` | `check markup --delimiters` | unclosed block delimiter |
 | `MK03` | `check markup --divs` | unclosed/unmatched `<div>` (in a `++++` block) |
+| `MK04` | `check markup --link-text-comma` | comma-corrupted link bracket |
 
 - **`MK01` · `check markup --backticks`** — no line with an odd number of
   backticks (usually a stray or missing `` ` `` around inline monospace).
@@ -191,6 +192,19 @@ own ID/Command/Flags table.
   ```bash
   ./docs_tool.py check markup --divs
   ./docs_tool.py check markup --divs --page resource_groups.adoc
+  ```
+
+- **`MK04` · `check markup --link-text-comma`** — a bare `https?://...[...]`
+  link whose bracket holds 2+ commas. AsciiDoc treats every comma inside
+  `[...]` as an attribute separator, so a comma in the link's display text
+  (e.g. `[GROUPING SETS, CUBE, and ROLLUP^,opts=nofollow]`) silently
+  truncates the visible text at the first comma and corrupts the
+  `^`/`opts=nofollow` attributes along with it -- always a bug, never a
+  style choice. v1 scope is bare URL links only; `xref:`/`link:` macros
+  can break the same way but aren't covered yet.
+  ```bash
+  ./docs_tool.py check markup --link-text-comma
+  ./docs_tool.py check markup --link-text-comma --page resource_groups.adoc
   ```
 
 ### `refs` — Antora reference resolution

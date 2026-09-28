@@ -1935,6 +1935,56 @@ def check_pages_stray_backticks() -> bool:
     return ok
 
 
+# A well-formed external link's bracket has at most one comma -- the
+# house-style `text^,opts=nofollow` separator (see check_pages_link_
+# text_comma). Two or more means a comma leaked out of what should have
+# been plain link text: AsciiDoc treats every comma inside `[...]` as an
+# attribute separator, so `[GROUPING SETS, CUBE, and ROLLUP^,opts=
+# nofollow]` silently truncates the visible text at the first comma and
+# mangles the `^`/opts=nofollow attributes with it (the external-link
+# arrow disappears) -- a real bug found in docs-greengagedb's select.adoc.
+_LINK_TEXT_COMMA_RE = re.compile(r'https?://[^\s\[]*\[([^\]]*)\]')
+
+
+def check_pages_link_text_comma() -> bool:
+    """New check (not a port of an existing shell script): flags a bare
+    `https?://...[...]` link whose bracket holds 2+ commas -- see
+    _LINK_TEXT_COMMA_RE for why that's always broken, never a style
+    choice. Lines inside comments/listing blocks are skipped (see
+    _excluded_ref_lines). v1 scope is bare URL links only, matching the
+    exact reported bug shape; `xref:`/`link:` macros can break the same
+    way but aren't covered yet."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, l in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    for m in _LINK_TEXT_COMMA_RE.finditer(l):
+                        if m.group(1).count(',') >= 2:
+                            hits.append((i, l.strip()))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, l in hits:
+                        print(f"  {f}:{i}: {l}")
+    if ok:
+        print("OK: no comma-corrupted link text found in pages.")
+    else:
+        print(f"\nTotal: {total_hits} link(s) with a comma-corrupted bracket.")
+    return ok
+
+
 _BLOCK_DELIM_LINE_RE = re.compile(
     r'^(?:[aehlmsd]\|)?(-{4,}|-{2}|\.{4,}|={4,}|\*{4,}|_{4,}|\+{4,}|\|={3,}|/{4,})\s*$'
 )
@@ -5616,6 +5666,7 @@ CHECKS = {
     "pages-table-header": check_pages_table_header,
     "pages-shell-block-lang": check_pages_shell_block_lang,
     "pages-link-new-tab": check_pages_link_new_tab,
+    "pages-link-text-comma": check_pages_link_text_comma,
     "pages-xref-own-product": check_pages_xref_own_product,
     "pages-image-alt": check_pages_image_alt,
     "pages-admonition-caption": check_pages_admonition_caption,
@@ -5699,6 +5750,7 @@ FAMILIES = {
         "backticks":  {"pages": "pages-stray-backticks"},
         "delimiters": {"pages": "pages-unbalanced-delimiters"},
         "divs":       {"pages": "pages-unbalanced-divs"},
+        "link-text-comma": {"pages": "pages-link-text-comma"},
     },
     "refs": {                         # L2 -- Antora reference resolution
         "broken":   {"pages": "pages-broken-refs"},
@@ -5778,6 +5830,7 @@ RULE_IDS = {
     "pages-stray-backticks":      "MK01",
     "pages-unbalanced-delimiters": "MK02",
     "pages-unbalanced-divs":      "MK03",
+    "pages-link-text-comma":      "MK04",
     "pages-broken-refs":          "RF01",
     "pages-orphaned":             "RF02",
     "partials-orphaned":          "RF03",
@@ -5824,6 +5877,7 @@ SUMMARIES = {
     "pages-stray-backticks":       "no line with an odd number of backticks",
     "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
     "pages-unbalanced-divs":      "every passthrough-embedded <div> gets its </div>, includes flattened",
+    "pages-link-text-comma":      "a bare http(s) link's [...] holds 2+ commas -- always AsciiDoc-broken, never a style choice",
     "pages-broken-refs":           "every xref: / include:: / image: target resolves",
     "pages-orphaned":              "every pages/*.adoc reachable from some nav.adoc",
     "partials-orphaned":           "every tag-less partial pulled in by some include::",
@@ -5890,6 +5944,7 @@ RULE_FLAGS = {
     "pages-stray-backticks":       "odd backtick count",
     "pages-unbalanced-delimiters": "unclosed block delimiter",
     "pages-unbalanced-divs":      "unclosed/unmatched <div>",
+    "pages-link-text-comma":      "comma-corrupted link bracket",
     "pages-broken-refs":           "dead xref / include / image",
     "pages-orphaned":              "defined but never referenced",
     "pages-no-yo":                 "ё in RU files",

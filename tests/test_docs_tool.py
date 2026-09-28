@@ -383,6 +383,70 @@ class PagesUnbalancedDivsTests(FixtureTestCase):
         self.assertNotIn("en/modules/ROOT/pages/p.adoc:", out)
 
 
+class PagesLinkTextCommaTests(FixtureTestCase):
+    """End-to-end tests for check_pages_link_text_comma (MK04). Regression
+    case is the real docs-greengagedb bug: an external link whose display
+    text has a comma in it (`[GROUPING SETS, CUBE, and ROLLUP^,opts=
+    nofollow]`) gets its text silently truncated by AsciiDoc, which treats
+    every comma inside [...] as an attribute separator."""
+
+    def test_comma_in_link_text_is_flagged(self):
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            "See https://www.postgresql.org/docs/12/x.html"
+            "[GROUPING SETS, CUBE, and ROLLUP^,opts=nofollow] for details.\n",
+        )
+        ok, out = self.run_check(dt.check_pages_link_text_comma)
+        self.assertFalse(ok)
+        self.assertIn("p.adoc:1:", out)
+        self.assertIn("GROUPING SETS, CUBE, and ROLLUP", out)
+
+    def test_single_comma_before_opts_nofollow_passes(self):
+        """The house-style `text^,opts=nofollow` shape has exactly one
+        comma and is fine."""
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            "See https://greenplum.org/[Greenplum^,opts=nofollow] for details.\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_no_brackets_passes(self):
+        self.write("en/modules/ROOT/pages/p.adoc", "See https://greenplum.org/ for details.\n")
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_no_comma_in_brackets_passes(self):
+        self.write("en/modules/ROOT/pages/p.adoc",
+                  "See https://greenplum.org/[Greenplum documentation] for details.\n")
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_line_inside_a_listing_block_is_not_scanned(self):
+        """A URL shown as literal example text (e.g. documenting this very
+        AsciiDoc pitfall) isn't a live link AsciiDoc would actually try to
+        render, so it's out of scope, same as check_pages_stray_backticks
+        skipping comment/listing-block lines."""
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            "----\n"
+            "https://example.com/[Some, Text^,opts=nofollow]\n"
+            "----\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_ru_side_is_checked_too(self):
+        self.write(
+            "ru/modules/ROOT/pages/p.adoc",
+            "См. https://www.postgresql.org/docs/12/x.html"
+            "[GROUPING SETS, CUBE и ROLLUP^,opts=nofollow] для подробностей.\n",
+        )
+        ok, out = self.run_check(dt.check_pages_link_text_comma)
+        self.assertFalse(ok)
+        self.assertIn(str(Path("ru/modules/ROOT/pages/p.adoc")), out)
+
+
 class ExternalLinkAttrsTests(unittest.TestCase):
     """Unit tests for _iter_external_link_attrs / _missing_link_decoration
     -- no filesystem needed."""
