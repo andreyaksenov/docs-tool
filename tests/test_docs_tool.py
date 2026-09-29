@@ -3391,6 +3391,75 @@ class SkippedComponentReportTests(FixtureTestCase):
         _, out = self.run_check(dt.check_pages_broken_refs)
         self.assertNotIn("docs-backup", out)
 
+    def test_generic_note_appears_with_no_external_root_at_all(self):
+        """The blind spot _report_skipped_components can't cover on its
+        own -- printed regardless of whether this scan happens to
+        reference a named component, since it's a coverage caveat, not
+        evidence of one."""
+        _, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertIn("note: no --external-root registered", out)
+
+    def test_generic_note_is_suppressed_once_any_external_root_is_given(self):
+        """A real --external-root -- even one that doesn't resolve this
+        page's own xrefs -- means the specific, evidence-based note is
+        the more useful signal; the generic one would just be noise."""
+        ext = Path(self._tmpdir) / "sibling"
+        (ext / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components(["unrelated=" + str(ext)])
+        _, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertNotIn("note: no --external-root registered", out)
+        self.assertIn("blog", out)  # the specific note still fires
+
+
+class OrphanedChecksExternalRootWarningTests(FixtureTestCase):
+    """The same --external-root coverage warning, extended to the
+    orphaned family (RF02-RF06's tags/partials/images members) -- unlike
+    broken-refs, an orphaned check has no in-repo signal at all for a tag/
+    partial/image only ever consumed by an unregistered sibling repo, so
+    the generic note is the *only* warning it can give; the specific,
+    evidence-based note (_report_skipped_components) is a bonus on top,
+    firing only when this repo's own content happens to also reference a
+    named-but-unregistered component."""
+
+    def setUp(self):
+        super().setUp()
+        self.antora_yml("en", "TEST")
+
+    def test_tags_orphaned_shows_the_generic_note(self):
+        self.write("en/modules/ROOT/partials/p.adoc", "tag::x[]\ncontent\nend::x[]\n")
+        _, out = self.run_check(dt.check_tags_orphaned)
+        self.assertIn("note: no --external-root registered", out)
+
+    def test_tags_orphaned_also_names_a_referenced_unregistered_component(self):
+        """_SKIPPED_COMPONENTS is populated as a side effect of resolving
+        this repo's own include:: targets during usage-scanning -- wiring
+        _report_skipped_components into this check surfaces it instead of
+        silently discarding it, the way it already did for broken-refs."""
+        self.write("en/modules/ROOT/partials/p.adoc", "tag::x[]\ncontent\nend::x[]\n")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::ADCM:how-to:something.adoc[tag=y]\n")
+        _, out = self.run_check(dt.check_tags_orphaned)
+        self.assertIn("referenced component(s) left unchecked", out)
+        self.assertIn("ADCM", out)
+
+    def test_partials_orphaned_shows_the_generic_note(self):
+        self.write("en/modules/ROOT/partials/p.adoc", "just prose, no tags\n")
+        _, out = self.run_check(dt.check_partials_orphaned)
+        self.assertIn("note: no --external-root registered", out)
+
+    def test_images_orphaned_shows_the_generic_note(self):
+        self.write("en/modules/ROOT/images/pic.png", "")
+        _, out = self.run_check(dt.check_images_orphaned)
+        self.assertIn("note: no --external-root registered", out)
+
+    def test_note_suppressed_once_any_external_root_is_given(self):
+        self.write("en/modules/ROOT/partials/p.adoc", "tag::x[]\ncontent\nend::x[]\n")
+        ext = Path(self._tmpdir) / "sibling"
+        (ext / "en" / "modules" / "ROOT" / "pages").mkdir(parents=True)
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components(["unrelated=" + str(ext)])
+        _, out = self.run_check(dt.check_tags_orphaned)
+        self.assertNotIn("note: no --external-root registered", out)
+
 
 class HelpRulesTableTests(unittest.TestCase):
     """--help carries the rule table itself. Anything that makes you run a

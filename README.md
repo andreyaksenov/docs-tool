@@ -228,9 +228,15 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   ./docs_tool.py check refs --broken --external-root ADCM=../docs-adcm
   ```
   A reference into a component with no `--external-root` can't be resolved either
-  way, so it's left unchecked rather than called broken. The run ends by naming
-  those components on stderr — an unverified component otherwise looks exactly
-  like a verified one:
+  way, so it's left unchecked rather than called broken. If nothing was
+  registered at all, the run opens with a heads-up before any findings:
+  ```
+  note: no --external-root registered -- findings below may be wrong if another
+  product's repo references this one; pass --external-root NAME=PATH for each
+  one you have checked out locally
+  ```
+  and ends by naming the specific components it actually saw referenced —
+  an unverified component otherwise looks exactly like a verified one:
   ```
   note: 2 referenced component(s) left unchecked -- docs-backup, docs-pxf
         pass --external-root NAME=PATH for each one you have checked out locally
@@ -255,6 +261,13 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   ./docs_tool.py check refs --orphaned --target partials \
     --external-root ADB=../docs-adb --external-root ADH=../docs-adh
   ```
+  `partials`/`images`/`tags` are riskier than `pages`/`examples` without
+  `--external-root`: a tag or partial only ever pulled in by a sibling repo's
+  own pages (via `include::...[tag=...]`) looks orphaned here with no in-repo
+  signal to say otherwise, since the reference lives entirely in that other
+  repo's source. Same two notes as `--broken` above — the generic one when
+  nothing was registered at all, the specific one whenever this repo's own
+  content happens to reference a component by name that still isn't.
 
 ### `style` — Arenadata style guide
 

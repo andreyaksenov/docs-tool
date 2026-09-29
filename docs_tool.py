@@ -668,6 +668,8 @@ def check_images_orphaned() -> bool:
     ok = True
     orphaned_bytes = 0
     orphaned_count = 0
+    _SKIPPED_COMPONENTS.clear()
+    _warn_if_no_external_root()
     modules = list(module_roots())
     en_module_roots = {name: en_root for name, en_root, _ in modules}
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
@@ -695,6 +697,7 @@ def check_images_orphaned() -> bool:
         print("OK: all images are referenced somewhere.")
     else:
         print(f"\nTotal: {orphaned_count} orphaned image(s), {_format_size(orphaned_bytes)}")
+    _report_skipped_components()
     return ok
 
 
@@ -1302,6 +1305,28 @@ def _report_skipped_components():
           "checked out locally", file=sys.stderr)
 
 
+def _warn_if_no_external_root():
+    """A generic heads-up, printed before an --external-root-aware check's
+    findings, for the blind spot _report_skipped_components can't cover:
+    that one only ever names a component this repo's own content actually
+    referenced. The orphaned family has no such signal to go on --
+    nothing in this repo's source says "ADCM consumes this partial" when
+    the include:: that says so lives entirely in ADCM's own file, never
+    read without --external-root registering it (see _collect_tag_usage).
+    broken-refs has the opposite risk: a reference into an unregistered
+    component is silently left unverified rather than reported broken,
+    so a real break there reads exactly like a clean pass. Fires only
+    when nothing at all was registered -- with at least one --external-
+    root, _report_skipped_components' specific, evidence-based note at
+    the end is the more useful signal. Not a finding, so it doesn't fail
+    the run."""
+    if EXTERNAL_COMPONENTS:
+        return
+    print("note: no --external-root registered -- findings below may be wrong "
+          "if another product's repo references this one; pass --external-root "
+          "NAME=PATH for each one you have checked out locally", file=sys.stderr)
+
+
 def check_pages_broken_refs() -> bool:
     """Port of check_pages_broken_refs.sh, extended to resolve
     component-prefixed xrefs against sibling modules of the same language
@@ -1309,6 +1334,7 @@ def check_pages_broken_refs() -> bool:
     ok = True
     broken_count = 0
     _SKIPPED_COMPONENTS.clear()   # report only what this scan itself skipped
+    _warn_if_no_external_root()
 
     def report(file, lineno, msg):
         nonlocal ok, broken_count
@@ -1575,6 +1601,8 @@ def check_tags_orphaned() -> bool:
     used from a file --page filtered out."""
     ok = True
     orphaned_count = 0
+    _SKIPPED_COMPONENTS.clear()
+    _warn_if_no_external_root()
     modules = list(module_roots())
     en_module_roots = {name: en_root for name, en_root, _ in modules}
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
@@ -1634,6 +1662,7 @@ def check_tags_orphaned() -> bool:
         print("OK: all tagged regions are included somewhere.")
     else:
         print(f"\nTotal: {orphaned_count} orphaned tag(s).")
+    _report_skipped_components()
     return ok
 
 
@@ -1660,6 +1689,8 @@ def check_partials_orphaned() -> bool:
     was the real-world docs-adb hosts-online.adoc case that motivated it."""
     ok = True
     orphaned_count = 0
+    _SKIPPED_COMPONENTS.clear()
+    _warn_if_no_external_root()
     modules = list(module_roots())
     en_module_roots = {name: en_root for name, en_root, _ in modules}
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
@@ -1689,6 +1720,7 @@ def check_partials_orphaned() -> bool:
         print("OK: all whole-file partials are included somewhere.")
     else:
         print(f"\nTotal: {orphaned_count} orphaned partial(s).")
+    _report_skipped_components()
     return ok
 
 
