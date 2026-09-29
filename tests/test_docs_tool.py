@@ -4193,6 +4193,67 @@ class MultiRepoCheckTests(unittest.TestCase):
         self.assertNotIn("file not found or unreadable", err)
         self.assertIn(f"##### {self.repo_a}", out)
 
+    def test_explicit_glossary_merges_with_the_repos_own_under_repo(self):
+        """An explicit --glossary is a base shared across every --repo
+        target, but a repo's own *-glossary.psv still contributes on top
+        of it -- a term the base never mentions, defined only in the
+        repo's local glossary, must still be checked."""
+        base = self._write(
+            self._neutral, "base-glossary.psv",
+            "en|ru|ru_pattern|note\ncluster|кластер|кластер<>|\n",
+        )
+        self._write(
+            self.repo_a, "repo-a-glossary.psv",
+            "en|ru|ru_pattern|note\nqueue|очередь|очередь<>|\n",
+        )
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "The queue is empty.\n")
+        self._write(self.repo_a, "ru/modules/ROOT/pages/p.adoc", "Сервер простаивает.\n")
+        code, out, err = self._run("check", "terms",
+                                    "--repo", str(self.repo_a), "--glossary", str(base))
+        self.assertEqual(code, 1)
+        self.assertIn("term 'queue'", out)
+        self.assertIn("info: glossary =", err)
+        self.assertIn("repo-a-glossary.psv", err)
+
+    def test_no_local_glossary_prints_no_merge_note(self):
+        base = self._write(
+            self._neutral, "base-glossary.psv",
+            "en|ru|ru_pattern|note\ncluster|кластер|кластер<>|\n",
+        )
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "The cluster is up.\n")
+        self._write(self.repo_a, "ru/modules/ROOT/pages/p.adoc", "Кластер запущен.\n")
+        code, out, err = self._run("check", "terms",
+                                    "--repo", str(self.repo_a), "--glossary", str(base))
+        self.assertNotIn("info: glossary =", err)
+
+    def test_single_repo_run_keeps_the_either_or_glossary_behavior(self):
+        """Without --repo, an explicit --glossary still fully replaces
+        auto-discovery -- this feature is scoped to --repo only, since
+        that's the only case where a "shared base" story makes sense."""
+        self._write(
+            self.repo_a, "en/modules/ROOT/pages/p.adoc", "The queue is empty.\n"
+        )
+        self._write(
+            self.repo_a, "ru/modules/ROOT/pages/p.adoc", "Сервер простаивает.\n"
+        )
+        base = self._write(
+            self.repo_a, "base-glossary.psv",
+            "en|ru|ru_pattern|note\ncluster|кластер|кластер<>|\n",
+        )
+        self._write(
+            self.repo_a, "local-glossary.psv",
+            "en|ru|ru_pattern|note\nqueue|очередь|очередь<>|\n",
+        )
+        os.chdir(self.repo_a)
+        try:
+            code, out, err = self._run("check", "terms", "--glossary", str(base))
+        finally:
+            os.chdir(self._neutral)
+        # local-glossary.psv also sits in this repo's root but was never
+        # merged in -- no --repo, so the old either/or rule applies and
+        # "queue" (only in the local file) is never checked.
+        self.assertNotIn("term 'queue'", out)
+
 
 class RuleIdRegistryTests(unittest.TestCase):
     def test_every_check_has_a_unique_id(self):

@@ -7093,11 +7093,43 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args):
         os.chdir(repo)
         try:
             skip = _apply_page_filter_for_repo(page_args)
-            if not skip and not _run_selected(selected, glossary):
+            if skip:
+                continue
+            repo_glossary = _repo_glossary_paths(glossary, selected)
+            if not _run_selected(selected, repo_glossary):
                 overall_ok = False
         finally:
             os.chdir(original_cwd)
     return overall_ok
+
+
+def _repo_glossary_paths(base_glossary, selected):
+    """The glossary path list for one repo inside a --repo loop. An
+    explicit --glossary is a base shared across every target, but that
+    doesn't mean a repo's own *-glossary.psv should be silently ignored
+    -- the two are merged (base_glossary + this repo's own, deduped),
+    the "shared base + per-product terms" story that only makes sense
+    once --repo is sweeping several repos. _load_glossary already merges
+    multiple files/same-EN-term rows into accepted alternatives rather
+    than one overwriting the other, so this is just building the right
+    *list* of paths -- no new merge logic needed. A single-repo run (no
+    --repo) never calls this and keeps the older either/or behavior:
+    explicit --glossary alone fully replaces auto-discovery, entirely in
+    _run_selected. No-op (returns base_glossary as-is) when
+    pages-terminology isn't even selected, or when no explicit base was
+    given at all -- _run_selected's own auto-discovery already covers
+    that case with its own message. Prints which files ended up in play
+    when a merge actually happens, since a silent one would be hard to
+    debug when a term does or doesn't get flagged."""
+    if "pages-terminology" not in selected or not base_glossary:
+        return base_glossary
+    local = [p for p in _discover_default_glossaries() if p not in base_glossary]
+    if not local:
+        return base_glossary
+    combined = base_glossary + local
+    print(f"info: glossary = {', '.join(combined)} (--glossary base + this repo's own)",
+          file=sys.stderr)
+    return combined
 
 
 def _run_selected(selected, glossary_paths, legacy_headers=False):
