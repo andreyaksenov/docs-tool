@@ -1935,21 +1935,44 @@ def check_pages_stray_backticks() -> bool:
     return ok
 
 
-# A well-formed external link's bracket has at most one comma -- the
-# house-style `text^,opts=nofollow` separator (see check_pages_link_
-# text_comma). Two or more means a comma leaked out of what should have
-# been plain link text: AsciiDoc treats every comma inside `[...]` as an
-# attribute separator, so `[GROUPING SETS, CUBE, and ROLLUP^,opts=
-# nofollow]` silently truncates the visible text at the first comma and
-# mangles the `^`/opts=nofollow attributes with it (the external-link
-# arrow disappears) -- a real bug found in docs-greengagedb's select.adoc.
+# A well-formed external link's bracket has at most one comma OUTSIDE any
+# quoted ("..."/'...') or `++...++` passthrough span -- the house-style
+# `text^,opts=nofollow` separator (see check_pages_link_text_comma). Two
+# or more means a comma leaked out of what should have been plain link
+# text: AsciiDoc treats every comma inside `[...]` as an attribute
+# separator, so `[GROUPING SETS, CUBE, and ROLLUP^,opts=nofollow]`
+# silently truncates the visible text at the first comma and mangles the
+# `^`/opts=nofollow attributes with it (the external-link arrow
+# disappears) -- a real bug found in docs-greengagedb's select.adoc.
+#
+# Verified against real Asciidoctor (2.0.26): a comma inside a quoted
+# ("..." or '...') or `++...++`-passed-through span renders as literal
+# text, not an attribute separator, so `["text, more^",opts=nofollow]`
+# and `[++text, more++^,opts=nofollow]` both render the full text intact
+# -- not this check's concern, whether or not the `^` inside also earns
+# a working target=_blank (that's check_pages_link_new_tab's job, not
+# this one). A backslash-escaped comma (`\,`) protects nothing --
+# verified broken too, matching what the original bug report found.
 _LINK_TEXT_COMMA_RE = re.compile(r'https?://[^\s\[]*\[([^\]]*)\]')
+_QUOTED_ATTR_VALUE_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
+
+
+def _unprotected_comma_count(bracket: str) -> int:
+    """Commas in a link's [...] content that AsciiDoc's attribute-list
+    parser would actually treat as separators -- i.e. with any `"..."`/
+    `'...'` quoted span and any `++...++` passthrough span blanked out
+    first, since a comma inside either is literal content, not a
+    separator (see _LINK_TEXT_COMMA_RE for how this was verified)."""
+    masked = _QUOTED_ATTR_VALUE_RE.sub('', bracket)
+    masked = _PASSTHROUGH_RE.sub('', masked)
+    return masked.count(',')
 
 
 def check_pages_link_text_comma() -> bool:
     """New check (not a port of an existing shell script): flags a bare
-    `https?://...[...]` link whose bracket holds 2+ commas -- see
-    _LINK_TEXT_COMMA_RE for why that's always broken, never a style
+    `https?://...[...]` link whose bracket holds 2+ commas outside any
+    quoted/passthrough-protected span -- see _LINK_TEXT_COMMA_RE and
+    _unprotected_comma_count for why that's always broken, never a style
     choice. Lines inside comments/listing blocks are skipped (see
     _excluded_ref_lines). v1 scope is bare URL links only, matching the
     exact reported bug shape; `xref:`/`link:` macros can break the same
@@ -1970,7 +1993,7 @@ def check_pages_link_text_comma() -> bool:
                     if i in excluded:
                         continue
                     for m in _LINK_TEXT_COMMA_RE.finditer(l):
-                        if m.group(1).count(',') >= 2:
+                        if _unprotected_comma_count(m.group(1)) >= 2:
                             hits.append((i, l.strip()))
                 if hits:
                     ok = False
@@ -5877,7 +5900,7 @@ SUMMARIES = {
     "pages-stray-backticks":       "no line with an odd number of backticks",
     "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
     "pages-unbalanced-divs":      "every passthrough-embedded <div> gets its </div>, includes flattened",
-    "pages-link-text-comma":      "a bare http(s) link's [...] holds 2+ commas -- always AsciiDoc-broken, never a style choice",
+    "pages-link-text-comma":      "a bare http(s) link's [...] holds 2+ unprotected commas -- always AsciiDoc-broken, never a style choice",
     "pages-broken-refs":           "every xref: / include:: / image: target resolves",
     "pages-orphaned":              "every pages/*.adoc reachable from some nav.adoc",
     "partials-orphaned":           "every tag-less partial pulled in by some include::",

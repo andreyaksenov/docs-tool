@@ -446,6 +446,64 @@ class PagesLinkTextCommaTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn(str(Path("ru/modules/ROOT/pages/p.adoc")), out)
 
+    def test_double_quoted_text_with_comma_passes(self):
+        """Verified against real Asciidoctor (2.0.26): a comma inside a
+        quoted attribute value renders as literal text, not a separator
+        -- ["GROUPING SETS, CUBE, and ROLLUP^",opts=nofollow] renders the
+        full text with target=_blank intact. Not this check's concern."""
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            'See https://www.postgresql.org/docs/12/x.html'
+            '["GROUPING SETS, CUBE, and ROLLUP^",opts=nofollow] for details.\n',
+        )
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_single_quoted_text_with_comma_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            "See https://www.postgresql.org/docs/12/x.html"
+            "['GROUPING SETS, CUBE, and ROLLUP^',opts=nofollow] for details.\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_passthrough_wrapped_text_with_comma_passes(self):
+        """Verified against real Asciidoctor: ++...++ passthrough also
+        protects an embedded comma the same way quoting does."""
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            "See https://www.postgresql.org/docs/12/x.html"
+            "[++UNION, CASE, and Related Constructs++^,opts=nofollow] for details.\n",
+        )
+        ok, _ = self.run_check(dt.check_pages_link_text_comma)
+        self.assertTrue(ok)
+
+    def test_comma_outside_the_quoted_span_is_still_flagged(self):
+        """A quoted span only protects the comma(s) inside it -- a second,
+        unprotected comma elsewhere in the bracket is still real breakage."""
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            'See https://www.postgresql.org/docs/12/x.html'
+            '["GROUPING SETS, CUBE^", extra, opts=nofollow] for details.\n',
+        )
+        ok, out = self.run_check(dt.check_pages_link_text_comma)
+        self.assertFalse(ok)
+        self.assertIn("p.adoc:1:", out)
+
+    def test_backslash_escaped_comma_is_still_flagged(self):
+        """Verified against real Asciidoctor: backslash-escaping a comma
+        does not protect it -- matches what the original bug report found
+        ("экранирование \\ и кавычки не помогли")."""
+        self.write(
+            "en/modules/ROOT/pages/p.adoc",
+            "See https://www.postgresql.org/docs/12/x.html"
+            "[GROUPING SETS\\, CUBE, and ROLLUP^,opts=nofollow] for details.\n",
+        )
+        ok, out = self.run_check(dt.check_pages_link_text_comma)
+        self.assertFalse(ok)
+        self.assertIn("p.adoc:1:", out)
+
 
 class ExternalLinkAttrsTests(unittest.TestCase):
     """Unit tests for _iter_external_link_attrs / _missing_link_decoration
