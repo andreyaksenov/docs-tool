@@ -3,8 +3,10 @@
 One self-contained Python script that checks an Antora docs repo's `en/` and `ru/`
 trees for consistency, and aligns a RU page's structure after an EN edit. Run it
 from the repo root; every module under `en/modules/` and `ru/modules/` is
-discovered and scanned automatically. Run from anywhere else and `check`/`sync`
-refuse to start rather than report a clean pass over files they never read.
+discovered and scanned automatically. Run from anywhere else (and pass no
+`--repo`) and `check`/`sync` refuse to start rather than report a clean pass over
+files they never read. `check --repo PATH` (repeatable) points it at one or more
+other repos instead — see [Checking other repos](#checking-other-repos).
 
 ## Get it
 
@@ -20,7 +22,7 @@ the `chmod` and run `python docs_tool.py …`.
 
 ```
 ./docs_tool.py check <family> [<family> ...] [--<rule> ...]
-                     [--target NAME] [--page NAME ...]
+                     [--target NAME] [--repo PATH ...] [--page NAME ...]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
                      [--offline] [--timeout N] [--show-unverified]        # check links
                      [--allow-domain HOST ...] [--insecure] [--link-cache PATH]
@@ -620,6 +622,30 @@ A `--page` value that matches no file aborts the run with exit `2` — an empty 
 otherwise looks identical to a clean one, so a typo in a CI invocation would pass
 green. `--page UNCOMMITTED` resolving to nothing is exempt: that's the normal
 "no `.adoc` changes" case, and still exits `0`.
+
+## Checking other repos
+
+`--repo PATH` (repeatable) runs `check` against one or more other docs repos
+instead of the current directory — the same thing as `cd`-ing into each and
+running the command by hand, done in one invocation:
+
+```bash
+./docs_tool.py check style --no-curly-quotes --repo ../docs-adb --repo ../docs-adh
+```
+
+Each repo gets its own `##### /path/to/repo #####` banner, its own
+`*-glossary.psv` auto-discovery, and its own `git status` for `--page
+UNCOMMITTED` — a page with no local changes in one repo doesn't stop the run
+from reaching the next one. `--page NAME` matching is scoped across the whole
+set: a name only has to match in *some* of the given repos, not all of them
+(page names legitimately differ between products) — it's still an error (exit
+`2`, nothing checked) if it matches in none of them. An explicit `--glossary
+PATH` applies to every repo in the run. Every `--repo` path is validated as a
+real docs tree before anything is checked at all — one bad path aborts the
+whole run rather than reporting on the repos that happened to be valid.
+
+Omit `--repo` and everything works exactly as before, scanning the current
+directory.
 
 ## Sync
 

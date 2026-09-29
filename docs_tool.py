@@ -155,7 +155,11 @@ def _load_external_components(specs):
         if "=" not in spec:
             _usage_error(f"error: --external-root must be NAME=PATH, got: {spec!r}")
         name, _, path_str = spec.partition("=")
-        repo_root = Path(path_str)
+        # Resolved to absolute right away: a --repo loop chdir's between
+        # repos, and a relative PATH (the common case, e.g. ../docs-adcm)
+        # would otherwise end up meaning something different by the time
+        # a check actually reads from it.
+        repo_root = Path(path_str).resolve()
         en_root = repo_root / "en" / "modules"
         ru_root = repo_root / "ru" / "modules"
         module_names = set()
@@ -6942,28 +6946,55 @@ def _require_a_docs_tree():
              f"{Path.cwd()} -- run docs_tool from the docs repo root")
 
 
-def _reject_unmatched_page_filters(page_args):
-    """Abort on a --page NAME that matched no file. Running the remaining
-    rules would report "OK:" for a page that was never read, and exit 0 --
-    so a typo'd filename in a CI invocation would pass as a green run.
-    A usage error (exit 2), like a bad --target: nothing was checked, so
-    this is not a finding. UNCOMMITTED is exempt -- resolving to nothing
-    there is the normal "no .adoc changes" case, handled by the caller."""
+def _parse_explicit_page_names(names):
+    """--page values (UNCOMMITTED already filtered out) into ({file-stem
+    tuples}, {directory-prefix tuples}) -- the split both _apply_page_filter
+    and _reject_unmatched_page_filters need, factored out so a --repo
+    loop's upfront cross-repo match sweep (_run_multi_repo_check) doesn't
+    have to duplicate it."""
+    out_names, out_dirs = set(), set()
+    for name in names:
+        if name.endswith(".adoc"):
+            out_names.add(tuple(p for p in name[:-len(".adoc")].split("/") if p))
+        else:
+            out_dirs.add(tuple(p for p in name.split("/") if p))
+    return out_names, out_dirs
+
+
+def _reject_unmatched_page_filters(page_args, repo_paths=None):
+    """Abort on a --page NAME that matched no file -- in the current repo,
+    or, with repo_paths (a --repo loop), in *any* of the given repos: a
+    page name legitimately not existing in every product isn't a typo the
+    way it is for a single repo, so this only rejects a name that matched
+    nowhere at all. Running the remaining rules would report "OK:" for a
+    page that was never read, and exit 0 -- so a typo'd filename in a CI
+    invocation would pass as a green run. A usage error (exit 2), like a
+    bad --target: nothing was checked, so this is not a finding.
+    UNCOMMITTED is exempt -- resolving to nothing there is the normal "no
+    .adoc changes" case, handled by the caller."""
     explicit = [n for n in page_args if n != "UNCOMMITTED"]
     if not explicit:
         return
     matched_names, matched_dirs = set(), set()
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            for subdir in ("pages", "partials"):
-                for path in _iter_files(root / subdir, ".adoc"):
-                    relparts = _content_relparts_stem(path)
-                    if relparts is None:
-                        continue
-                    matched_names |= {n for n in _PAGE_FILTER["names"]
-                                      if _ends_with_parts(relparts, n)}
-                    matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
-                                     if relparts[:len(d)] == d}
+    original_cwd = Path.cwd() if repo_paths else None
+    try:
+        for repo in (repo_paths or [None]):
+            if repo is not None:
+                os.chdir(repo)
+            for _, en_root, ru_root in module_roots():
+                for root in (en_root, ru_root):
+                    for subdir in ("pages", "partials"):
+                        for path in _iter_files(root / subdir, ".adoc"):
+                            relparts = _content_relparts_stem(path)
+                            if relparts is None:
+                                continue
+                            matched_names |= {n for n in _PAGE_FILTER["names"]
+                                              if _ends_with_parts(relparts, n)}
+                            matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
+                                             if relparts[:len(d)] == d}
+    finally:
+        if original_cwd is not None:
+            os.chdir(original_cwd)
     unmatched = []
     for name in explicit:
         if name.endswith(".adoc"):
@@ -6977,9 +7008,10 @@ def _reject_unmatched_page_filters(page_args):
     if unmatched:
         # Every unmatched value at once: a run with several --page typos
         # shouldn't take one re-run per typo to discover them all.
+        scope = " in any of the given --repo targets" if repo_paths else ""
         for name in unmatched:
             kind = "file" if name.endswith(".adoc") else "file under that directory"
-            print(f"error: --page {name} matched no {kind}", file=sys.stderr)
+            print(f"error: --page {name} matched no {kind}{scope}", file=sys.stderr)
         print("aborting -- a --page value that matches nothing would report a "
               "clean run over a page that was never read", file=sys.stderr)
         sys.exit(2)
@@ -6992,19 +7024,80 @@ def _apply_page_filter(page_args):
     global _PAGE_FILTER
     if not page_args:
         return
-    names, dirs = set(), set()
-    for name in page_args:
-        if name == "UNCOMMITTED":
-            names |= {(s,) for s in _git_uncommitted_adoc_stems()}
-        elif name.endswith(".adoc"):
-            names.add(tuple(p for p in name[:-len(".adoc")].split("/") if p))
-        else:
-            dirs.add(tuple(p for p in name.split("/") if p))
+    names, dirs = _parse_explicit_page_names([n for n in page_args if n != "UNCOMMITTED"])
+    if "UNCOMMITTED" in page_args:
+        names |= {(s,) for s in _git_uncommitted_adoc_stems()}
     if not names and not dirs:
         print("OK: no uncommitted .adoc changes to check.")
         sys.exit(0)
     _PAGE_FILTER = {"names": names, "dirs": dirs}
     _reject_unmatched_page_filters(page_args)
+
+
+def _apply_page_filter_for_repo(page_args):
+    """Per-repo equivalent of _apply_page_filter for a --repo loop: same
+    NAME parsing (UNCOMMITTED recomputed fresh from *this* repo's own git
+    status, since it differs per repo), but never exits the process -- an
+    UNCOMMITTED-only filter resolving to nothing here just means this one
+    repo has nothing to check, not that the whole multi-repo run is done
+    -- and skips the matched-nothing typo guard, since that's already
+    been checked once, across every --repo target, before the loop
+    started (see _run_multi_repo_check). Returns True if this repo should
+    be skipped entirely."""
+    global _PAGE_FILTER
+    if not page_args:
+        _PAGE_FILTER = None
+        return False
+    names, dirs = _parse_explicit_page_names([n for n in page_args if n != "UNCOMMITTED"])
+    if "UNCOMMITTED" in page_args:
+        names |= {(s,) for s in _git_uncommitted_adoc_stems()}
+    if not names and not dirs:
+        print("OK: no uncommitted .adoc changes to check.")
+        _PAGE_FILTER = None
+        return True
+    _PAGE_FILTER = {"names": names, "dirs": dirs}
+    return False
+
+
+def _run_multi_repo_check(repo_args, selected, glossary, page_args):
+    """Runs `selected` checks against each --repo target in turn, chdir'ing
+    into each one -- the same thing you'd do by hand (cd repo &&
+    docs_tool check ...) -- so every relative-path convention this file
+    already relies on (EN_MODULES_ROOT/RU_MODULES_ROOT, git status for
+    --page UNCOMMITTED, *-glossary.psv auto-discovery) resolves against
+    the right tree without teaching any of them about a second repo.
+    Every --repo path is validated as a real docs tree upfront, before
+    anything is checked -- a bad path is a usage error (exit 2), not a
+    partial run over the repos that happened to be valid. Returns True
+    only if every repo's run was clean."""
+    original_cwd = Path.cwd()
+    repos = [Path(r).resolve() for r in repo_args]
+
+    bad = [r for r in repos
+           if not (r / "en" / "modules").is_dir() and not (r / "ru" / "modules").is_dir()]
+    if bad:
+        _usage_error("error: --repo " + ", ".join(str(b) for b in bad) +
+                     ": no en/modules/ or ru/modules/ found there")
+
+    if page_args and any(n != "UNCOMMITTED" for n in page_args):
+        global _PAGE_FILTER
+        names, dirs = _parse_explicit_page_names([n for n in page_args if n != "UNCOMMITTED"])
+        _PAGE_FILTER = {"names": names, "dirs": dirs}
+        _reject_unmatched_page_filters(page_args, repo_paths=repos)
+
+    overall_ok = True
+    for i, repo in enumerate(repos):
+        if i:
+            print()
+        print(f"##### {repo} #####")
+        os.chdir(repo)
+        try:
+            skip = _apply_page_filter_for_repo(page_args)
+            if not skip and not _run_selected(selected, glossary):
+                overall_ok = False
+        finally:
+            os.chdir(original_cwd)
+    return overall_ok
 
 
 def _run_selected(selected, glossary_paths, legacy_headers=False):
@@ -7132,7 +7225,12 @@ def _configure_links_from_args(args):
         LINK_TIMEOUT = args.timeout
     LINK_OFFLINE = bool(getattr(args, "offline", False))
     LINK_ALLOW_DOMAINS = {d.lower() for d in (getattr(args, "allow_domain", None) or [])}
-    LINK_CACHE_PATH = getattr(args, "link_cache", None) or None
+    # Resolved to absolute right away, same reason as _load_external_
+    # components' repo_root: a --repo loop chdir's between repos, and one
+    # shared cache file is the point -- a relative PATH must keep meaning
+    # the same file throughout the whole run, not wherever cwd lands.
+    link_cache = getattr(args, "link_cache", None) or None
+    LINK_CACHE_PATH = str(Path(link_cache).resolve()) if link_cache else None
     LINK_SHOW_UNVERIFIED = bool(getattr(args, "show_unverified", False))
     LINK_INSECURE = bool(getattr(args, "insecure", False))
 
@@ -7165,6 +7263,12 @@ def _build_v2_parser():
                    choices=_SCAN_TARGETS + ("all",),
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
+    c.add_argument("--repo", action="append", metavar="PATH",
+                   help="Run against this docs repo instead of the current "
+                        "directory. Repeatable, to sweep several repos in one "
+                        "run (each gets its own ##### banner and its own "
+                        "*-glossary.psv / git status). Omit to check the "
+                        "current directory, as before.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
                         help="Limit per-file EN/RU checks to matching page(s)/"
                              "partial(s); 'UNCOMMITTED' for the current git diff. "
@@ -7375,7 +7479,11 @@ def _main_v2():
     # verb == "check"
     EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
     _configure_links_from_args(args)
-    glossary = args.glossary
+    # Resolved to absolute right away, same reason as EXTERNAL_COMPONENTS/
+    # LINK_CACHE_PATH: an explicit --glossary applies to every --repo
+    # target (confirmed default), so a relative PATH must keep meaning
+    # the same file throughout the whole run, not wherever cwd lands.
+    glossary = [str(Path(p).resolve()) for p in args.glossary] if args.glossary else None
 
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
     picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
@@ -7397,10 +7505,12 @@ def _main_v2():
         _usage_error(f"check: that selection matched no rules "
                      f"({' '.join(families)}, --target={args.target}).")
 
-    _require_a_docs_tree()
-    _apply_page_filter(args.page)
-
-    ok = _run_selected(selected, glossary)
+    if args.repo:
+        ok = _run_multi_repo_check(args.repo, selected, glossary, args.page)
+    else:
+        _require_a_docs_tree()
+        _apply_page_filter(args.page)
+        ok = _run_selected(selected, glossary)
     sys.exit(0 if ok else 1)
 
 

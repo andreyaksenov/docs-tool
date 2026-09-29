@@ -4065,6 +4065,135 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("Legacy flag interface", out)
 
 
+class MultiRepoCheckTests(unittest.TestCase):
+    """End-to-end tests for `check ... --repo PATH` (repeatable): chdir's
+    into each target in turn -- the same thing you'd do by hand (cd repo
+    && docs_tool check ...) -- so every relative-path convention already
+    in this file (EN_MODULES_ROOT/RU_MODULES_ROOT, git status for --page
+    UNCOMMITTED, *-glossary.psv auto-discovery) just works without being
+    taught about a second repo."""
+
+    def setUp(self):
+        self._argv = sys.argv
+        self._pf = dt._PAGE_FILTER
+        self._cwd = os.getcwd()
+        # Resolved right away: the code under test resolves every --repo
+        # path too (following symlinks, e.g. macOS's /var -> /private/var),
+        # so comparing raw mkdtemp() output against printed output would
+        # spuriously fail on that platform alone.
+        self._tmp = Path(tempfile.mkdtemp(prefix="docs_tool_multirepo_")).resolve()
+        # A neutral cwd that is NOT one of the --repo targets and is not
+        # itself a docs tree -- proves --repo doesn't depend on cwd.
+        self._neutral = Path(self._tmp) / "neutral"
+        self._neutral.mkdir()
+        os.chdir(self._neutral)
+        self.repo_a = Path(self._tmp) / "repo-a"
+        self.repo_b = Path(self._tmp) / "repo-b"
+
+    def tearDown(self):
+        sys.argv = self._argv
+        dt._PAGE_FILTER = self._pf
+        os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    @staticmethod
+    def _write(base: Path, rel_path: str, content: str = "") -> Path:
+        p = base / rel_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    def _run(self, *args):
+        sys.argv = ["docs_tool.py", *args]
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_runs_selected_check_against_each_repo_in_turn(self):
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "Curly ’ quote here.\n")
+        self._write(self.repo_b, "en/modules/ROOT/pages/p.adoc", "Plain text, no issue.\n")
+        code, out, _ = self._run("check", "style", "--no-curly-quotes",
+                                  "--repo", str(self.repo_a), "--repo", str(self.repo_b))
+        self.assertEqual(code, 1)
+        self.assertIn(f"##### {self.repo_a}", out)
+        self.assertIn(f"##### {self.repo_b}", out)
+        self.assertIn("Curly", out)
+        # repo_b is genuinely clean -- its own section shouldn't carry repo_a's finding.
+        self.assertIn("OK: no curly quote", out.split(f"##### {self.repo_b}")[1])
+
+    def test_no_repo_flag_still_checks_cwd_unchanged(self):
+        """Default behavior (no --repo) is untouched: cwd here is a
+        docs-tree-less neutral dir, so it should refuse exactly like
+        before this feature existed."""
+        code, _, err = self._run("check", "style", "--no-curly-quotes")
+        self.assertEqual(code, 2)
+        self.assertIn("run docs_tool from the docs repo root", err)
+
+    def test_bad_repo_path_aborts_before_checking_the_good_one(self):
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "fine\n")
+        code, out, err = self._run("check", "style", "--no-curly-quotes",
+                                    "--repo", str(self.repo_a),
+                                    "--repo", str(self.repo_a / "nope"))
+        self.assertEqual(code, 2)
+        self.assertNotIn("#####", out)  # nothing checked, not even the valid repo
+        self.assertIn("no en/modules/ or ru/modules/ found", err)
+
+    def test_page_matching_only_one_of_several_repos_is_not_an_error(self):
+        self._write(self.repo_a, "en/modules/ROOT/pages/only-in-a.adoc", "Curly ’ quote.\n")
+        self._write(self.repo_b, "en/modules/ROOT/pages/only-in-b.adoc", "Plain.\n")
+        code, out, _ = self._run("check", "style", "--no-curly-quotes",
+                                  "--repo", str(self.repo_a), "--repo", str(self.repo_b),
+                                  "--page", "only-in-a.adoc")
+        self.assertEqual(code, 1)
+        self.assertIn("Curly", out)
+
+    def test_page_matching_nowhere_is_still_an_error(self):
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "fine\n")
+        self._write(self.repo_b, "en/modules/ROOT/pages/p.adoc", "fine\n")
+        code, out, err = self._run("check", "style", "--no-curly-quotes",
+                                    "--repo", str(self.repo_a), "--repo", str(self.repo_b),
+                                    "--page", "nonexistent.adoc")
+        self.assertEqual(code, 2)
+        self.assertNotIn("#####", out)
+        self.assertIn("matched no file in any of the given --repo targets", err)
+
+    def test_uncommitted_resolving_to_nothing_does_not_abort_remaining_repos(self):
+        """The single-repo shortcut (sys.exit(0) when UNCOMMITTED resolves
+        to nothing) must not end the whole multi-repo run early -- each
+        repo's own git status is independent."""
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "fine\n")
+        self._write(self.repo_b, "en/modules/ROOT/pages/p.adoc", "fine\n")
+        for repo in (self.repo_a, self.repo_b):
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        code, out, _ = self._run("check", "style", "--no-curly-quotes",
+                                  "--repo", str(self.repo_a), "--repo", str(self.repo_b),
+                                  "--page", "UNCOMMITTED")
+        self.assertEqual(code, 0)
+        self.assertIn(f"##### {self.repo_a}", out)
+        self.assertIn(f"##### {self.repo_b}", out)
+        self.assertEqual(out.count("no uncommitted .adoc changes"), 2)
+
+    def test_explicit_glossary_path_resolves_against_original_cwd(self):
+        """A relative --glossary PATH must keep pointing at the same file
+        for every repo, not wherever chdir happened to land."""
+        glossary_path = self._write(
+            self._neutral, "shared-glossary.psv",
+            "en|ru|ru_pattern|note\ncluster|кластер|кластер<>|\n",
+        )
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "The cluster is up.\n")
+        self._write(self.repo_a, "ru/modules/ROOT/pages/p.adoc", "Сервер запущен.\n")
+        code, out, err = self._run("check", "terms",
+                                    "--repo", str(self.repo_a),
+                                    "--glossary", glossary_path.name)
+        self.assertNotIn("file not found or unreadable", err)
+        self.assertIn(f"##### {self.repo_a}", out)
+
+
 class RuleIdRegistryTests(unittest.TestCase):
     def test_every_check_has_a_unique_id(self):
         self.assertEqual(set(dt.RULE_IDS), set(dt.CHECKS))
@@ -4673,7 +4802,10 @@ class ExternalLinkWiringTests(unittest.TestCase):
             self.assertEqual(dt.LINK_TIMEOUT, 5.0)
             self.assertTrue(dt.LINK_OFFLINE)
             self.assertEqual(dt.LINK_ALLOW_DOMAINS, {"x.example"})
-            self.assertEqual(dt.LINK_CACHE_PATH, "/tmp/lc.json")
+            # Resolved to absolute (and any symlink, e.g. macOS's /tmp ->
+            # /private/tmp, followed) so it still means the same file after
+            # a --repo loop's chdir.
+            self.assertEqual(dt.LINK_CACHE_PATH, str(Path("/tmp/lc.json").resolve()))
             self.assertTrue(dt.LINK_INSECURE)
             self.assertTrue(dt.LINK_SHOW_UNVERIFIED)
         finally:
