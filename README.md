@@ -639,10 +639,26 @@ UNCOMMITTED` — a page with no local changes in one repo doesn't stop the run
 from reaching the next one. `--page NAME` matching is scoped across the whole
 set: a name only has to match in *some* of the given repos, not all of them
 (page names legitimately differ between products) — it's still an error (exit
-`2`, nothing checked) if it matches in none of them. An explicit `--glossary
-PATH` applies to every repo in the run. Every `--repo` path is validated as a
-real docs tree before anything is checked at all — one bad path aborts the
-whole run rather than reporting on the repos that happened to be valid.
+`2`, nothing checked) if it matches in none of them. Every `--repo` path is
+validated as a real docs tree before anything is checked at all — one bad
+path aborts the whole run rather than reporting on the repos that happened to
+be valid.
+
+An explicit `--glossary PATH` is a **base** shared across every repo in the
+run — but it doesn't replace a repo's own `*-glossary.psv` the way it would
+without `--repo`; the two are merged (same-term rows from either file are
+accepted as alternatives, never one overwriting the other). Useful for a
+product family with shared vocabulary plus a few product-specific terms:
+
+```bash
+./docs_tool.py check terms --glossary shared-terms.psv \
+  --repo ../docs-adb --repo ../docs-adh --repo ../docs-adqm
+```
+
+A repo whose own glossary actually contributed terms gets an `info:` line
+(stderr) naming every file that ended up in play; a repo with no glossary of
+its own is silent and just uses the base. Without `--repo`, `--glossary`
+still fully replaces auto-discovery, unchanged from before this existed.
 
 Omit `--repo` and everything works exactly as before, scanning the current
 directory.
