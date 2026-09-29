@@ -1018,14 +1018,14 @@ class CompileGlossaryPatternTests(unittest.TestCase):
             "ru_display": {"сессия", "сеанс"},
             "patterns": [dt._compile_glossary_pattern("сесси<>"), dt._compile_glossary_pattern("сеанс<>")],
         }
-        self.assertTrue(dt._glossary_entry_satisfied(entry, "начните новый сеанс"))
-        self.assertTrue(dt._glossary_entry_satisfied(entry, "текущая сессия истекла"))
-        self.assertFalse(dt._glossary_entry_satisfied(entry, "текущее подключение истекло"))
+        self.assertTrue(dt._glossary_entry_ru_count(entry, "начните новый сеанс") > 0)
+        self.assertTrue(dt._glossary_entry_ru_count(entry, "текущая сессия истекла") > 0)
+        self.assertFalse(dt._glossary_entry_ru_count(entry, "текущее подключение истекло") > 0)
 
     def test_do_not_translate_entry_requires_verbatim_en(self):
         entry = {"ru_display": {"не переводить"}, "patterns": [dt._compile_glossary_pattern("Greengage DB")]}
-        self.assertTrue(dt._glossary_entry_satisfied(entry, "работает в Greengage DB кластере"))
-        self.assertFalse(dt._glossary_entry_satisfied(entry, "работает в кластере gpdb"))
+        self.assertTrue(dt._glossary_entry_ru_count(entry, "работает в Greengage DB кластере") > 0)
+        self.assertFalse(dt._glossary_entry_ru_count(entry, "работает в кластере gpdb") > 0)
 
 
 class ImagesOrphanedTests(FixtureTestCase):

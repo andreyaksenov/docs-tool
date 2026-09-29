@@ -4335,12 +4335,6 @@ def _glossary_entry_ru_count(entry, ru_line: str) -> int:
     return best
 
 
-def _glossary_entry_satisfied(entry, ru_line: str) -> bool:
-    """True if `ru_line` matches at least one of the entry's accepted
-    patterns (see _glossary_entry_ru_count)."""
-    return _glossary_entry_ru_count(entry, ru_line) > 0
-
-
 def _build_glossary_term_re(glossary):
     """One alternation of every glossary key, longest-first so a multi-word
     key (e.g. "master host") wins over a shorter key that's one of its words
