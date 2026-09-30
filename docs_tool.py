@@ -830,7 +830,14 @@ def check_nav_structure_parity() -> bool:
 # --------------------------------------------------------------------------
 
 _REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2}|link:{1,2})[^\]\[\s]+\[')
-_ANCHOR_ID_TPL = r'^\[#{0}\]$|\[\[{0}(,|\]\])'
+# `[#id]$` on its own required the WHOLE line to be the attribute list --
+# missed a real anchor found in docs-adpg's configure-logging.adoc:
+# `a|[#log_min_messages]`, an AsciiDoc-content table cell (`a|`) whose
+# block-attribute list sits right after the cell marker, on the same line,
+# ahead of the anchored paragraph. Same optional cell-prefix shape as
+# _TABLE_CELL_START_RE, so a `[#id]` immediately after any table cell
+# marker (a|, m|, ^|, .2+a|, ...) still counts as the whole attribute list.
+_ANCHOR_ID_TPL = r'^(?:[.\d+<>^~a-z]{{0,6}}\|)?\[#{0}\]$|\[\[{0}(,|\]\])'
 
 # Antora injects these as page-scoped attributes pointing at each family's
 # directory for the current module (https://docs.antora.org -- "family

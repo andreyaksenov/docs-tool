@@ -1398,6 +1398,27 @@ class PartialsOrphanedTests(FixtureTestCase):
 
 
 class PagesBrokenRefsTests(FixtureTestCase):
+    def test_anchor_defined_right_after_a_table_cell_marker_resolves(self):
+        """Regression test for the real docs-adpg configure-logging.adoc
+        case: `a|[#log_min_messages]` -- an AsciiDoc-content table cell
+        (a|) whose block-attribute list sits on the same line as the cell
+        marker, right before the anchored paragraph -- must count as a
+        real anchor, not just a bare `[#id]` alone on its own line."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/params.adoc",
+            "= Params\n\n"
+            "|===\n"
+            "a|[#log_min_messages]\n"
+            "log_min_messages\n"
+            "|Description here\n"
+            "|===\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:params.adoc#log_min_messages[the parameter]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
     def test_self_qualified_own_component_image_resolves(self):
         """Regression test for the docs-adcm scenario:
         image::ADCM:ROOT:pic.png[] written inside docs-adcm's own content
