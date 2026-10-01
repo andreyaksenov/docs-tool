@@ -364,7 +364,7 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```
 
 - **`ST10` · `check style --link-new-tab`** — every external `http(s)` link opens in a
-  new tab (`^`) with `opts=nofollow` set, e.g.
+  new tab (`^`, or the `window=_blank` alternative) with `opts=nofollow` set, e.g.
   `https://greenplum.org/[Greenplum^,opts=nofollow]`. `xref:` (internal links) is
   exempt. A bare URL with no `[...]` at all is flagged too — it structurally can't
   carry either marker. Only checks what `check links` (`LK01`) would also treat as
@@ -372,6 +372,10 @@ Heuristic family — treat findings as a review list, not a hard gate.
   (`http://FQDN:PORT`, `10.x`, `*.internal`), a `.git` clone remote, and a bare URL
   that's backslash-escaped or formatting-wrapped (`_http://FQDN:8081_`) — "point
   your browser at `http://HOST:PORT`" instructions aren't links to decorate.
+  Handles two cases verified against real Asciidoctor: the link text can be quoted
+  (a comma in it forces `["text^",opts=nofollow]`, caret before the closing quote
+  rather than the comma — MK04's own fix for the comma), and the `[...]` can span
+  more than one physical source line (an author hand-wrapping a long one).
   ```bash
   ./docs_tool.py check style --link-new-tab
   ./docs_tool.py check style --link-new-tab --page resource_groups.adoc

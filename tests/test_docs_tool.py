@@ -671,6 +671,107 @@ class PagesLinkNewTabTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("greenplum.org", out)
 
+    # --- quoted-text caret / window=_blank (real docs-adpg false positive
+    # in combine-queries.adoc: a comma in the link text forces it to be
+    # quoted, pushing ^ before the closing quote instead of before the
+    # comma) -- verified against real Asciidoctor, see
+    # _LINK_TARGET_BLANK_RE/_WINDOW_BLANK_RE. ---
+
+    def test_double_quoted_text_with_trailing_caret_is_ok(self):
+        self._page('See https://x.org/p["A, B^",opts=nofollow] docs.\n')
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_single_quoted_text_with_trailing_caret_is_ok(self):
+        self._page("See https://x.org/p['A, B^',opts=nofollow] docs.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_window_blank_attribute_is_ok(self):
+        self._page('See https://x.org/p["A, B",window=_blank,opts=nofollow] docs.\n')
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_quoted_text_without_caret_is_still_flagged(self):
+        self._page('See https://x.org/p["A, B",opts=nofollow] docs.\n')
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("missing ^", out)
+
+    def test_caret_in_the_middle_of_text_is_still_flagged(self):
+        """A caret that isn't the trailing character of the whole first
+        attribute (quoted or not) doesn't count -- must not be loosened
+        by the quote-awareness fix."""
+        self._page("See https://x.org/p[A^b,opts=nofollow] docs.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("missing ^", out)
+
+    def test_quoted_text_with_caret_but_no_nofollow_is_still_flagged(self):
+        self._page('See https://x.org/p["A, B^"] docs.\n')
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("opts=nofollow", out)
+
+    def test_bare_url_with_no_brackets_is_flagged_as_no_attrs(self):
+        self._page("See https://x.org/p docs.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("no [...] attrs at all", out)
+
+    # --- a link's [...] spanning more than one physical source line (real
+    # docs-adpg false positive in known-issues.adoc: a hand-wrapped long
+    # line put `^,opts=nofollow]` on the next line) -- verified against
+    # real Asciidoctor, see _join_unclosed_link_brackets. ---
+
+    def test_bracket_closing_on_the_next_line_is_ok(self):
+        self._page(
+            'See https://x.org/p["Some very long issue title here\n'
+            '^,opts=nofollow] for details.\n'
+        )
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_bracket_closing_a_few_lines_later_is_ok(self):
+        self._page(
+            'See https://x.org/p["line one\n'
+            'line two\n'
+            'line three^,opts=nofollow] for details.\n'
+        )
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_bracket_never_closing_still_reports_no_attrs(self):
+        """A genuinely unclosed `[` (not just a hand-wrapped one) must not
+        hang or swallow the rest of the file -- capped at
+        _LINK_BRACKET_CONTINUATION_LIMIT lines."""
+        self._page("See https://x.org/p[unterminated text with no closing bracket\n" * 10)
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("no [...] attrs at all", out)
+
+    def test_blank_line_stops_the_bracket_continuation_search(self):
+        """A blank line is a real paragraph boundary -- a `[` left open
+        across one must not reach past it looking for a `]`."""
+        self._page(
+            'See https://x.org/p["unclosed\n'
+            "\n"
+            "A new paragraph, unrelated, with a closing ] in it.\n"
+        )
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("no [...] attrs at all", out)
+
+    def test_continuation_lines_are_not_scanned_a_second_time(self):
+        """The tail of a joined bracket (e.g. `^,opts=nofollow]).`) must
+        not itself look like a second, separately-reported link."""
+        self._page(
+            'See https://x.org/p["line one\n'
+            'line two^,opts=nofollow]).\n'
+        )
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
 
 class PagesXrefOwnProductTests(FixtureTestCase):
     def _page(self, body):

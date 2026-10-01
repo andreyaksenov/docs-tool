@@ -5332,8 +5332,67 @@ _STYLE_LINK_MACRO_RE = re.compile(r'\blink:{1,2}(https?://[^\s\[\]<>"`|^]+)(\[([
 _STYLE_BARE_URL_RE = re.compile(r'(?<![:\w])(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
 # A caret immediately before a comma or end-of-attrs is AsciiDoc's
 # target=_blank shorthand (`text^,opts=nofollow` or bare `^`) -- a caret
-# elsewhere (inside the link text itself) doesn't count.
-_LINK_TARGET_BLANK_RE = re.compile(r'\^\s*(?:,|$)')
+# elsewhere (inside the link text itself) doesn't count. An optional quote
+# (`"`/`'`) between the caret and the comma/end covers the same case MK04
+# protects: `["GROUPING SETS, CUBE^",opts=nofollow]`, where the comma inside
+# the text forced the whole first attribute to be quoted, pushing `^` right
+# before the closing quote instead of right before the comma. Verified
+# against real Asciidoctor (2.0.26): the quoted form renders
+# target="_blank" exactly like the bare one -- a real docs-adpg false
+# positive (combine-queries.adoc) before this.
+_LINK_TARGET_BLANK_RE = re.compile(r'\^["\']?\s*(?:,|$)')
+# AsciiDoc's other way to open a link in a new tab -- also verified against
+# real Asciidoctor to render identically to `^`. Quotes/spacing around the
+# value are optional (`window=_blank`, `window="_blank"`, `window = _blank`).
+_WINDOW_BLANK_RE = re.compile(r'window\s*=\s*["\']?_blank["\']?')
+# Antora/AsciiDoc joins a paragraph's physical source lines into one block
+# before running inline substitution, so a link's [...] attribute list can
+# legally span more than one line when an author hand-wraps a long one --
+# verified against real Asciidoctor (docs-adpg's known-issues.adoc wraps a
+# GitHub issue title exactly this way, `^,opts=nofollow]` landing on the
+# next line, and still renders target="_blank"/rel="nofollow noopener"
+# correctly). Scanning line-by-line alone can't see the `]` on the next
+# line -- see _join_unclosed_link_brackets, which closes that gap.
+_LINK_BRACKET_CONTINUATION_LIMIT = 5
+
+
+def _join_unclosed_link_brackets(lines, excluded):
+    """A parallel line list for check_pages_link_new_tab: a line holding a
+    URL immediately followed by an unterminated `[` gets however many
+    following lines it takes to find the closing `]` appended (space-
+    joined, the same way AsciiDoc reflows a paragraph's physical lines
+    before inline substitution runs) -- see _LINK_BRACKET_CONTINUATION_LIMIT
+    for why this is needed at all. Capped at that many lines and stops at
+    a blank line (a real paragraph/block boundary) or an excluded one, so
+    a genuinely unclosed `[` -- or one that was never meant to be a link
+    attribute list at all -- doesn't swallow the rest of the file. The
+    continuation lines themselves are left untouched in the returned
+    list: they don't carry a URL of their own (just the tail of the
+    attribute list, e.g. `^,opts=nofollow]).`), so scanning them again
+    finds nothing and doesn't double-report."""
+    joined = list(lines)
+    n = len(lines)
+    for i, line in enumerate(lines):
+        if (i + 1) in excluded:
+            continue
+        for regex in (_STYLE_LINK_MACRO_RE, _STYLE_BARE_URL_RE):
+            for m in regex.finditer(line):
+                if m.group(2) is not None:
+                    continue  # already has a [...] that closes on this line
+                end = m.end(1)
+                if end >= len(line) or line[end] != '[':
+                    continue  # no bracket opened at all -- not this gap
+                combined = line
+                j = i + 1
+                while j < n and j - i <= _LINK_BRACKET_CONTINUATION_LIMIT:
+                    if (j + 1) in excluded or not lines[j].strip():
+                        break
+                    combined += " " + lines[j].strip()
+                    if "]" in lines[j]:
+                        joined[i] = combined
+                        break
+                    j += 1
+    return joined
 
 
 def _iter_external_link_attrs(line):
@@ -5369,13 +5428,14 @@ def _iter_external_link_attrs(line):
 
 
 def _missing_link_decoration(attrs):
-    """None if `attrs` already carries both `^` and `opts=nofollow`;
-    otherwise a short reason string for the report. `attrs=None` means
-    the URL had no [...] at all."""
+    """None if `attrs` already carries both a new-tab marker (`^`, quoted
+    or not, or the `window=_blank` alternative -- see _LINK_TARGET_BLANK_RE/
+    _WINDOW_BLANK_RE) and `opts=nofollow`; otherwise a short reason string
+    for the report. `attrs=None` means the URL had no [...] at all."""
     if attrs is None:
         return "no [...] attrs at all"
     missing = []
-    if not _LINK_TARGET_BLANK_RE.search(attrs):
+    if not (_LINK_TARGET_BLANK_RE.search(attrs) or _WINDOW_BLANK_RE.search(attrs)):
         missing.append("^")
     if "nofollow" not in attrs:
         missing.append("opts=nofollow")
@@ -5384,10 +5444,18 @@ def _missing_link_decoration(attrs):
 
 def check_pages_link_new_tab() -> bool:
     """New check (not a port of an existing shell script): house style says
-    every external http(s) link should open in a new tab (`^`) with
-    `opts=nofollow` set (SEO) -- e.g. `https://greenplum.org/[Greenplum^,
-    opts=nofollow]`. Internal xref: links are explicitly exempt in the
-    guide (a different macro entirely, never matched here).
+    every external http(s) link should open in a new tab (`^`, or the
+    `window=_blank` alternative) with `opts=nofollow` set (SEO) -- e.g.
+    `https://greenplum.org/[Greenplum^, opts=nofollow]`. Internal xref:
+    links are explicitly exempt in the guide (a different macro entirely,
+    never matched here). The first attribute's text can legally be quoted
+    (`["GROUPING SETS, CUBE^",opts=nofollow]` -- MK04's fix for a comma in
+    the text) and the whole [...] can legally span more than one physical
+    line (an author hand-wrapping a long one) -- both verified against
+    real Asciidoctor and both real false positives this check used to
+    have (docs-adpg's combine-queries.adoc and known-issues.adoc) before
+    _LINK_TARGET_BLANK_RE/_WINDOW_BLANK_RE and
+    _join_unclosed_link_brackets accounted for them.
 
     Only checks a URL _should_probe would also consider a real,
     checkable external link -- check_links_external's own filter for
@@ -5410,8 +5478,9 @@ def check_pages_link_new_tab() -> bool:
                 if lines is None:
                     continue
                 excluded = _excluded_ref_lines(f)
+                scan_lines = _join_unclosed_link_brackets(lines, excluded)
                 hits = []
-                for i, line in enumerate(lines, 1):
+                for i, line in enumerate(scan_lines, 1):
                     if i in excluded:
                         continue
                     for url, attrs in _iter_external_link_attrs(line):
