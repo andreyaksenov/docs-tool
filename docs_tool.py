@@ -2838,7 +2838,11 @@ def _link_parity_tokens(path: Path):
         if lineno in excluded:
             continue
         toks = [f"xref:{t.split('#', 1)[0]}" for t in _XREF_TARGET_RE.findall(line)]
-        toks += [f"image:{_ASSET_LANG_TAG_RE.sub(r'_XX\1', t)}"
+        # Plain concatenation, not an f-string: a backslash can't appear
+        # inside an f-string's {...} part before Python 3.12 (PEP 701), and
+        # _ASSET_LANG_TAG_RE.sub(r'_XX\1', t) has one -- inlined into an
+        # f-string here, the tool failed to even parse on 3.7-3.11.
+        toks += ["image:" + _ASSET_LANG_TAG_RE.sub(r'_XX\1', t)
                  for t in _INLINE_IMAGE_TARGET_RE.findall(line)]
         toks += [f"url:{_normalize_parity_url(u)}"
                  for u in _extract_urls_from_line(line)]
