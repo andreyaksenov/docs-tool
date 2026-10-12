@@ -308,6 +308,7 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
 | `ST17` | `check style --heading-gerund` | heading starts with a gerund + object |
 | `ST18` | `check style --table-header` | table has no header row |
 | `ST19` | `check style --shell-block-lang` | $-prompted block not [source,console] |
+| `ST20` | `check style --icon-svg` | inline icon (`image:`) is not `.svg` |
 
 Heuristic family — treat findings as a review list, not a hard gate.
 
@@ -481,6 +482,18 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --shell-block-lang
   ./docs_tool.py check style --shell-block-lang --page resource_groups.adoc
+  ```
+
+- **`ST20` · `check style --icon-svg`** — an inline `image:` macro (mid-sentence,
+  almost always a small icon, e.g. `click image:icons/x.svg[width=30]`) should
+  target an `.svg` file, not a raster one — a PNG icon rendered at icon size
+  looks visibly blurry next to a crisp SVG one. Scoped to the inline form only;
+  the block `image::` form (screenshots/diagrams) is untouched, since a raster
+  format is normal there. `injectSvg:`/`inlineSVG:` are out of scope, same as
+  `ST12`.
+  ```bash
+  ./docs_tool.py check style --icon-svg
+  ./docs_tool.py check style --icon-svg --page resource_groups.adoc
   ```
 
 ### `terms` — controlled vocabulary

@@ -827,6 +827,75 @@ class PagesImageAltTests(FixtureTestCase):
         self.assertTrue(ok, out)
 
 
+class PagesIconSvgTests(FixtureTestCase):
+    """ST20 (--icon-svg). Regression tests for a real feature request:
+    an inline image: icon should be .svg, not a raster format -- scoped
+    to the inline form only, verified against the real fleet to be a
+    clean signal (see check_pages_icon_svg's docstring)."""
+
+    def _page(self, body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_inline_png_icon_is_flagged(self):
+        """The real-world case that prompted this check: docs-adh's
+        ranger-grey-plus.png, an inline toolbar icon."""
+        self._page("Click image:tutorials:adps/ranger-admin/ranger-grey-plus.png[width=24].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertFalse(ok)
+        self.assertIn("ranger-grey-plus.png", out)
+
+    def test_inline_svg_icon_passes(self):
+        self._page("Click image:how-to:icons/delete_default.svg[width=30].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertTrue(ok, out)
+
+    def test_block_png_screenshot_is_not_flagged(self):
+        """The block form (image::, double colon) is screenshots/
+        diagrams, where a raster format is normal -- out of scope for
+        this rule entirely, by design."""
+        self._page(".A screenshot\nimage::x.png[The main screen,width=400]\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertTrue(ok, out)
+
+    def test_block_and_inline_distinguished_on_the_same_line(self):
+        """A single colon that happens to be followed by text (not
+        another colon) must not be mistaken for the block form, and
+        vice versa -- both appearing on the same line is the sharpest
+        version of that check."""
+        self._page("See image::x.png[Shot,width=400] and click "
+                    "image:how-to:icons/delete_default.svg[width=30].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertTrue(ok, out)
+
+    def test_qualified_inline_target_with_extra_colons_still_checked(self):
+        """The target itself may be component/module-qualified (extra
+        colons inside it) -- only the macro name's own colon count
+        decides inline vs block."""
+        self._page("Click image:ADCM:how-to:icons/delete.png[width=20].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertFalse(ok)
+        self.assertIn("icons/delete.png", out)
+
+    def test_inject_svg_macro_is_out_of_scope(self):
+        self._page("See injectSvg:diagram.png[].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertTrue(ok, out)
+
+    def test_partials_are_scanned_too(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/snippet.adoc",
+                   "Click image:icons/plus.png[width=20].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertFalse(ok)
+        self.assertIn("plus.png", out)
+
+    def test_commented_out_line_is_not_flagged(self):
+        self._page("// Click image:icons/plus.png[width=20].\n")
+        ok, out = self.run_check(dt.check_pages_icon_svg)
+        self.assertTrue(ok, out)
+
+
 class PagesAdmonitionCaptionTests(FixtureTestCase):
     def _page(self, body):
         self.antora_yml("en", "TEST")
@@ -4275,7 +4344,7 @@ class FamilySelectionTests(unittest.TestCase):
              "pages-no-curly-quotes", "pages-no-copyright-symbols",
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
              "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
-             "pages-image-alt", "pages-admonition-caption",
+             "pages-image-alt", "pages-icon-svg", "pages-admonition-caption",
              "pages-heading-article", "pages-heading-gerund", "pages-table-header",
              "pages-shell-block-lang"},
         )

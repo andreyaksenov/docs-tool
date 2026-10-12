@@ -5808,6 +5808,72 @@ def check_pages_image_alt() -> bool:
     return ok
 
 
+# A single colon not followed by another one -- image: (inline, mid-sentence,
+# almost always a small icon), never image:: (block, almost always a
+# screenshot/diagram). The target itself may still contain colons (a
+# component/module-qualified reference, e.g. image:how-to:icons/x.svg[]), so
+# they're excluded only from the literal macro name, not from the capture
+# group.
+_INLINE_IMAGE_MACRO_RE = re.compile(r'\bimage:(?!:)([^\[\]\s]+)\[')
+
+
+def check_pages_icon_svg() -> bool:
+    """New check (house style, not an existing shell script): a real
+    feature request -- an inline image:TARGET[] macro (used
+    mid-sentence for a small icon, e.g. `click
+    image:how-to:icons/delete_default.svg[width=30]`) should point at an
+    .svg file, not a raster one: a PNG icon rendered at icon size looks
+    visibly blurry next to a crisp SVG one.
+
+    Deliberately scoped to the INLINE image: form only (a single colon,
+    not image::) -- the block form is for screenshots/diagrams, where a
+    raster format is normal and often necessary (a real screenshot isn't
+    vector art), not icon misuse. This was checked directly across the
+    fleet rather than assumed: every block image:: target is screenshot-
+    scale (clustering at 362/724px), nothing icon-sized; of 2068 inline
+    image: targets fleet-wide, 2066 (99.9%) were already .svg, and the
+    only two non-svg hits (the real-world case that prompted this check)
+    were a genuine toolbar icon (ranger-grey-plus.png, width=24) in
+    docs-adh. A `width=` cutoff was considered and dropped: inline usage
+    never exceeds width=60 fleet-wide and block usage never drops below
+    screenshot scale, so the inline/block distinction alone already
+    separates icons from screenshots with no measured false positive --
+    adding a width check on top would only add a %-vs-pixel parsing edge
+    case for no practical benefit. injectSvg:/inlineSVG: (a different raw-
+    SVG embedding mechanism, inherently SVG already) are out of scope, the
+    same as ST12. Scans pages/ and partials/ in both languages."""
+    ok = True
+    total_hits = 0
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                hits = []
+                for i, line in enumerate(lines, 1):
+                    if i in excluded:
+                        continue
+                    for m in _INLINE_IMAGE_MACRO_RE.finditer(line):
+                        target = m.group(1)
+                        if not target.lower().endswith(".svg"):
+                            hits.append((i, target))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for i, target in hits:
+                        print(f"  {f}:{i}: image:{target}[]  (inline icon is not .svg)")
+    if ok:
+        print("OK: every inline icon (image:) is .svg.")
+    else:
+        print(f"\nTotal: {total_hits} inline icon(s) not using .svg.")
+    return ok
+
+
 # A `.Caption text` block title -- not a `....` literal-block delimiter
 # ((?!\.) excludes a second dot) or a numbered list item's `. text` (\S
 # requires the character right after the dot to be non-space).
@@ -5988,6 +6054,7 @@ CHECKS = {
     "pages-link-text-comma": check_pages_link_text_comma,
     "pages-xref-own-product": check_pages_xref_own_product,
     "pages-image-alt": check_pages_image_alt,
+    "pages-icon-svg": check_pages_icon_svg,
     "pages-admonition-caption": check_pages_admonition_caption,
     "pages-heading-article": check_pages_heading_article,
     "pages-heading-gerund": check_pages_heading_gerund,
@@ -6092,6 +6159,7 @@ FAMILIES = {
         "link-new-tab":       {"pages": "pages-link-new-tab"},
         "xref-own-product":   {"pages": "pages-xref-own-product"},
         "image-alt":          {"pages": "pages-image-alt"},
+        "icon-svg":           {"pages": "pages-icon-svg"},
         "admonition-caption": {"pages": "pages-admonition-caption"},
         "heading-article":    {"pages": "pages-heading-article"},
         "heading-gerund":     {"pages": "pages-heading-gerund"},
@@ -6170,6 +6238,7 @@ RULE_IDS = {
     "pages-link-new-tab":         "ST10",
     "pages-xref-own-product":    "ST11",
     "pages-image-alt":            "ST12",
+    "pages-icon-svg":             "ST20",
     "pages-admonition-caption":   "ST14",
     "pages-heading-article":      "ST15",
     "pages-heading-gerund":       "ST17",
@@ -6217,6 +6286,7 @@ SUMMARIES = {
     "pages-link-new-tab":          "every external link opens in a new tab with opts=nofollow",
     "pages-xref-own-product":      "internal xref: must not name this product's own component",
     "pages-image-alt":             "every image:: needs alt text",
+    "pages-icon-svg":              "every inline icon (image:) uses .svg, not a raster format",
     "pages-admonition-caption":    "every NOTE/TIP/WARNING/IMPORTANT/CAUTION needs a .Caption above it",
     "pages-heading-article":       "a heading shouldn't start with a/an/the",
     "pages-heading-gerund":        "a heading shouldn't start with a gerund + object -- use the infinitive",
@@ -6280,6 +6350,7 @@ RULE_FLAGS = {
     "pages-link-new-tab":          "link missing ^ / opts=nofollow",
     "pages-xref-own-product":      "xref: names its own product",
     "pages-image-alt":             "image with no alt text",
+    "pages-icon-svg":              "inline icon not .svg",
     "pages-admonition-caption":    "admonition with no caption",
     "pages-heading-article":       "heading starts with a/an/the",
     "pages-heading-gerund":        "heading uses gerund + object",
