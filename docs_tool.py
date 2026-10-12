@@ -921,19 +921,61 @@ def _own_component_name(lang):
     return _OWN_COMPONENT_NAME_CACHE[lang]
 
 
-def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
+def _component_context(component, lang, lang_module_roots):
+    """If `component` names a successfully-registered --external-root
+    component, returns the module roots to use for resolving a BARE
+    module-qualified reference found in content that now lives inside
+    it -- its own modules, not the caller's. Real case: checking
+    docs-adbes with --external-root ADB=../docs-adb reported
+    `note: N referenced component(s) left unchecked -- blog,
+    get-started, how-to` -- get-started/how-to are real modules inside
+    ADB's own content, not external components, but every bare
+    reference resolved while walking into ADB kept reusing docs-adbes's
+    own lang_module_roots instead of switching to ADB's once content
+    from ADB was being scanned.
+
+    Deliberately does NOT touch `own_name`/home's own module roots --
+    those must stay pinned to this tool run's true home repo no matter
+    whose content is currently being walked, so that a *different*,
+    perfectly legitimate pattern keeps working: content living inside
+    this registered external component referencing the true home back
+    by its real name (e.g. `include::ADB:how-to:metrics.adoc[]` found
+    inside docs-adbes's own content when the home repo is "ADB") --
+    see _resolve_module_ref's `own_lang_module_roots`. Swapping both
+    together was tried and broke exactly that case (see
+    test_cross_repo_usage_via_external_root_is_not_orphaned).
+
+    Returns the current (unswapped) `lang_module_roots` for anything
+    else -- a bare module name within the current context, or a name
+    this tool can't resolve at all, left to the caller/
+    _resolve_module_ref to record as skipped."""
+    modules = EXTERNAL_COMPONENTS.get(component, {}).get(lang)
+    return modules if modules is not None else lang_module_roots
+
+
+def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None, own_lang_module_roots=None):
     """Resolve a single `name:` prefix already peeled off a target/include
     path. `name` may be a module in this repo's current language, or (if
     registered via --external-root) a sibling Antora component -- in which
     case an optional following `module:` segment at the start of `rest`
     selects the module within it (defaulting to ROOT, same as Antora).
     `own_name` (this repo's own antora.yml `name:`, e.g. "ADB") lets a
-    self-qualified reference resolve back into `lang_module_roots` too --
-    needed when `name`/`rest` come from a *different* repo's content (see
-    _collect_tag_usage scanning a registered external component's pages/
-    partials), which may reference this repo the same fully-qualified way
-    it would reference any other sibling component, e.g.
-    `include::ADB:how-to:metrics.adoc[tag=...]` written in docs-adbes.
+    self-qualified reference resolve back to this tool run's true home
+    repo too -- needed when `name`/`rest` come from a *different*
+    repo's content (see _collect_tag_usage scanning a registered
+    external component's pages/partials), which may reference this
+    repo the same fully-qualified way it would reference any other
+    sibling component, e.g. `include::ADB:how-to:metrics.adoc[tag=...]`
+    written in docs-adbes. `own_lang_module_roots` is what that
+    self-reference resolves into -- defaulting to `lang_module_roots`
+    itself, the right answer whenever a caller hasn't decoupled the
+    two (i.e. `lang_module_roots` already *is* home's own modules, the
+    common case). A caller that has switched `lang_module_roots` to a
+    *different* component's own modules (via _component_context, while
+    walking that component's own content) must pass home's true
+    modules here explicitly, so a self-reference found inside that
+    content still resolves back to the real home, not to whichever
+    component is currently being walked.
     Returns (target_root, remaining_rest), or None if `name` names
     something this tool can't resolve (unregistered external component --
     left unchecked, not reported broken)."""
@@ -941,7 +983,7 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
         return lang_module_roots[name], rest
     modules = EXTERNAL_COMPONENTS.get(name, {}).get(lang)
     if modules is None and name == own_name:
-        modules = lang_module_roots
+        modules = own_lang_module_roots if own_lang_module_roots is not None else lang_module_roots
     if modules is None:
         # Not a module here, not a registered --external-root, not our own
         # component name: nothing to resolve against, so the reference is
@@ -975,7 +1017,7 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
     return None
 
 
-def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, lang="en", depth=0, seen=None):
+def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, lang="en", depth=0, seen=None, own_name=None, own_lang_module_roots=None):
     """A page's anchors may live in content it pulls in via include::
     (recursively), not its own source -- an explicit partial$/page$/
     example$-marked target, a component/module-qualified target with no
@@ -989,7 +1031,28 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
     tag=-included region of an external ADB page wasn't found unless the
     include spelled out page$ explicitly, even though Antora resolves
     the unmarked form identically. Depth-capped to guard against an
-    accidental include cycle."""
+    accidental include cycle.
+
+    `lang_module_roots` is the "local" module context -- whichever
+    component's own content is currently being walked -- and switches
+    on recursion (via _component_context) when an include crosses into
+    a different registered external component, so a BARE
+    module-qualified reference found inside THAT component's own
+    content (e.g. `get-started:partial$x.adoc[]` written inside
+    docs-adb itself) resolves against docs-adb's own modules instead of
+    wrongly looking like an unregistered external component.
+
+    `own_name`/`own_lang_module_roots` are this tool run's true home
+    repo identity and modules -- computed once at the true top-level
+    call and then passed down UNCHANGED through every level of
+    recursion, deliberately never swapped the way `lang_module_roots`
+    is -- so a self-qualified reference back to the real home found
+    deep inside a different component's own content (e.g.
+    `ADB:how-to:metrics.adoc[]` written inside docs-adbes's content,
+    when the home repo is "ADB") still resolves correctly even while
+    `lang_module_roots` itself now points at docs-adbes's own modules.
+    See _resolve_module_ref and _component_context for why these two
+    contexts can't be merged into one."""
     if seen is None:
         seen = set()
     if depth > 5 or file in seen:
@@ -1000,22 +1063,35 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
     if text is None:
         return result
     lang_module_roots = lang_module_roots or {}
-    own_name = _own_component_name(lang)
+    if own_name is None:
+        own_name = _own_component_name(lang)
+    if own_lang_module_roots is None:
+        own_lang_module_roots = lang_module_roots
     directory = file.parent
     for m in _INCLUDE_MACRO_RE.finditer(text):
         t = m.group(1)
-        resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True)
+        resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True, own_lang_module_roots=own_lang_module_roots)
         if resolved is None:
             continue  # version pin, or an external component not registered via --external-root
         target_file, target_root = resolved
         if target_file.is_file():
-            result.extend(_collect_include_partials(target_file, target_root, lang_module_roots, lang, depth + 1, seen))
+            m_component = _COMPONENT_PREFIX_RE.match(t)
+            next_lang_module_roots = _component_context(m_component.group(0)[:-1], lang, lang_module_roots) if m_component else lang_module_roots
+            result.extend(_collect_include_partials(target_file, target_root, next_lang_module_roots, lang, depth + 1, seen, own_name, own_lang_module_roots))
     return result
 
 
-def _anchor_exists(target_file: Path, anchor_id: str, root: Path, lang_module_roots=None, lang="en") -> bool:
+def _anchor_exists(target_file: Path, anchor_id: str, root: Path, lang_module_roots=None, lang="en", own_name=None, own_lang_module_roots=None) -> bool:
+    """`own_name`/`own_lang_module_roots` let a caller that has already
+    resolved `target_file` into a registered --external-root
+    component's own content (rather than the current repo's) pass this
+    tool run's true home identity/modules through to
+    _collect_include_partials unchanged, while `lang_module_roots`
+    itself is the *local* (target component's own) context -- see
+    _collect_include_partials and _resolve_module_ref for why those are
+    two different things."""
     pattern = re.compile(_ANCHOR_ID_TPL.format(re.escape(anchor_id)))
-    for f in _collect_include_partials(target_file, root, lang_module_roots, lang):
+    for f in _collect_include_partials(target_file, root, lang_module_roots, lang, own_name=own_name, own_lang_module_roots=own_lang_module_roots):
         text = _read_text(f)
         if text is None:
             continue
@@ -1129,6 +1205,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 if _VERSION_PIN_RE.match(t):
                     continue  # version@component:... pin -- can't resolve, left unchecked
                 candidate_roots = list(fallback_roots)
+                ref_lang_module_roots = lang_module_roots
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
                     component = m_component.group(0)[:-1]  # strip trailing ':'
@@ -1137,6 +1214,16 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                         continue  # external component xref (blog::x, ...)
                     candidate_roots = [resolved[0]]
                     t = resolved[1]
+                    # Any anchor check below now looks inside `component`'s
+                    # own content, not this file's -- a further include
+                    # found while walking it must resolve against its own
+                    # modules, not this repo's (see _component_context).
+                    # `own_name`/`lang_module_roots` (this repo's true own)
+                    # are still passed through unchanged as the anchor
+                    # check's own_name/own_lang_module_roots below, so a
+                    # self-reference back to this repo found inside that
+                    # component's own content still resolves correctly.
+                    ref_lang_module_roots = _component_context(component, lang, lang_module_roots)
 
                 fragment = ""
                 if "#" in t:
@@ -1147,10 +1234,10 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                     found_root = next((cand for cand in candidate_roots if (cand / "pages" / page_t).is_file()), None)
                     if found_root is None:
                         report(file, lineno, f"xref:{t}")
-                    elif fragment and not _anchor_exists(found_root / "pages" / page_t, fragment, found_root, lang_module_roots, lang):
+                    elif fragment and not _anchor_exists(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots, lang, own_name, lang_module_roots):
                         report(file, lineno, f"xref:{t}#{fragment} (anchor not found)")
                 elif t:
-                    if not any(_anchor_exists(file, t, cand, lang_module_roots, lang) for cand in candidate_roots):
+                    if not any(_anchor_exists(file, t, cand, ref_lang_module_roots, lang, own_name, lang_module_roots) for cand in candidate_roots):
                         report(file, lineno, f"xref:{t} (anchor not found)")
 
             elif target.startswith("include::"):
@@ -1484,7 +1571,7 @@ def _excluded_comment_lines(path: Path) -> set:
     return excluded
 
 
-def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name=None, with_root=False):
+def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name=None, with_root=False, own_lang_module_roots=None):
     """Resolve an include::TARGET[...] target string to a concrete file
     Path, the same way _check_refs_in_file's include branch does: an
     optional component/module prefix (peeled off via _resolve_module_ref,
@@ -1505,7 +1592,8 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_nam
     resolved file's own includes (_collect_include_partials) needs the
     *resolved* root, not its own, so a component-qualified target's
     further nested includes keep resolving against that component, not
-    back against the original caller's."""
+    back against the original caller's. `own_lang_module_roots` is
+    forwarded to _resolve_module_ref unchanged -- see its docstring."""
     candidate_root = root
     qualified = False
     if _VERSION_PIN_RE.match(t):
@@ -1513,7 +1601,7 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_nam
     m_component = _COMPONENT_PREFIX_RE.match(t)
     if m_component:
         component = m_component.group(0)[:-1]
-        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
+        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name, own_lang_module_roots)
         if resolved is None:
             return None
         candidate_root, t = resolved
@@ -1571,13 +1659,28 @@ def _collect_tag_usage(lang_module_roots, lang):
     back into `lang_module_roots`, the same way it would for a genuinely
     external sibling component. Without any --external-root, no component
     is registered and this is exactly the previous, single-repo-only
-    behavior."""
+    behavior.
+
+    Each source root keeps its OWN "local" lang_module_roots paired with
+    it, rather than every root sharing this repo's single outer one -- an
+    include found while scanning a registered external component's own
+    pages/partials (e.g. a bare module-qualified include written inside
+    docs-adb's own content) must resolve against docs-adb's own modules,
+    not this repo's. `own_name`/`lang_module_roots` (this repo's true
+    own) are still passed to every call unchanged as
+    _resolve_include_target's own_name/own_lang_module_roots, so a
+    self-qualified reference back to THIS repo, found while scanning a
+    *different* component's own content (the `ADB:how-to:...[]` written
+    in docs-adbes case above), still resolves correctly -- see
+    _resolve_module_ref and _component_context for why the "local" and
+    "true home" contexts can't be merged into one."""
     events = {}
     own_name = _own_component_name(lang)
-    source_roots = list(lang_module_roots.values())
+    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
     for comp_modules in EXTERNAL_COMPONENTS.values():
-        source_roots.extend(comp_modules.get(lang, {}).values())
-    for root in source_roots:
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    for root, this_lang_module_roots in sources:
         nav = root / "nav.adoc"
         nav_files = [nav] if nav.is_file() else []
         for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")) + nav_files:
@@ -1590,7 +1693,7 @@ def _collect_tag_usage(lang_module_roots, lang):
                 if lineno in excluded:
                     continue
                 for t, attrs in _INCLUDE_MACRO_RE.findall(line):
-                    target_file = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name)
+                    target_file = _resolve_include_target(t, directory, root, this_lang_module_roots, lang, own_name, own_lang_module_roots=lang_module_roots)
                     if target_file is None:
                         continue  # external component's content, not registered via --external-root
                     tags, negated, whole_file = _parse_include_attrs(attrs)

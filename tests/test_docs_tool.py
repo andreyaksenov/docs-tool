@@ -1282,6 +1282,43 @@ class TagsOrphanedTests(FixtureTestCase):
         finally:
             shutil.rmtree(external_root, ignore_errors=True)
 
+    def test_bare_module_reference_within_external_components_own_content_is_not_wrongly_skipped(self):
+        """Regression test for a real report: checking
+        docs-adbes with --external-root ADB=../docs-adb reported
+        `note: N referenced component(s) left unchecked -- blog,
+        get-started, how-to` -- get-started/how-to are real modules
+        inside ADB's own content, not external components.
+        _collect_tag_usage scans a registered external component's own
+        pages/partials as a *source* of includes, and a bare
+        module-qualified include found there (e.g.
+        include::get-started:partial$x.adoc[] written inside docs-adb's
+        own how-to module, referencing a sibling module of THAT SAME
+        component, not this repo) must resolve against that component's
+        own modules -- previously every source root shared this repo's
+        single lang_module_roots, so the bare module name looked like
+        an unregistered external component and was wrongly recorded as
+        skipped (check_tags_orphaned's verdict doesn't cover this --
+        it only ever audits tag regions defined in this repo's own
+        modules -- so the regression shows up as this bogus note, not
+        a wrong orphaned/not-orphaned result)."""
+        self.antora_yml("en", "TEST")
+
+        external_root = Path(tempfile.mkdtemp(prefix="docs_tool_ext_repo_"))
+        (external_root / "en" / "modules" / "get-started" / "partials").mkdir(parents=True)
+        (external_root / "en" / "modules" / "get-started" / "partials" / "conn.adoc").write_text(
+            "plain content\n", encoding="utf-8"
+        )
+        (external_root / "en" / "modules" / "how-to" / "pages").mkdir(parents=True)
+        (external_root / "en" / "modules" / "how-to" / "pages" / "metrics.adoc").write_text(
+            "include::get-started:partial$conn.adoc[]\n", encoding="utf-8"
+        )
+        try:
+            dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={external_root}"])
+            _, out = self.run_check(dt.check_tags_orphaned)
+            self.assertNotIn("get-started", out)
+        finally:
+            shutil.rmtree(external_root, ignore_errors=True)
+
 
 class PagesOrphanedTests(FixtureTestCase):
     """check_pages_orphaned (RF02). Reachability here means *a nav.adoc
@@ -1585,6 +1622,38 @@ class PagesBrokenRefsTests(FixtureTestCase):
         )
         self.write("en/modules/ROOT/pages/page.adoc",
                    "xref:metrics.adoc#open_grafana[Open Grafana]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_anchor_inside_external_components_own_bare_module_include_resolves(self):
+        """Regression test for a real report: checking
+        docs-adbes with --external-root ADB=../docs-adb produced
+        `note: N referenced component(s) left unchecked -- blog,
+        get-started, how-to` -- get-started/how-to are real modules
+        inside ADB's own content, not external components. Root cause:
+        when a qualified xref (xref:ADB:how-to:metrics.adoc#anchor[])
+        sends the anchor check walking into ADB's own content, and that
+        content itself pulls in a FURTHER bare module-qualified include
+        (e.g. include::get-started:partial$x.adoc[] written inside
+        docs-adb itself, referencing one of its own sibling modules),
+        that further include used to keep resolving against this
+        repo's own modules instead of ADB's, so it looked like an
+        unregistered external component and the anchor inside it was
+        never found -- reported broken even though Antora renders it
+        fine."""
+        self.antora_yml("en", "TEST")
+        ext = Path(self._tmpdir) / "sibling-adb"
+        (ext / "en" / "modules" / "get-started" / "partials").mkdir(parents=True)
+        (ext / "en/modules/get-started/partials/conn.adoc").write_text(
+            "[#open_grafana]To open Grafana, do this.\n"
+        )
+        (ext / "en" / "modules" / "how-to" / "pages").mkdir(parents=True)
+        (ext / "en/modules/how-to/pages/metrics.adoc").write_text(
+            "= Metrics\n\ninclude::get-started:partial$conn.adoc[]\n"
+        )
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={ext}"])
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:ADB:how-to:metrics.adoc#open_grafana[Open Grafana]\n")
         ok, output = self.run_check(dt.check_pages_broken_refs)
         self.assertTrue(ok, output)
 
