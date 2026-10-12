@@ -334,8 +334,8 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```
 
 - **`ST06` · `check style --required-attrs`** — every page (not partials) must
-  set `:page-productlogo:`, `:page-author:`, `:page-htmltitle:`, and
-  `:description:`, defined anywhere in the file.
+  set `:page-productlogo:`, `:page-htmltitle:`, and `:description:`, defined
+  anywhere in the file.
   ```bash
   ./docs_tool.py check style --required-attrs
   ./docs_tool.py check style --required-attrs --page resource_groups.adoc

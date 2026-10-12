@@ -4040,19 +4040,25 @@ def check_pages_no_copyright_symbols() -> bool:
 
 
 # Order they're reported in on a MISSING line, not a priority order.
-_REQUIRED_PAGE_ATTRS = ("page-productlogo", "page-author", "page-htmltitle", "description")
+# `page-author` was dropped (it used to be required alongside these three):
+# a real report found hundreds of pages in docs-greengagedb missing it, almost
+# all bulk-imported/ported reference pages (reference/gp_toolkit/*,
+# reference/data_types.adoc, etc.) with no individual human author to name --
+# unlike the ADxx-family repos, where it's well-maintained and still a real
+# attribute pages can set, just no longer one this check demands.
+_REQUIRED_PAGE_ATTRS = ("page-productlogo", "page-htmltitle", "description")
 
 
 def check_pages_required_attrs() -> bool:
     """New check (not a port of an existing shell script): every
-    documentation page needs a product logo, an author, and title/
-    description meta tags -- set via the `:page-productlogo:`,
-    `:page-author:`, `:page-htmltitle:`, and `:description:` page
-    attributes (SEO recommendations for texts). Reuses _collect_doc_attrs,
-    the same attribute scan _check_refs_in_file uses to resolve `{attr}`
-    substitutions, so an attribute defined anywhere in the file (not just
-    above the title) counts. partials/ are excluded -- they're not
-    standalone pages and carry no metadata of their own."""
+    documentation page needs a product logo and title/description meta
+    tags -- set via the `:page-productlogo:`, `:page-htmltitle:`, and
+    `:description:` page attributes (SEO recommendations for texts).
+    Reuses _collect_doc_attrs, the same attribute scan
+    _check_refs_in_file uses to resolve `{attr}` substitutions, so an
+    attribute defined anywhere in the file (not just above the title)
+    counts. partials/ are excluded -- they're not standalone pages and
+    carry no metadata of their own."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -4070,7 +4076,7 @@ def check_pages_required_attrs() -> bool:
                     total_hits += 1
                     print(f"MISSING  {f}  ({', '.join(missing)})")
     if ok:
-        print("OK: every page defines :page-productlogo:, :page-author:, "
+        print("OK: every page defines :page-productlogo:, "
               ":page-htmltitle:, and :description:.")
     else:
         print(f"\nTotal: {total_hits} page(s) missing required attributes.")
@@ -6142,7 +6148,7 @@ SUMMARIES = {
     "pages-table-cell-periods":    "a table cell's last sentence shouldn't end with a period (but the prose before a trailing NOTE should)",
     "pages-no-curly-quotes":       "no curly quotes (‘ ’ “ ”) -- house style uses straight ' and \"",
     "pages-no-copyright-symbols":  "no ©/®/™ -- write Hive, not Hive®",
-    "pages-required-attrs":        ":page-productlogo:/:page-author:/:page-htmltitle:/:description: must all be set",
+    "pages-required-attrs":        ":page-productlogo:/:page-htmltitle:/:description: must all be set",
     "pages-heading-no-period":     "a heading's title text shouldn't end with a period",
     "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
     "pages-table-empty-cells":     "a table cell with no meaningful value should hold -- instead of nothing",

@@ -2210,7 +2210,6 @@ class PagesRequiredAttrsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("page.adoc", output)
         self.assertIn("page-productlogo", output)
-        self.assertIn("page-author", output)
         self.assertIn("page-htmltitle", output)
         self.assertIn("description", output)
 
@@ -2218,7 +2217,6 @@ class PagesRequiredAttrsTests(FixtureTestCase):
         self.write(
             "en/modules/ROOT/pages/page.adoc",
             ":page-productlogo: ROOT:adh.svg\n"
-            ":page-author: Jane Doe\n"
             ":page-htmltitle: Page title\n\n"
             "= Title\n\nSome text.\n",
         )
@@ -2230,13 +2228,31 @@ class PagesRequiredAttrsTests(FixtureTestCase):
         self.write(
             "en/modules/ROOT/pages/page.adoc",
             ":page-productlogo: ROOT:adh.svg\n"
-            ":page-author: Jane Doe\n"
             ":page-htmltitle: Page title\n"
             ":description: A page about something.\n\n"
             "= Title\n\nSome text.\n",
         )
         ok, _ = self.run_check(dt.check_pages_required_attrs)
         self.assertTrue(ok)
+
+    def test_missing_page_author_is_not_flagged(self):
+        """Regression test for a real report: hundreds of pages in
+        docs-greengagedb -- almost all bulk-imported/ported reference
+        pages (reference/gp_toolkit/*, reference/data_types.adoc, etc.)
+        -- have no individual human author to name, unlike the
+        ADxx-family repos where :page-author: is well-maintained.
+        page-author is no longer one of the attributes this check
+        demands, even though pages are still free to set it."""
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            ":page-productlogo: ROOT:adh.svg\n"
+            ":page-htmltitle: Page title\n"
+            ":description: A page about something.\n\n"
+            "= Title\n\nSome text.\n",
+        )
+        ok, output = self.run_check(dt.check_pages_required_attrs)
+        self.assertTrue(ok, output)
+        self.assertNotIn("page-author", output)
 
     def test_partials_are_not_scanned(self):
         self.write("en/modules/ROOT/partials/snippet.adoc", "Some reusable text.\n")
