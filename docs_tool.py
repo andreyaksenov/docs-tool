@@ -7384,6 +7384,19 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args):
         print(f"##### {repo} #####")
         os.chdir(repo)
         try:
+            # _own_component_name caches by lang only, assuming one repo per
+            # process -- true for every other entry point, but not here: a
+            # previous repo in this same sweep could have cached "ADBES",
+            # and docs-adb's own content can legitimately contain a fully-
+            # qualified self-reference to a DIFFERENT real component also
+            # spelled "ADBES" (e.g. xref:ADBES:ROOT:page.adoc[] inside
+            # docs-adb). Left uncleared, _resolve_module_ref's self-
+            # qualified fallback (name == own_name) would wrongly treat
+            # that as docs-adb referencing itself and resolve it into
+            # docs-adb's own modules instead of leaving it to
+            # EXTERNAL_COMPONENTS/left-unchecked -- a real false BROKEN
+            # report, not just a missed check.
+            _OWN_COMPONENT_NAME_CACHE.clear()
             skip = _apply_page_filter_for_repo(page_args)
             if skip:
                 continue

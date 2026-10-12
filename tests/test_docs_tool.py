@@ -4642,6 +4642,31 @@ class MultiRepoCheckTests(unittest.TestCase):
         self.assertIn(f"##### {self.repo_b}", out)
         self.assertEqual(out.count("no uncommitted .adoc changes"), 2)
 
+    def test_own_component_name_cache_does_not_leak_across_repos(self):
+        """Regression test for a real bug found while testing
+        --auto-external-root: _own_component_name caches by lang only,
+        assuming one repo per process -- true for every other entry
+        point, but not a --repo sweep. repo_b's own content here
+        contains a fully-qualified reference to "FIRST" -- coincidentally
+        repo_a's real antora.yml name, not repo_b's own, and not
+        registered via --external-root -- so it must be left unchecked
+        (same as if repo_b were checked alone), not wrongly treated as
+        repo_b referencing itself (which would resolve it into repo_b's
+        own ROOT module, where the target page doesn't exist, and report
+        a false BROKEN). repo_a runs first in the sweep specifically so
+        its name is what a leaked cache would carry over."""
+        self._write(self.repo_a, "en/antora.yml", "name: FIRST\nversion: '1.0'\n")
+        self._write(self.repo_a, "en/modules/ROOT/pages/index.adoc", "= Index\n")
+        self._write(self.repo_b, "en/antora.yml", "name: SECOND\nversion: '1.0'\n")
+        self._write(self.repo_b, "en/modules/ROOT/pages/page.adoc",
+                    "xref:FIRST:ROOT:missing.adoc[]\n")
+        code, out, err = self._run("check", "refs", "--broken",
+                                  "--repo", str(self.repo_a), "--repo", str(self.repo_b))
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("BROKEN", out)
+        self.assertIn("left unchecked", err)
+        self.assertIn("FIRST", err)
+
     def test_explicit_glossary_path_resolves_against_original_cwd(self):
         """A relative --glossary PATH must keep pointing at the same file
         for every repo, not wherever chdir happened to land."""
