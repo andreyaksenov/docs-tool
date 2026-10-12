@@ -1283,7 +1283,7 @@ class TagsOrphanedTests(FixtureTestCase):
             shutil.rmtree(external_root, ignore_errors=True)
 
     def test_bare_module_reference_within_external_components_own_content_is_not_wrongly_skipped(self):
-        """Regression test for the real Anton Vasiliev report: checking
+        """Regression test for a real report: checking
         docs-adbes with --external-root ADB=../docs-adb reported
         `note: N referenced component(s) left unchecked -- blog,
         get-started, how-to` -- get-started/how-to are real modules
@@ -1626,7 +1626,7 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertTrue(ok, output)
 
     def test_anchor_inside_external_components_own_bare_module_include_resolves(self):
-        """Regression test for the real Anton Vasiliev report: checking
+        """Regression test for a real report: checking
         docs-adbes with --external-root ADB=../docs-adb produced
         `note: N referenced component(s) left unchecked -- blog,
         get-started, how-to` -- get-started/how-to are real modules
