@@ -830,14 +830,19 @@ def check_nav_structure_parity() -> bool:
 # --------------------------------------------------------------------------
 
 _REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2}|link:{1,2})[^\]\[\s]+\[')
-# `[#id]$` on its own required the WHOLE line to be the attribute list --
-# missed a real anchor found in docs-adpg's configure-logging.adoc:
-# `a|[#log_min_messages]`, an AsciiDoc-content table cell (`a|`) whose
-# block-attribute list sits right after the cell marker, on the same line,
-# ahead of the anchored paragraph. Same optional cell-prefix shape as
-# _TABLE_CELL_START_RE, so a `[#id]` immediately after any table cell
-# marker (a|, m|, ^|, .2+a|, ...) still counts as the whole attribute list.
-_ANCHOR_ID_TPL = r'^(?:[.\d+<>^~a-z]{{0,6}}\|)?\[#{0}\]$|\[\[{0}(,|\]\])'
+# `[#id]` is AsciiDoc's inline anchor form -- it attaches to whatever
+# touches it immediately after, with no space, wherever it appears in the
+# line: a block-attribute line by itself (`[#id]`), right after a table
+# cell marker (`a|[#id]`, the docs-adpg configure-logging.adoc case), or
+# inline mid-list-item (`* [#id]*_Text_* -- ...`, the real docs-greengagedb
+# report this was fixed for -- an anchor was missed on a list item because
+# the old regex required the WHOLE line to be just `[#id]`). Verified
+# against real Asciidoctor: a *space* right after `[#id]` breaks the
+# anchor outright (it renders as literal text and logs "possible invalid
+# reference" instead), so the `(?!\s)` here isn't just tidiness -- it's
+# the actual rule AsciiDoc itself enforces, not merely how this tool
+# reads it.
+_ANCHOR_ID_TPL = r'\[#{0}\](?!\s)|\[\[{0}(,|\]\])'
 
 # Antora injects these as page-scoped attributes pointing at each family's
 # directory for the current module (https://docs.antora.org -- "family

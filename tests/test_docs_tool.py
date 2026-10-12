@@ -1520,6 +1520,43 @@ class PagesBrokenRefsTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_broken_refs)
         self.assertTrue(ok, output)
 
+    def test_anchor_mid_line_in_a_list_item_resolves(self):
+        """Regression test for the real docs-adbes adbm-run-actions.adoc
+        case: `* [#flag-fail]*_Fail on low space_* -- a flag that...` --
+        an inline anchor with text both before (the list marker) and
+        after (the bold-italic phrase) on the same line. Verified against
+        real Asciidoctor that this creates a working anchor; the old
+        regex required the WHOLE line to be just `[#id]`, so it missed
+        anything with trailing content after the closing `]`."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/actions.adoc",
+            "= Actions\n\n"
+            "* [#flag-fail]*_Fail on low space_* -- a flag that indicates something.\n"
+            "* Another item.\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:actions.adoc#flag-fail[Fail on low space]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_anchor_followed_by_a_space_does_not_resolve(self):
+        """Verified against real Asciidoctor: a space right after `[#id]`
+        breaks the anchor outright -- it renders as literal text and logs
+        "possible invalid reference" instead of attaching to anything.
+        Must still be reported broken, not loosened into a false pass."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/actions.adoc",
+            "= Actions\n\n"
+            "[#flag-fail] *_Fail on low space_* -- with a space after the anchor.\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:actions.adoc#flag-fail[Fail on low space]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("flag-fail", output)
+
     def test_self_qualified_own_component_image_resolves(self):
         """Regression test for the docs-adcm scenario:
         image::ADCM:ROOT:pic.png[] written inside docs-adcm's own content
