@@ -945,6 +945,7 @@ def _strip_root_slash(t: str) -> str:
     return t.lstrip("/")
 
 _HEADING_ID_RE = re.compile(r'^=+\s+(.*\S)\s*$')
+_HEADING_INLINE_ANCHOR_RE = re.compile(r'^\[\[[\w-]+(?:,[^\]]*)?\]\]\s*')
 _ID_STRIP_MARKUP_RE = re.compile(r'[`*]')
 _ID_INVALID_CHARS_RE = re.compile(r'[^\w]+', re.UNICODE)
 _ID_PREFIX_SEP_COMBOS = (("", "-"), ("_", "_"), ("", "_"), ("_", "-"))
@@ -957,12 +958,59 @@ def _heading_autoids(title: str):
     reproduce that derivation. The exact result depends on the site's
     `idprefix`/`idseparator` attributes (not visible to this tool, since
     they live in the Antora playbook, not this repo), so this tries a few
-    common conventions and accepts a match against any of them."""
+    common conventions and accepts a match against any of them.
+
+    A leading inline `[[id]]`/`[[id,reftext]]` anchor (`== [[id]]Title`) is
+    stripped first -- confirmed against real Asciidoctor that this form is
+    excluded from the heading's own visible title (and therefore its own
+    auto-id derivation too), rendered as a separate `<a id="id">` tag
+    alongside the normal `<h2 id="_title">`. Unlike that double-bracket
+    form, an inline `[#id]` (single bracket) is NOT a recognized anchor
+    position at all -- Asciidoctor renders it as plain literal text, which
+    genuinely is part of the title and must stay in the autoid
+    computation, so it's deliberately left untouched here."""
+    title = _HEADING_INLINE_ANCHOR_RE.sub("", title)
     plain = _ID_STRIP_MARKUP_RE.sub("", title).lower()
     return {
         prefix + _ID_INVALID_CHARS_RE.sub(sep, plain).strip(sep)
         for prefix, sep in _ID_PREFIX_SEP_COMBOS
     }
+
+
+# A whole line that is just an explicit block ID -- [#id], [#id.role...], or
+# [[id]]/[[id,reftext]] -- as opposed to some other [attribute]-only line
+# (_BLOCK_ATTR_LINE_RE matches both; this is the narrower subset that's
+# actually an ID).
+_BLOCK_ID_LINE_RE = re.compile(r'^\[#[\w-]+(?:\.[\w-]+)*\]\s*$|^\[\[[\w-]+(?:,[^\]]*)?\]\]\s*$')
+
+
+def _explicit_id_suppresses_autoid(lines, idx):
+    """True if the (0-based) heading line at `idx` is immediately preceded
+    by an explicit block ID of its own (see _BLOCK_ID_LINE_RE), skipping
+    over other pure-attribute lines in between (e.g. `[.role]`,
+    `[discrete]`) the same way _has_caption_above skips an anchor line to
+    find a caption above it.
+
+    Confirmed against real Asciidoctor: an explicit ID given this way
+    REPLACES the heading's own auto-generated id entirely -- `[#single]`
+    directly above `==== *Прочие сервисы*` renders `id="single"` only,
+    never also the heading-text-derived `прочие-сервисы` -- so
+    _heading_autoids must not be consulted for that heading at all.
+
+    Deliberately NOT extended to an inline `[[id]]` embedded WITHIN the
+    heading's own title text on the same line (`== [[id]]Title`, which the
+    original bug report suggested treating the same way): verified against
+    real Asciidoctor that this does NOT suppress the auto-id -- it adds a
+    *second*, separate anchor alongside the normal one (`<h2
+    id="_title"><a id="id"></a>Title</h2>`). That inline anchor is already
+    matched independently by the plain line-pattern search in
+    _anchor_exists, so no special-casing is needed (or correct) here."""
+    j = idx - 1
+    while j >= 0 and _BLOCK_ATTR_LINE_RE.match(lines[j]):
+        if _BLOCK_ID_LINE_RE.match(lines[j]):
+            return True
+        j -= 1
+    return False
 
 
 _OWN_COMPONENT_NAME_CACHE = {}
@@ -1077,7 +1125,7 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None, own_
     return None
 
 
-def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, lang="en", depth=0, seen=None, own_name=None, own_lang_module_roots=None):
+def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, lang="en", depth=0, seen=None, own_name=None, own_lang_module_roots=None, only_lines=None):
     """A page's anchors may live in content it pulls in via include::
     (recursively), not its own source -- an explicit partial$/page$/
     example$-marked target, a component/module-qualified target with no
@@ -1092,6 +1140,25 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
     include spelled out page$ explicitly, even though Antora resolves
     the unmarked form identically. Depth-capped to guard against an
     accidental include cycle.
+
+    Returns a list of (file, only_lines) pairs, not bare paths --
+    `only_lines` is the set of 1-based line numbers of `file` that are
+    ACTUALLY pulled in (None means the whole file), computed from each
+    include::...[tag=/tags=...] attribute list via _parse_include_attrs/
+    _tag_filtered_line_numbers, the same primitives _flatten_delimiter_
+    lines (MK02) already uses for this. Real bug this fixes: an anchor
+    living in a tagged region a page never actually includes (e.g. a
+    heading inside tag::part-07[]/end::part-07[] when only part-01 and
+    part-20 are ever requested) used to count as reachable just because
+    it was *somewhere* in a file reached through *some* include chain --
+    `check refs --broken` then passed a real link that renders nowhere.
+    An include line that itself sits inside a region the CURRENT scope
+    excludes is skipped entirely (it never recurses into it), which also
+    covers a nested include inside an excluded tagged region.
+    `seen` is therefore keyed on (file, only_lines) rather than bare
+    file -- the same partial included twice with two different, non-
+    overlapping tags (a real, common pattern) must be walked both times,
+    not deduped away after the first.
 
     `lang_module_roots` is the "local" module context -- whichever
     component's own content is currently being walked -- and switches
@@ -1115,12 +1182,13 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
     contexts can't be merged into one."""
     if seen is None:
         seen = set()
-    if depth > 5 or file in seen:
+    key = (file, None if only_lines is None else frozenset(only_lines))
+    if depth > 5 or key in seen:
         return []
-    seen.add(file)
-    result = [file]
-    text = _read_text(file)
-    if text is None:
+    seen.add(key)
+    result = [(file, only_lines)]
+    lines = _read_lines(file)
+    if lines is None:
         return result
     lang_module_roots = lang_module_roots or {}
     if own_name is None:
@@ -1128,16 +1196,25 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
     if own_lang_module_roots is None:
         own_lang_module_roots = lang_module_roots
     directory = file.parent
-    for m in _INCLUDE_MACRO_RE.finditer(text):
-        t = m.group(1)
-        resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True, own_lang_module_roots=own_lang_module_roots)
-        if resolved is None:
-            continue  # version pin, or an external component not registered via --external-root
-        target_file, target_root = resolved
-        if target_file.is_file():
+    for lineno, line in enumerate(lines, 1):
+        if only_lines is not None and lineno not in only_lines:
+            continue
+        for m in _INCLUDE_MACRO_RE.finditer(line):
+            t, attrs_str = m.group(1), m.group(2)
+            resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True, own_lang_module_roots=own_lang_module_roots)
+            if resolved is None:
+                continue  # version pin, or an external component not registered via --external-root
+            target_file, target_root = resolved
+            if not target_file.is_file():
+                continue
+            target_lines = _read_lines(target_file)
+            if target_lines is None:
+                continue
+            tags, negated, whole_file = _parse_include_attrs(attrs_str)
+            child_only_lines = _tag_filtered_line_numbers(target_lines, tags, negated, whole_file)
             m_component = _COMPONENT_PREFIX_RE.match(t)
             next_lang_module_roots = _component_context(m_component.group(0)[:-1], lang, lang_module_roots) if m_component else lang_module_roots
-            result.extend(_collect_include_partials(target_file, target_root, next_lang_module_roots, lang, depth + 1, seen, own_name, own_lang_module_roots))
+            result.extend(_collect_include_partials(target_file, target_root, next_lang_module_roots, lang, depth + 1, seen, own_name, own_lang_module_roots, child_only_lines))
     return result
 
 
@@ -1149,17 +1226,31 @@ def _anchor_exists(target_file: Path, anchor_id: str, root: Path, lang_module_ro
     _collect_include_partials unchanged, while `lang_module_roots`
     itself is the *local* (target component's own) context -- see
     _collect_include_partials and _resolve_module_ref for why those are
-    two different things."""
+    two different things.
+
+    _collect_include_partials now returns (file, only_lines) pairs, not
+    bare paths -- only_lines (None = whole file) is which of that file's
+    lines are actually pulled in by the include chain that reached it
+    (tag=/tags= honored), so a line outside that scope is skipped here
+    too, the same real-anchor-vs-unused-tagged-region distinction that
+    motivated returning it in the first place.
+
+    A heading line only counts via its auto-generated id when nothing
+    above it already gave it an explicit one -- see
+    _explicit_id_suppresses_autoid."""
     pattern = re.compile(_ANCHOR_ID_TPL.format(re.escape(anchor_id)))
-    for f in _collect_include_partials(target_file, root, lang_module_roots, lang, own_name=own_name, own_lang_module_roots=own_lang_module_roots):
-        text = _read_text(f)
-        if text is None:
+    for f, only_lines in _collect_include_partials(target_file, root, lang_module_roots, lang, own_name=own_name, own_lang_module_roots=own_lang_module_roots):
+        lines = _read_lines(f)
+        if lines is None:
             continue
-        for line in text.splitlines():
+        for idx, line in enumerate(lines):
+            if only_lines is not None and (idx + 1) not in only_lines:
+                continue
             if pattern.search(line):
                 return True
             m = _HEADING_ID_RE.match(line)
-            if m and anchor_id in _heading_autoids(m.group(1)):
+            if (m and not _explicit_id_suppresses_autoid(lines, idx)
+                    and anchor_id in _heading_autoids(m.group(1))):
                 return True
     return False
 

@@ -1778,6 +1778,167 @@ class PagesBrokenRefsTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_broken_refs)
         self.assertTrue(ok, output)
 
+    def test_anchor_inside_an_unrequested_tagged_region_is_broken(self):
+        """Regression test for a real bug: an anchor used to count as
+        reachable just because it lived SOMEWHERE in a file reached
+        through SOME include chain, regardless of which tagged region
+        that chain's include::...[tag=...] actually requested. A
+        heading inside tag::other[] that the include never asks for
+        must not resolve -- the rendered page has no such anchor."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/common.adoc",
+            "tag::wanted[]\nWanted content.\nend::wanted[]\n"
+            "tag::other[]\n[#other-anchor]\nOther content.\nend::other[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/source.adoc",
+            "= Source\n\ninclude::partial$common.adoc[tag=wanted]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:source.adoc#other-anchor[Other]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("other-anchor", output)
+
+    def test_anchor_inside_a_requested_tagged_region_still_resolves(self):
+        """Companion to the above -- the tag-scoping fix must not become
+        too strict and start rejecting anchors that ARE actually pulled
+        in."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/common.adoc",
+            "tag::wanted[]\n[#wanted-anchor]\nWanted content.\nend::wanted[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/source.adoc",
+            "= Source\n\ninclude::partial$common.adoc[tag=wanted]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:source.adoc#wanted-anchor[Wanted]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_same_partial_included_twice_with_different_tags_both_resolve(self):
+        """Guards the seen-dedup key change (file+scope, not bare file):
+        the same partial included at two different call sites with two
+        different, non-overlapping tags is a real, common pattern, and
+        both regions must be checked, not just whichever one the dedup
+        reached first."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/common.adoc",
+            "tag::a[]\n[#anchor-a]\nSection A.\nend::a[]\n"
+            "tag::b[]\n[#anchor-b]\nSection B.\nend::b[]\n",
+        )
+        self.write("en/modules/ROOT/pages/source-a.adoc",
+                   "= A\n\ninclude::partial$common.adoc[tag=a]\n")
+        self.write("en/modules/ROOT/pages/source-b.adoc",
+                   "= B\n\ninclude::partial$common.adoc[tag=b]\n")
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "xref:source-a.adoc#anchor-a[A]\nxref:source-b.adoc#anchor-b[B]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_negated_tag_region_is_broken(self):
+        """tags=**;!b -- an anchor inside the negated region b must be
+        broken even though the wildcard would otherwise pull in
+        everything else."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/common.adoc",
+            "tag::a[]\n[#anchor-a]\nSection A.\nend::a[]\n"
+            "tag::b[]\n[#anchor-b]\nSection B.\nend::b[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/source.adoc",
+            "= Source\n\ninclude::partial$common.adoc[tags=**;!b]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "xref:source.adoc#anchor-a[A]\nxref:source.adoc#anchor-b[B]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertEqual(output.count("BROKEN"), 1)
+        self.assertIn("anchor-b", output)
+
+    def test_include_inside_an_excluded_region_is_not_followed(self):
+        """An include:: line that itself sits inside a tagged region the
+        outer include doesn't request must not be followed at all --
+        this covers a nested include inside an excluded region, not just
+        plain content inside one."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/inner.adoc",
+                   "[#inner-anchor]\nInner content.\n")
+        self.write(
+            "en/modules/ROOT/partials/outer.adoc",
+            "tag::wanted[]\nWanted content.\nend::wanted[]\n"
+            "tag::skipped[]\ninclude::partial$inner.adoc[]\nend::skipped[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/source.adoc",
+            "= Source\n\ninclude::partial$outer.adoc[tag=wanted]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:source.adoc#inner-anchor[Inner]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("inner-anchor", output)
+
+    def test_explicit_id_above_heading_suppresses_the_autoid(self):
+        """Regression test for a real bug, verified against real
+        Asciidoctor: `[#explicit]` directly above a heading REPLACES its
+        auto-generated id entirely (confirmed: renders id="explicit"
+        only, never also the heading-text-derived id). #explicit must
+        resolve; the heading-text-derived id must not."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc",
+                   "= Target\n\n[#explicit]\n== Some Heading Text\n")
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "xref:target.adoc#explicit[Explicit]\n"
+            "xref:target.adoc#some-heading-text[Auto]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("some-heading-text", output)
+        self.assertEqual(output.count("BROKEN"), 1)
+
+    def test_explicit_id_with_a_role_attribute_line_between_still_suppresses(self):
+        """A `[.role]`/`[discrete]`-style attribute line between the
+        explicit ID and the heading doesn't cancel the suppression."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc",
+                   "= Target\n\n[#explicit]\n[.role]\n== Some Heading Text\n")
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "xref:target.adoc#explicit[Explicit]\n"
+            "xref:target.adoc#some-heading-text[Auto]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("some-heading-text", output)
+
+    def test_inline_double_bracket_anchor_within_heading_does_not_suppress_autoid(self):
+        """Verified against real Asciidoctor: `== [[id]]Title` does NOT
+        replace the heading's auto-id the way a block-ID line above it
+        does -- it adds an extra, separate anchor alongside the normal
+        one (`<h2 id="_title"><a id="id"></a>Title</h2>`). Both the
+        inline anchor and the heading's own auto-id must resolve."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc",
+                   "= Target\n\n== [[myid]]Some Heading Text\n")
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "xref:target.adoc#myid[Extra]\n"
+            "xref:target.adoc#some-heading-text[Auto]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
     def test_anchor_inside_external_components_own_bare_module_include_resolves(self):
         """Regression test for a real report: checking
         docs-adbes with --external-root ADB=../docs-adb produced
