@@ -976,12 +976,20 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None):
 
 
 def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, lang="en", depth=0, seen=None):
-    """A page's anchors may live in content it pulls in via
-    include::partial$...[] or include::page$...[] (recursively, and
-    possibly module- or component-qualified, e.g.
-    include::how-to:partial$...[] or include::ADCM:ROOT:partial$...[]), not
-    its own source. Depth-capped to guard against an accidental include
-    cycle."""
+    """A page's anchors may live in content it pulls in via include::
+    (recursively), not its own source -- an explicit partial$/page$/
+    example$-marked target, a component/module-qualified target with no
+    family marker at all (Antora defaults that to the page family, e.g.
+    include::ADB:how-to:metrics.adoc[tag=x]), or a bare relative-path
+    include of a sibling file. Reuses _resolve_include_target (the same
+    resolver _check_refs_in_file's own include branch and
+    _collect_tag_usage already trust) for all three, instead of this
+    function keeping its own narrower, independently-drifting copy of
+    that logic -- a real docs-adbes report: an anchor inside a
+    tag=-included region of an external ADB page wasn't found unless the
+    include spelled out page$ explicitly, even though Antora resolves
+    the unmarked form identically. Depth-capped to guard against an
+    accidental include cycle."""
     if seen is None:
         seen = set()
     if depth > 5 or file in seen:
@@ -993,15 +1001,13 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
         return result
     lang_module_roots = lang_module_roots or {}
     own_name = _own_component_name(lang)
-    for prefix1, prefix2, family, name in _INCLUDE_CONTENT_RE.findall(text):
-        target_root = root
-        if prefix1:
-            resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", lang_module_roots, lang, own_name)
-            if resolved is None:
-                continue  # external component's content, not registered via --external-root
-            target_root, _ = resolved
-        subdir = "partials" if family == "partial" else "pages"
-        target_file = target_root / subdir / _strip_root_slash(name)
+    directory = file.parent
+    for m in _INCLUDE_MACRO_RE.finditer(text):
+        t = m.group(1)
+        resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True)
+        if resolved is None:
+            continue  # version pin, or an external component not registered via --external-root
+        target_file, target_root = resolved
         if target_file.is_file():
             result.extend(_collect_include_partials(target_file, target_root, lang_module_roots, lang, depth + 1, seen))
     return result
@@ -1478,7 +1484,7 @@ def _excluded_comment_lines(path: Path) -> set:
     return excluded
 
 
-def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name=None):
+def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name=None, with_root=False):
     """Resolve an include::TARGET[...] target string to a concrete file
     Path, the same way _check_refs_in_file's include branch does: an
     optional component/module prefix (peeled off via _resolve_module_ref,
@@ -1494,7 +1500,12 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_nam
     which is a real, common form -- not every include is Antora
     resource-id-qualified). Returns None for an unregistered external
     component, same as broken-refs: can't resolve, not this tool's problem
-    to check."""
+    to check. `with_root=True` returns (target_file, candidate_root)
+    instead of just target_file -- a caller that recurses into the
+    resolved file's own includes (_collect_include_partials) needs the
+    *resolved* root, not its own, so a component-qualified target's
+    further nested includes keep resolving against that component, not
+    back against the original caller's."""
     candidate_root = root
     qualified = False
     if _VERSION_PIN_RE.match(t):
@@ -1509,15 +1520,16 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_nam
         qualified = True
 
     if t.startswith("partial$"):
-        return candidate_root / "partials" / _strip_root_slash(t[len("partial$"):])
+        target_file = candidate_root / "partials" / _strip_root_slash(t[len("partial$"):])
     elif t.startswith("example$"):
-        return candidate_root / "examples" / _strip_root_slash(t[len("example$"):])
+        target_file = candidate_root / "examples" / _strip_root_slash(t[len("example$"):])
     elif t.startswith("page$"):
-        return candidate_root / "pages" / _strip_root_slash(t[len("page$"):])
+        target_file = candidate_root / "pages" / _strip_root_slash(t[len("page$"):])
     elif qualified:
-        return candidate_root / "pages" / _strip_root_slash(t)
+        target_file = candidate_root / "pages" / _strip_root_slash(t)
     else:
-        return directory / t
+        target_file = directory / t
+    return (target_file, candidate_root) if with_root else target_file
 
 
 _INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')

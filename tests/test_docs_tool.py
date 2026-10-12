@@ -1557,6 +1557,37 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("flag-fail", output)
 
+    def test_anchor_inside_a_qualified_no_family_include_resolves(self):
+        """Regression test for the real docs-adbes report: an anchor
+        living inside a region pulled in via a bare component:module:
+        page.adoc include target with no page$ marker at all
+        (include::ADB:how-to:metrics.adoc[tag=open_grafana]) -- Antora
+        defaults that to the page family and resolves it fine (same as
+        a qualified xref with no family marker), but
+        _collect_include_partials used to require an explicit page$/
+        partial$ marker to even recognize the line as an include at
+        all, so it never walked into the external file to look for the
+        anchor -- fixed by it reusing _resolve_include_target instead of
+        its own narrower, independently-drifting copy of that logic."""
+        self.antora_yml("en", "TEST")
+        ext = Path(self._tmpdir) / "sibling"
+        (ext / "en" / "modules" / "how-to" / "pages").mkdir(parents=True)
+        (ext / "en/modules/how-to/pages/metrics.adoc").write_text(
+            "= Metrics\n\n"
+            "tag::open_grafana[]\n"
+            "[#open_grafana]To open Grafana, do this.\n"
+            "end::open_grafana[]\n"
+        )
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={ext}"])
+        self.write(
+            "en/modules/ROOT/pages/metrics.adoc",
+            "= Metrics\n\ninclude::ADB:how-to:metrics.adoc[tag=open_grafana]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:metrics.adoc#open_grafana[Open Grafana]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
     def test_self_qualified_own_component_image_resolves(self):
         """Regression test for the docs-adcm scenario:
         image::ADCM:ROOT:pic.png[] written inside docs-adcm's own content
