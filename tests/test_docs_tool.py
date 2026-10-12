@@ -999,6 +999,90 @@ class LoadExternalComponentsTests(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class AutoDiscoverExternalRootSpecsTests(unittest.TestCase):
+    """--auto-external-root: _auto_discover_external_root_specs and
+    _merged_external_root_specs. Regression tests for the real feature
+    request: naive dir-name guessing (assume a directory named
+    docs-adpg-control is named "ADPGCONTROL" the obvious way) is wrong
+    for a real fraction of a real fleet, so this reads each sibling's
+    actual antora.yml name instead."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_auto_ext_")
+        self.base = Path(self._tmpdir)
+        self._orig_cwd = Path.cwd()
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _make_repo(self, dirname, name, lang="en"):
+        repo = self.base / dirname
+        (repo / lang).mkdir(parents=True)
+        (repo / lang / "antora.yml").write_text(f"name: {name}\nversion: '1.0'\n", encoding="utf-8")
+        return repo
+
+    def test_resolves_real_antora_yml_name_not_a_guess_from_dirname(self):
+        """The exact motivating case: a directory named docs-adpg-control
+        whose antora.yml name is "ADPGCONTROL", not a hyphen-derived
+        guess."""
+        self._make_repo("docs-adpg-control", "ADPGCONTROL")
+        specs = dt._auto_discover_external_root_specs(str(self.base))
+        self.assertEqual(len(specs), 1)
+        name, _, path = specs[0].partition("=")
+        self.assertEqual(name, "ADPGCONTROL")
+        self.assertEqual(Path(path), (self.base / "docs-adpg-control").resolve())
+
+    def test_unrelated_directory_name_also_resolves_correctly(self):
+        """docs-greengagedb's real antora.yml name is "docs-gg" -- entirely
+        unrelated to its directory name."""
+        self._make_repo("docs-greengagedb", "docs-gg")
+        specs = dt._auto_discover_external_root_specs(str(self.base))
+        self.assertEqual(specs, [f"docs-gg={(self.base / 'docs-greengagedb').resolve()}"])
+
+    def test_ru_only_antora_yml_is_found_too(self):
+        self._make_repo("some-repo", "SOMEREPO", lang="ru")
+        specs = dt._auto_discover_external_root_specs(str(self.base))
+        self.assertEqual(specs, [f"SOMEREPO={(self.base / 'some-repo').resolve()}"])
+
+    def test_directory_without_antora_yml_is_skipped(self):
+        (self.base / "not-a-docs-repo").mkdir()
+        self._make_repo("real-repo", "REAL")
+        specs = dt._auto_discover_external_root_specs(str(self.base))
+        self.assertEqual(specs, [f"REAL={(self.base / 'real-repo').resolve()}"])
+
+    def test_current_directory_is_excluded(self):
+        """Scanning ".." naturally lists this repo's own directory as one
+        of its own siblings -- it must not register itself as its own
+        external root."""
+        own = self._make_repo("this-repo", "THIS")
+        self._make_repo("other-repo", "OTHER")
+        os.chdir(own)
+        specs = dt._auto_discover_external_root_specs(str(self.base))
+        names = [s.partition("=")[0] for s in specs]
+        self.assertEqual(names, ["OTHER"])
+
+    def test_nonexistent_dir_is_a_usage_error(self):
+        with self.assertRaises(SystemExit) as cm:
+            dt._auto_discover_external_root_specs(str(self.base / "no-such-dir"))
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_merged_specs_puts_auto_discovered_first_explicit_last(self):
+        """_load_external_components lets a later same-NAME spec win, so
+        appending explicit --external-root specs after the auto-
+        discovered ones is what makes them override, with no separate
+        override logic needed."""
+        self._make_repo("docs-adb", "ADB")
+        specs = dt._merged_external_root_specs(str(self.base), ["ADB=/explicit/override"])
+        self.assertEqual(specs, [f"ADB={(self.base / 'docs-adb').resolve()}", "ADB=/explicit/override"])
+        components = dt._load_external_components(specs)
+        self.assertEqual(components["ADB"]["en"], {})  # /explicit/override has no en/modules
+
+    def test_no_auto_dir_means_only_explicit_specs(self):
+        self.assertEqual(dt._merged_external_root_specs(None, ["A=/x"]), ["A=/x"])
+        self.assertEqual(dt._merged_external_root_specs(None, None), [])
+
+
 class LoadGlossaryTests(unittest.TestCase):
     def _load(self, rows_text: str):
         """rows_text is the pipe-delimited body (without header row/comments)."""
@@ -4324,6 +4408,42 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("nav.adoc", out)
         for t in dt._SCAN_TARGETS + ("all",):
             self.assertIn(t, out)
+
+    def test_list_external_roots_merges_auto_and_explicit(self):
+        """End-to-end through main(): a sibling directory with its own
+        antora.yml name, auto-discovered, plus an explicit --external-root
+        override for the same name."""
+        sibling = Path(self._tmp).parent / f"sibling-{Path(self._tmp).name}"
+        (sibling / "en").mkdir(parents=True)
+        (sibling / "en" / "antora.yml").write_text("name: SIBLING\nversion: '1.0'\n", encoding="utf-8")
+        try:
+            code, out, _ = self._run("list", "external-roots",
+                                      "--auto-external-root", str(sibling.parent))
+            self.assertEqual(code, 0)
+            self.assertIn(f"SIBLING={sibling.resolve()}", out.splitlines())
+
+            code, out, _ = self._run("list", "external-roots",
+                                      "--auto-external-root", str(sibling.parent),
+                                      "--external-root", "SIBLING=/override")
+            self.assertEqual(code, 0)
+            self.assertEqual(out.strip().splitlines()[-1], "SIBLING=/override")
+        finally:
+            shutil.rmtree(sibling, ignore_errors=True)
+
+    def test_list_external_roots_empty_without_any_flags(self):
+        code, out, _ = self._run("list", "external-roots")
+        self.assertEqual(code, 0)
+        self.assertIn("no external roots", out)
+
+    def test_check_with_auto_external_root_runs(self):
+        """--auto-external-root reaches 'check' the same way --external-root
+        already does -- a bad DIR is a usage error, same as a bad
+        --external-root PATH is left to _load_external_components."""
+        code, _, err = self._run("check", "refs", "--broken",
+                                  "--auto-external-root", "/no/such/dir")
+        self.assertEqual(code, 2)
+        self.assertIn("--auto-external-root", err)
+        self.assertIn("not a directory", err)
 
     def test_check_requires_a_family(self):
         code, _, err = self._run("check")

@@ -184,6 +184,66 @@ def _load_external_components(specs):
     return components
 
 
+def _auto_discover_external_root_specs(dir_arg):
+    """--auto-external-root DIR (default ".." -- siblings checked out next
+    to this repo): scans DIR's immediate subdirectories and, for each one
+    that looks like an Antora docs repo (en/modules or ru/modules present)
+    with a readable antora.yml `name:`, returns a "NAME=PATH" spec -- the
+    same format --external-root already takes, so these merge into that
+    machinery as-is (see _merged_external_root_specs) rather than needing
+    a second resolver.
+
+    The name comes from actually reading antora.yml (_parse_component_name,
+    ground truth), not from guessing it off the directory's own name --
+    naive guessing (e.g. assume a directory named docs-adpg-control is
+    named "ADPGCONTROL" the same way docs-adpg is "ADPG") is wrong for a
+    real fraction of a real fleet: docs-adpg-control/docs-adqm-control are
+    ADPGCONTROL/ADQMCONTROL (not "ADPG-CONTROL"/"ADQM-CONTROL" or
+    "ADPGCONTROL" guessed from the hyphen), and docs-greengagedb/
+    docs-greengage-backup/docs-greengage-pxf are docs-gg/docs-backup/
+    docs-pxf (unrelated to their directory names entirely) -- exactly the
+    downside this flag exists to sidestep by reading the real answer
+    instead.
+
+    Silently skips a subdirectory that isn't a docs repo, or whose
+    antora.yml has no readable name: -- it's just not an Antora component
+    to register, not an error. Also skips the current repo's own
+    directory -- scanning ".." naturally lists it as one of its own
+    siblings, and registering a repo as its own external root would be
+    redundant (self-qualified references already resolve via own_name)."""
+    base = Path(dir_arg).resolve()
+    if not base.is_dir():
+        _usage_error(f"error: --auto-external-root {dir_arg}: not a directory")
+    here = Path.cwd().resolve()
+    specs = []
+    for entry in sorted(base.iterdir()):
+        if not entry.is_dir() or entry.resolve() == here:
+            continue
+        name = None
+        for lang in ("en", "ru"):
+            name = _parse_component_name(entry / lang / "antora.yml")
+            if name:
+                break
+        if name:
+            specs.append(f"{name}={entry}")
+    return specs
+
+
+def _merged_external_root_specs(auto_dir, explicit_specs):
+    """Auto-discovered specs (from --auto-external-root) first, explicit
+    --external-root specs last. _load_external_components resolves a
+    name registered more than once by letting the later spec win, so
+    appending the explicit ones last means an explicit --external-root
+    always overrides whatever --auto-external-root guessed for the same
+    name, same as _load_external_components(["A=x", "A=y"]) already
+    resolves to "y" -- no separate override logic needed here."""
+    specs = []
+    if auto_dir is not None:
+        specs.extend(_auto_discover_external_root_specs(auto_dir))
+    specs.extend(explicit_specs or [])
+    return specs
+
+
 # Populated from --glossary PATH (see main()). Backs --check-pages-terminology:
 # {lookup_key: {"ru_display": {ru_translation, ...}, "patterns": [pattern, ...]}}
 # where each `pattern` is a tuple of compiled regexes (see _compile_glossary_pattern)
@@ -7054,7 +7114,7 @@ def _complete_show_name(prefix="", **kwargs):
 
 def _complete_list_what(prefix="", **kwargs):
     """argcomplete completer for the optional 'list' argument."""
-    return [w for w in ("rules", "targets") if w.startswith(prefix)]
+    return [w for w in ("rules", "targets", "external-roots") if w.startswith(prefix)]
 
 
 if argcomplete:
@@ -7540,7 +7600,24 @@ def _build_v2_parser():
     pa.completer = _complete_page_or_dir_name
     c.add_argument("--external-root", action="append", metavar="NAME=PATH",
                    help="Resolve cross-repo refs against a local checkout, e.g. "
-                        "--external-root ADCM=../docs-adcm. Repeatable.")
+                        "--external-root ADCM=../docs-adcm. Repeatable. Overrides "
+                        "--auto-external-root for the same NAME.")
+    c.add_argument("--auto-external-root", nargs="?", const="..", default=None, metavar="DIR",
+                   help="Register every sibling directory under DIR (default '..' "
+                        "-- this repo's own parent -- if given with no DIR) that "
+                        "looks like an Antora docs repo as an --external-root, "
+                        "using each one's own antora.yml `name:` -- not a guess "
+                        "from its directory name, which is wrong for a real "
+                        "fraction of repos (e.g. docs-adpg-control is "
+                        "ADPGCONTROL, docs-greengagedb is docs-gg). An explicit "
+                        "--external-root for the same NAME overrides this. With "
+                        "--repo, DIR is resolved once, relative to where you ran "
+                        "docs_tool from (not each --repo target) -- pass the "
+                        "directory that actually holds the repos as siblings, "
+                        "e.g. --auto-external-root . when running from their "
+                        "common parent. Run 'docs_tool list external-roots' with "
+                        "the same flags to see what would be registered before "
+                        "relying on it.")
     c.add_argument("--glossary", action="append", metavar="PATH",
                    help="Glossary file(s) for 'check terms'. Repeatable. "
                         "Defaults to *-glossary.psv in the current directory.")
@@ -7551,9 +7628,17 @@ def _build_v2_parser():
                     ).completer = _complete_show_name
 
     ls = sub.add_parser("list", help="The family/rule map (also 'list rules' / 'list targets').")
-    ls.add_argument("what", nargs="?", metavar="[rules|targets]",
-                    help="Omit for the family tree; 'rules' / 'targets' for flat lists."
+    ls.add_argument("what", nargs="?", metavar="[rules|targets|external-roots]",
+                    help="Omit for the family tree; 'rules' / 'targets' for flat "
+                         "lists; 'external-roots' to print what --external-root/"
+                         "--auto-external-root would resolve to (pass the same "
+                         "flags), one NAME=PATH per line -- handy to review before "
+                         "relying on --auto-external-root, or to pin into CI."
                     ).completer = _complete_list_what
+    ls.add_argument("--external-root", action="append", metavar="NAME=PATH",
+                    help="With 'list external-roots': same as 'check's flag.")
+    ls.add_argument("--auto-external-root", nargs="?", const="..", default=None, metavar="DIR",
+                    help="With 'list external-roots': same as 'check's flag.")
 
     s = sub.add_parser("sync", help="Align a RU page to its EN counterpart (beta).")
     sy = s.add_argument("file", metavar="EN_FILE",
@@ -7634,7 +7719,7 @@ def _check_command(key):
     return base + (f" --target {tgt}" if tgt else "")
 
 
-def _v2_list(what):
+def _v2_list(what, args=None):
     if what == "rules":
         rows = sorted((RULE_IDS[k], _check_command(k),
                        "  [beta]" if k in BETA_CHECKS else "") for k in CHECKS)
@@ -7646,11 +7731,21 @@ def _v2_list(what):
         for t, desc in TARGET_DESC.items():
             print(f"  {t:<10}{desc}")
         return
+    if what == "external-roots":
+        specs = _merged_external_root_specs(
+            getattr(args, "auto_external_root", None), getattr(args, "external_root", None))
+        if not specs:
+            print("no external roots -- pass --auto-external-root [DIR] and/or "
+                  "--external-root NAME=PATH (same as 'check' takes them)")
+            return
+        for spec in specs:
+            print(spec)
+        return
     if what == "modules":
         _usage_error("list: module discovery moved -- use 'docs_tool.py --list-modules'")
     if what not in (None, "families"):
         hint = f" -- did you mean 'docs_tool show {what}'?" if _resolve_check_name(what) else ""
-        _usage_error(f"list: unknown argument '{what}' (expected: rules, targets){hint}")
+        _usage_error(f"list: unknown argument '{what}' (expected: rules, targets, external-roots){hint}")
 
     for i, (fam, rules) in enumerate(FAMILIES.items()):
         if i:
@@ -7672,6 +7767,7 @@ def _v2_list(what):
     print("show <rule|rule-id>            one rule's rationale + examples")
     print("show all                       every rule, with examples")
     print("list rules | list targets      flat rule list · --target values")
+    print("list external-roots            what --auto-external-root/--external-root resolve to")
     print()
     print("'suggest:' is advice for your pre-commit hook, not something the tool")
     print("enforces -- a run exits 0 clean / 1 on findings (for links, only a dead")
@@ -7732,7 +7828,7 @@ def _main_v2():
     args = parser.parse_args()
 
     if args.verb == "list":
-        return _v2_list(args.what)
+        return _v2_list(args.what, args)
     if args.verb == "show":
         return _v2_show(args.name)
     if args.verb == "sync":
@@ -7741,7 +7837,8 @@ def _main_v2():
         return
 
     # verb == "check"
-    EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
+    EXTERNAL_COMPONENTS = _load_external_components(
+        _merged_external_root_specs(args.auto_external_root, args.external_root))
     _configure_links_from_args(args)
     # Resolved to absolute right away, same reason as EXTERNAL_COMPONENTS/
     # LINK_CACHE_PATH: an explicit --glossary applies to every --repo

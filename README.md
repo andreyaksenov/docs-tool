@@ -24,6 +24,7 @@ the `chmod` and run `python docs_tool.py …`.
 ./docs_tool.py check <family> [<family> ...] [--<rule> ...]
                      [--target NAME] [--repo PATH ...] [--page NAME ...]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
+                     [--auto-external-root [DIR]]
                      [--offline] [--timeout N] [--show-unverified]        # check links
                      [--allow-domain HOST ...] [--insecure] [--link-cache PATH]
 
@@ -31,6 +32,7 @@ the `chmod` and run `python docs_tool.py …`.
 ./docs_tool.py show all                       # every rule, with examples
 ./docs_tool.py list                           # the family tree, one line per rule
 ./docs_tool.py list rules | list targets      # flat rule list · --target values
+./docs_tool.py list external-roots            # what --auto-external-root/--external-root resolve to
 ./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
 ```
 
@@ -240,6 +242,22 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   ```
   note: 2 referenced component(s) left unchecked -- docs-backup, docs-pxf
         pass --external-root NAME=PATH for each one you have checked out locally
+  ```
+  `--auto-external-root [DIR]` (default `..` -- this repo's own parent) registers
+  every sibling directory under `DIR` that looks like an Antora docs repo,
+  using each one's own `antora.yml` `name:` rather than guessing it from the
+  directory name -- guessing gets it wrong for a real fraction of repos (e.g. a
+  directory named `docs-adpg-control` is really named `ADPGCONTROL`, and
+  `docs-greengagedb` is `docs-gg`, unrelated to its directory name at all). An
+  explicit `--external-root` for the same `NAME` overrides it. With `--repo`,
+  `DIR` is resolved once, relative to where you ran `docs_tool` from -- pass
+  the directory that actually holds the repos as siblings (e.g.
+  `--auto-external-root .` when running from their common parent), not the
+  default, which assumes you're inside one of the repos being checked.
+  ```bash
+  ./docs_tool.py check refs --broken --auto-external-root
+  ./docs_tool.py check refs --broken --auto-external-root ../siblings
+  ./docs_tool.py list external-roots --auto-external-root   # preview before relying on it
   ```
 
 - **`RF02`–`RF06` · `check refs --orphaned [--target …]`** — flags content that is
