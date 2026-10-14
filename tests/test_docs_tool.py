@@ -896,6 +896,97 @@ class PagesIconSvgTests(FixtureTestCase):
         self.assertTrue(ok, out)
 
 
+class PagesXrefTitleTests(FixtureTestCase):
+    """ST21 (--xref-title): a capitalized xref link text that overlaps
+    its target section's title but no longer matches it (a renamed
+    section whose links never followed)."""
+
+    def _setup(self, target_body, source_body):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc", target_body)
+        self.write("en/modules/ROOT/pages/src.adoc", source_body)
+
+    def test_stale_title_with_explicit_id_is_flagged(self):
+        """The real-world case: adbm-dr.adoc linked the upgrade section
+        by an old name."""
+        self._setup("= T\n\n[#upgrade_with_adbm]\n== Upgrade procedure when using ADBM\n\ntext\n",
+                    "See xref:target.adoc#upgrade_with_adbm[Upgrading with ADBM].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+        self.assertIn("Upgrade procedure when using ADBM", out)
+
+    def test_stale_title_with_auto_id_is_flagged(self):
+        self._setup("= T\n\n== Create restore point\n\ntext\n",
+                    "See xref:target.adoc#create-restore-point[Create a restore point manually].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+
+    def test_exact_title_passes(self):
+        self._setup("= T\n\n[#a]\n== Upgrade procedure\n",
+                    "See xref:target.adoc#a[Upgrade procedure].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_case_and_markup_differences_pass(self):
+        self._setup("= T\n\n[#a]\n== Upgrade `procedure`\n",
+                    "See xref:target.adoc#a[*Upgrade* Procedure].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_lowercase_prose_text_is_not_checked(self):
+        self._setup("= T\n\n[#a]\n== Upgrade procedure when using ADBM\n",
+                    "See xref:target.adoc#a[upgrading with ADBM].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_navigation_path_is_not_flagged(self):
+        self._setup("= T\n\n[#a]\n== Operations\n",
+                    "Open xref:target.adoc#a[Audit -> Operations].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_title_contained_in_text_passes(self):
+        self._setup("= T\n\n[#a]\n== Database\n",
+                    "See xref:target.adoc#a[Database service configuration parameters].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_unrelated_label_is_not_flagged(self):
+        """No shared word: a deliberate, different label, not a stale
+        quote of the title."""
+        self._setup("= T\n\n[#a]\n== Single services\n",
+                    "Then xref:target.adoc#a[Install the packages].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_anchor_on_a_non_heading_is_skipped(self):
+        self._setup("= T\n\n[#t]\n|===\n|a\n|===\n",
+                    "See xref:target.adoc#t[Some Table Name].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_same_page_xref_is_checked(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/p.adoc",
+                   "= T\n\n[#a]\n== Upgrade procedure when using ADBM\n\nSee xref:a[Upgrading with ADBM].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+
+    def test_anchor_inside_include_is_found(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/part.adoc", "[#a]\n== Upgrade procedure when using ADBM\n")
+        self.write("en/modules/ROOT/pages/target.adoc", "= T\n\ninclude::partial$part.adoc[]\n")
+        self.write("en/modules/ROOT/pages/src.adoc", "See xref:target.adoc#a[Upgrading with ADBM].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+
+    def test_commented_out_line_is_not_flagged(self):
+        self._setup("= T\n\n[#a]\n== Upgrade procedure when using ADBM\n",
+                    "// See xref:target.adoc#a[Upgrading with ADBM].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+
 class PagesAdmonitionCaptionTests(FixtureTestCase):
     def _page(self, body):
         self.antora_yml("en", "TEST")
@@ -4505,7 +4596,7 @@ class FamilySelectionTests(unittest.TestCase):
              "pages-no-curly-quotes", "pages-no-copyright-symbols",
              "pages-required-attrs", "pages-heading-no-period", "pages-heading-no-markup",
              "pages-table-empty-cells", "pages-link-new-tab", "pages-xref-own-product",
-             "pages-image-alt", "pages-icon-svg", "pages-admonition-caption",
+             "pages-image-alt", "pages-icon-svg", "pages-xref-title", "pages-admonition-caption",
              "pages-heading-article", "pages-heading-gerund", "pages-table-header",
              "pages-shell-block-lang"},
         )

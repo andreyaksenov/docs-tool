@@ -1255,6 +1255,54 @@ def _anchor_exists(target_file: Path, anchor_id: str, root: Path, lang_module_ro
     return False
 
 
+_HEADING_INLINE_ANCHOR_ID_RE = re.compile(r'^\[\[([\w-]+)(?:,[^\]]*)?\]\]\s*')
+_BLOCK_ID_CAPTURE_RE = re.compile(r'^\[#([\w-]+)(?:\.[\w-]+)*\]\s*$|^\[\[([\w-]+)(?:,[^\]]*)?\]\]\s*$')
+
+
+def _anchor_heading_title(target_file: Path, anchor_id: str, root: Path, lang_module_roots=None, lang="en", own_name=None, own_lang_module_roots=None):
+    """The title text of the heading that owns `anchor_id` in
+    `target_file` (or in anything it includes, tag= scoping honored --
+    the same walk _anchor_exists does), or None when no heading owns it:
+    the anchor is missing, or it sits on a non-heading block (a table,
+    a paragraph, an inline `[#id]#text#` span) that has no section name
+    to compare a link's text against.
+
+    A heading owns an id when it's that heading's auto-generated one
+    (see _heading_autoids) -- unless an explicit block ID above it
+    replaced it (_explicit_id_suppresses_autoid) -- or when it carries
+    an explicit `[#id]`/`[[id]]` block ID directly above or an inline
+    `== [[id]]Title` anchor."""
+    for f, only_lines in _collect_include_partials(target_file, root, lang_module_roots, lang, own_name=own_name, own_lang_module_roots=own_lang_module_roots):
+        lines = _read_lines(f)
+        if lines is None:
+            continue
+        for idx, line in enumerate(lines):
+            if only_lines is not None and (idx + 1) not in only_lines:
+                continue
+            m = _HEADING_ID_RE.match(line)
+            if not m:
+                continue
+            title = m.group(1)
+            ids = set()
+            m_inline = _HEADING_INLINE_ANCHOR_ID_RE.match(title)
+            if m_inline:
+                ids.add(m_inline.group(1))
+                title = title[m_inline.end():]
+            explicit = set()
+            j = idx - 1
+            while j >= 0 and _BLOCK_ATTR_LINE_RE.match(lines[j]):
+                m_id = _BLOCK_ID_CAPTURE_RE.match(lines[j])
+                if m_id:
+                    explicit.add(m_id.group(1) or m_id.group(2))
+                j -= 1
+            ids |= explicit
+            if not explicit:
+                ids |= _heading_autoids(title)
+            if anchor_id in ids:
+                return title.strip()
+    return None
+
+
 _CODE_DELIM_LINE_RE = re.compile(r'^(----|\.\.\.\.)\s*$')
 
 
@@ -5965,6 +6013,208 @@ def check_pages_icon_svg() -> bool:
     return ok
 
 
+_XREF_TEXT_MARKUP_RE = re.compile(r'[`*_#^]')
+# Anything whose rendered text can't be known from the source alone: an
+# unresolved {attribute}, or a nested macro/URL inside the link text.
+_XREF_TEXT_OPAQUE_RE = re.compile(r'[{<]|\b(?:xref|link|image|https?):')
+
+
+def _xref_link_text(line: str, after_bracket: int):
+    """The positional link text of the macro whose `[` ends just before
+    `after_bracket`, or None when there isn't a usable one (empty `[]`,
+    attribute-only `[role=x]`, unterminated). Text may be double-quoted
+    (the only way to put a comma in it); a trailing `^` (open in a new
+    tab) is dropped."""
+    end = line.find("]", after_bracket)
+    if end == -1:
+        return None
+    inner = line[after_bracket:end].strip()
+    if inner.startswith('"'):
+        close = inner.find('"', 1)
+        text = inner[1:close] if close != -1 else inner[1:]
+    else:
+        text = inner.split(",", 1)[0]
+    text = text.strip()
+    if text.endswith("^"):
+        text = text[:-1].rstrip()
+    if not text or "=" in text or _XREF_TEXT_OPAQUE_RE.search(text):
+        return None
+    return text
+
+
+def _plain_title(s: str) -> str:
+    """`s` as comparable plain text: inline markup characters dropped,
+    whitespace (non-breaking included) collapsed, case folded."""
+    s = _XREF_TEXT_MARKUP_RE.sub("", s).replace(" ", " ")
+    return " ".join(s.split()).casefold()
+
+
+_TITLE_WORD_RE = re.compile(r'\w+', re.UNICODE)
+_TITLE_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "when", "using", "into", "how", "that", "this",
+    "для", "при", "как", "или", "это", "при", "над", "под", "без",
+})
+
+
+def _title_words(s: str):
+    return {w for w in _TITLE_WORD_RE.findall(_plain_title(s))
+            if len(w) >= 3 and w not in _TITLE_STOPWORDS}
+
+
+def _word_stems_overlap(a: str, b: str) -> bool:
+    """True if any word of `a` and any word of `b` are the same word up to
+    an ending (upgrading/upgrade, restore/restoring): equal, or both at
+    least 4 letters with the same first 5 letters."""
+    for x in _title_words(a):
+        for y in _title_words(b):
+            if x == y or (len(x) >= 4 and len(y) >= 4 and x[:5] == y[:5]):
+                return True
+    return False
+
+
+def _xref_text_is_stale_title(text: str, title: str) -> bool:
+    """Does `text` look like an attempt to quote `title` that no longer
+    matches it? Measured against a real fleet repo, "starts with a capital
+    letter" alone flags a few hundred links that are deliberate labels
+    (`Install`, `Arenadata DB Control overview`, `Audit -> Operations`),
+    so a link text is only reported when, besides differing from the
+    title, it:
+      - is not a UI navigation path (`A -> B`),
+      - has no containment relation with the title (`Database service
+        configuration parameters` -> `Database`, `ADBM 2.14.2` -> `2.14.2`,
+        `Resume` -> `Resume a data flow` are all fine: the title is
+        still named, or the text is a shortened form of it),
+      - is at least two words (a single capitalized word is a verb or a
+        noun label, not a title), and
+      - shares a word with the title (see _word_stems_overlap): a text
+        with nothing in common is a different, deliberate label, while a
+        text that overlaps but doesn't match is the stale-title case --
+        `Upgrading with ADBM` vs `Upgrade procedure when using ADBM`."""
+    a, b = _plain_title(text), _plain_title(title)
+    if a == b or "->" in a or "\u2192" in a:
+        return False
+    if a in b or b in a:
+        return False
+    if len(a.split()) < 2:
+        return False
+    return _word_stems_overlap(a, b)
+
+
+def check_pages_xref_title() -> bool:
+    """New check (house style, a real feature request): an xref that
+    points at a section should name that section. `xref:upgrade.adoc#
+    upgrade_with_adbm[Upgrading with ADBM]` where the section is actually
+    titled "Upgrade procedure when using ADBM" reads as a stale label --
+    the section was renamed and the link text never followed.
+
+    The heuristic that tells a section-title label from ordinary running
+    text (`see the xref:x.adoc#y[settings below]`): the link text starts
+    with a capital letter (after inline markup is dropped). Lower-case
+    or non-letter-first text (a parameter name, a number, a `code span`)
+    is prose or a literal and is left alone.
+
+    Compared as plain text, case-insensitively, with inline markup and
+    whitespace differences ignored. Only xrefs with a #fragment that
+    resolves to a *heading* are compared -- an anchor on a table or a
+    paragraph has no section name, and a missing anchor is RF01's
+    business. A heading or link text that carries an {attribute} or a
+    nested macro can't be rendered from source, so it's left unchecked.
+    Target resolution mirrors _check_refs_in_file (component-qualified
+    refs against --external-root, partial includers, includes with tag=
+    scoping), so run it with the same --external-root/--auto-external-
+    root flags as `check refs --broken`. Scans pages/ and partials/ in
+    both languages."""
+    ok = True
+    total_hits = 0
+    _SKIPPED_COMPONENTS.clear()
+    _warn_if_no_external_root()
+
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+    en_includers = _build_partial_includers([(n, r) for n, r, _ in modules], en_module_roots, "en")
+    ru_includers = _build_partial_includers([(n, r) for n, _, r in modules], ru_module_roots, "ru")
+
+    for _, en_root, ru_root in modules:
+        for lang, root, lang_module_roots, includers in (
+                ("en", en_root, en_module_roots, en_includers),
+                ("ru", ru_root, ru_module_roots, ru_includers),
+        ):
+            own_name = _own_component_name(lang)
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if not _page_allowed(f):
+                    continue
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                fallback_roots = includers.get(f) or {root}
+                hits = []
+                for lineno, line in enumerate(lines, 1):
+                    if lineno in excluded:
+                        continue
+                    for m in _REF_SCAN_RE.finditer(line):
+                        target = m.group(0)[:-1]
+                        if not target.startswith("xref:"):
+                            continue
+                        t = target[len("xref:"):]
+                        if _VERSION_PIN_RE.match(t) or "{" in t:
+                            continue
+                        text = _xref_link_text(line, m.end())
+                        if text is None:
+                            continue
+                        plain = _XREF_TEXT_MARKUP_RE.sub("", text).lstrip()
+                        if not plain[:1].isupper():
+                            continue
+                        candidate_roots = list(fallback_roots)
+                        ref_lang_module_roots = lang_module_roots
+                        m_component = _COMPONENT_PREFIX_RE.match(t)
+                        if m_component:
+                            component = m_component.group(0)[:-1]
+                            resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
+                            if resolved is None:
+                                continue
+                            candidate_roots = [resolved[0]]
+                            t = resolved[1]
+                            ref_lang_module_roots = _component_context(component, lang, lang_module_roots)
+                        page, _, fragment = t.partition("#")
+                        if not fragment:
+                            if page.endswith(".adoc") or not page:
+                                continue
+                            page, fragment = "", page   # same-page xref:id[]
+                        if page:
+                            if not page.endswith(".adoc"):
+                                continue
+                            page = _strip_root_slash(page)
+                            found = next((c for c in candidate_roots if (c / "pages" / page).is_file()), None)
+                            if found is None:
+                                continue
+                            candidates = [(found / "pages" / page, found)]
+                        else:
+                            candidates = [(f, c) for c in candidate_roots]
+                        title = None
+                        for target_file, cand in candidates:
+                            title = _anchor_heading_title(target_file, fragment, cand, ref_lang_module_roots, lang, own_name, lang_module_roots)
+                            if title is not None:
+                                break
+                        if title is None or "{" in title or _XREF_TEXT_OPAQUE_RE.search(title):
+                            continue
+                        if _xref_text_is_stale_title(text, title):
+                            hits.append((lineno, target, text, title))
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {f}")
+                    for lineno, target, text, title in hits:
+                        print(f"  {f}:{lineno}: {target}[{text}]  (section is titled \"{title}\")")
+    if ok:
+        print("OK: every xref's capitalized link text matches its target section title.")
+    else:
+        print(f"\nTotal: {total_hits} xref(s) whose link text differs from the target section title.")
+    _report_skipped_components()
+    return ok
+
+
 # A `.Caption text` block title -- not a `....` literal-block delimiter
 # ((?!\.) excludes a second dot) or a numbered list item's `. text` (\S
 # requires the character right after the dot to be non-space).
@@ -6146,6 +6396,7 @@ CHECKS = {
     "pages-xref-own-product": check_pages_xref_own_product,
     "pages-image-alt": check_pages_image_alt,
     "pages-icon-svg": check_pages_icon_svg,
+    "pages-xref-title": check_pages_xref_title,
     "pages-admonition-caption": check_pages_admonition_caption,
     "pages-heading-article": check_pages_heading_article,
     "pages-heading-gerund": check_pages_heading_gerund,
@@ -6251,6 +6502,7 @@ FAMILIES = {
         "xref-own-product":   {"pages": "pages-xref-own-product"},
         "image-alt":          {"pages": "pages-image-alt"},
         "icon-svg":           {"pages": "pages-icon-svg"},
+        "xref-title":         {"pages": "pages-xref-title"},
         "admonition-caption": {"pages": "pages-admonition-caption"},
         "heading-article":    {"pages": "pages-heading-article"},
         "heading-gerund":     {"pages": "pages-heading-gerund"},
@@ -6330,6 +6582,7 @@ RULE_IDS = {
     "pages-xref-own-product":    "ST11",
     "pages-image-alt":            "ST12",
     "pages-icon-svg":             "ST20",
+    "pages-xref-title":           "ST21",
     "pages-admonition-caption":   "ST14",
     "pages-heading-article":      "ST15",
     "pages-heading-gerund":       "ST17",
@@ -6378,6 +6631,7 @@ SUMMARIES = {
     "pages-xref-own-product":      "internal xref: must not name this product's own component",
     "pages-image-alt":             "every image:: needs alt text",
     "pages-icon-svg":              "every inline icon (image:) uses .svg, not a raster format",
+    "pages-xref-title":            "capitalized xref text must match its section's title",
     "pages-admonition-caption":    "every NOTE/TIP/WARNING/IMPORTANT/CAUTION needs a .Caption above it",
     "pages-heading-article":       "a heading shouldn't start with a/an/the",
     "pages-heading-gerund":        "a heading shouldn't start with a gerund + object -- use the infinitive",
@@ -6442,6 +6696,7 @@ RULE_FLAGS = {
     "pages-xref-own-product":      "xref: names its own product",
     "pages-image-alt":             "image with no alt text",
     "pages-icon-svg":              "inline icon not .svg",
+    "pages-xref-title":            "link text not the section title",
     "pages-admonition-caption":    "admonition with no caption",
     "pages-heading-article":       "heading starts with a/an/the",
     "pages-heading-gerund":        "heading uses gerund + object",
@@ -6486,7 +6741,7 @@ _RULES_IGNORING_PAGE = {
 }
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",
-    "partials-orphaned", "images-orphaned", "tags-orphaned",
+    "partials-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
 }
 
 

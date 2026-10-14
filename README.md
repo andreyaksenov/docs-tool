@@ -309,6 +309,7 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
 | `ST18` | `check style --table-header` | table has no header row |
 | `ST19` | `check style --shell-block-lang` | $-prompted block not [source,console] |
 | `ST20` | `check style --icon-svg` | inline icon (`image:`) is not `.svg` |
+| `ST21` | `check style --xref-title` | capitalized xref link text no longer matches the target section title |
 
 Heuristic family — treat findings as a review list, not a hard gate.
 
@@ -494,6 +495,23 @@ Heuristic family — treat findings as a review list, not a hard gate.
   ```bash
   ./docs_tool.py check style --icon-svg
   ./docs_tool.py check style --icon-svg --page resource_groups.adoc
+  ```
+
+- **`ST21` · `check style --xref-title`** — an xref to a section should name that
+  section: `xref:adbes-upgrade.adoc#upgrade_with_adbm[Upgrading with ADBM]` where
+  the section is now titled "Upgrade procedure when using ADBM" is a stale label
+  (the section was renamed, the link text never followed). A link text is treated
+  as a section-title label when it starts with a capital letter; lower-case or
+  non-letter-first text is running prose and is left alone. To keep the signal
+  usable a text is only reported when it also is not a UI path (`A -> B`), does
+  not contain the title (or vice versa), has at least two words, and shares a
+  word with the title -- a text with nothing in common is a deliberate, different
+  label. Anchors on non-heading blocks are skipped; a missing anchor is `RF01`'s
+  business. Resolves targets like `check refs --broken`, so pass the same
+  `--external-root` / `--auto-external-root` flags.
+  ```bash
+  ./docs_tool.py check style --xref-title --auto-external-root
+  ./docs_tool.py check style --xref-title --page adbm-dr.adoc
   ```
 
 ### `terms` — controlled vocabulary
