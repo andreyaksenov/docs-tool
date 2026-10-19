@@ -1767,6 +1767,16 @@ def _parse_tag_regions(lines):
     return regions
 
 
+def _unquote_attr(value: str) -> str:
+    """An attribute value with one pair of surrounding quotes removed --
+    Asciidoctor accepts `tag="name"` and `tag='name'` the same as
+    `tag=name`, and the quotes are not part of the tag name."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
 def _parse_include_attrs(attrs_str):
     """Returns (tags_used, negated_tags, whole_file) parsed from an
     include::...[...] attribute list. tag=/tags= may name one or more tags
@@ -1776,30 +1786,34 @@ def _parse_include_attrs(attrs_str):
     wildcard means every (non-negated) tag in the file is pulled in. An
     include with no tag/tags attribute at all (the common case, e.g. `[]`
     or `[leveloffset=+1]`) pulls in the whole file -- and therefore every
-    tag it contains -- same as a wildcard would."""
+    tag it contains -- same as a wildcard would. Values may be quoted
+    (`tag="x"`, `tags="a;b"`; see _unquote_attr), and a leading '!' negates
+    for `tag=` too (`tag=!x`), not just `tags=`."""
     tags = set()
     negated = set()
     whole_file = True
+
+    def add(tok):
+        nonlocal whole_file
+        tok = tok.strip()
+        if not tok:
+            return
+        if tok.startswith("!"):
+            negated.add(tok[1:])
+        elif tok in ("*", "**"):
+            whole_file = True
+        else:
+            tags.add(tok)
+
     for part in attrs_str.split(","):
         part = part.strip()
         if part.startswith("tags="):
             whole_file = False
-            for tok in part[len("tags="):].split(";"):
-                tok = tok.strip()
-                if not tok:
-                    continue
-                if tok.startswith("!"):
-                    negated.add(tok[1:])
-                    continue
-                if tok in ("*", "**"):
-                    whole_file = True
-                else:
-                    tags.add(tok)
+            for tok in _unquote_attr(part[len("tags="):]).split(";"):
+                add(tok)
         elif part.startswith("tag="):
             whole_file = False
-            tok = part[len("tag="):].strip()
-            if tok:
-                tags.add(tok)
+            add(_unquote_attr(part[len("tag="):]))
     return tags, negated, whole_file
 
 

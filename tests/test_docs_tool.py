@@ -160,6 +160,32 @@ class ParseIncludeAttrsTests(unittest.TestCase):
         tags, negated, whole_file = dt._parse_include_attrs("tags=**")
         self.assertTrue(whole_file)
 
+    def test_double_quoted_tag_value_drops_the_quotes(self):
+        """Asciidoctor accepts tag="x" like tag=x; the quotes are not part
+        of the name (docs-adh writes ~250 includes this way)."""
+        tags, negated, whole_file = dt._parse_include_attrs('tag="external-zookeeper"')
+        self.assertEqual(tags, {"external-zookeeper"})
+        self.assertFalse(whole_file)
+
+    def test_single_quoted_tag_value_drops_the_quotes(self):
+        tags, _, _ = dt._parse_include_attrs("tag='intro'")
+        self.assertEqual(tags, {"intro"})
+
+    def test_quoted_tags_list_is_split_on_semicolons(self):
+        tags, negated, _ = dt._parse_include_attrs('tags="a;b;!c"')
+        self.assertEqual(tags, {"a", "b"})
+        self.assertEqual(negated, {"c"})
+
+    def test_negated_single_tag_attribute(self):
+        """tag=!x excludes x the same way tags=!x does."""
+        tags, negated, whole_file = dt._parse_include_attrs("tag=!cookie-name")
+        self.assertEqual(tags, set())
+        self.assertEqual(negated, {"cookie-name"})
+
+    def test_quoted_tag_with_other_attributes(self):
+        tags, _, _ = dt._parse_include_attrs('tag="x",leveloffset=+1')
+        self.assertEqual(tags, {"x"})
+
 
 class ParseTagRegionsTests(unittest.TestCase):
     def test_simple_region(self):
@@ -1831,6 +1857,25 @@ class PartialsOrphanedTests(FixtureTestCase):
 
 
 class PagesBrokenRefsTests(FixtureTestCase):
+    def test_quoted_and_negated_tag_includes_are_not_reported(self):
+        """tag="name" and tag=!name resolve to tags that exist in the
+        target; the quotes must not end up in the looked-up tag name."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/p.adoc",
+                   "// tag::intro[]\nIntro\n// end::intro[]\n// tag::skip[]\nSkip\n// end::skip[]\n")
+        self.write("en/modules/ROOT/pages/a.adoc",
+                   "= A\n\ninclude::partial$p.adoc[tag=\"intro\"]\n\ninclude::partial$p.adoc[tag=!skip]\n")
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, out)
+
+    def test_quoted_tag_that_does_not_exist_is_reported_without_quotes(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/p.adoc", "// tag::intro[]\nIntro\n// end::intro[]\n")
+        self.write("en/modules/ROOT/pages/a.adoc", "= A\n\ninclude::partial$p.adoc[tag=\"nope\"]\n")
+        ok, out = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("tag 'nope' not found", out)
+
     def test_anchor_defined_right_after_a_table_cell_marker_resolves(self):
         """Regression test for the real docs-adpg configure-logging.adoc
         case: `a|[#log_min_messages]` -- an AsciiDoc-content table cell
