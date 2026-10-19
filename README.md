@@ -249,7 +249,15 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   directory name -- guessing gets it wrong for a real fraction of repos (e.g. a
   directory named `docs-adpg-control` is really named `ADPGCONTROL`, and
   `docs-greengagedb` is `docs-gg`, unrelated to its directory name at all). An
-  explicit `--external-root` for the same `NAME` overrides it. With `--repo`,
+  explicit `--external-root` for the same `NAME` overrides it. A
+  multi-component repo that keeps one `antora.yml` per component directory
+  (`<repo>/en/blog/`, `<repo>/en/doc-releases/`, ... -- the Greengage landing)
+  registers every such component under its own name, and
+  `--external-root blog=<repo>` finds the right sub-directory too. If two
+  directories claim the same component name (a stale copy beside the real
+  repo, two repos reusing `blog`), a warning names both and the one in effect
+  (the later in sorted order wins); pass `--external-root NAME=PATH` to choose.
+  With `--repo`,
   `DIR` is resolved once, relative to where you ran `docs_tool` from -- pass
   the directory that actually holds the repos as siblings (e.g.
   `--auto-external-root .` when running from their common parent), not the

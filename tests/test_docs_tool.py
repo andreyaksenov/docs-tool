@@ -1211,6 +1211,57 @@ class AutoDiscoverExternalRootSpecsTests(unittest.TestCase):
         specs = dt._auto_discover_external_root_specs(str(self.base))
         self.assertEqual(specs, [f"REAL={(self.base / 'real-repo').resolve()}"])
 
+    def _make_nested_repo(self, dirname, *names):
+        """Multi-component repo: <repo>/<lang>/<component>/antora.yml +
+        modules/ROOT/pages (the Greengage landing layout)."""
+        repo = self.base / dirname
+        for lang in ("en", "ru"):
+            for name in names:
+                comp = repo / lang / name
+                (comp / "modules" / "ROOT" / "pages").mkdir(parents=True)
+                (comp / "antora.yml").write_text(f"name: {name}\nversion: master\n", encoding="utf-8")
+        return repo
+
+    def test_nested_multi_component_repo_registers_every_component(self):
+        repo = self._make_nested_repo("landing", "blog", "doc-releases")
+        specs = dt._auto_discover_external_root_specs(str(self.base))
+        self.assertEqual(sorted(specs), sorted([f"blog={repo.resolve()}", f"doc-releases={repo.resolve()}"]))
+
+    def test_nested_component_modules_resolve_to_its_own_directory(self):
+        repo = self._make_nested_repo("landing", "blog", "doc-releases")
+        comps = dt._load_external_components([f"blog={repo}"])
+        self.assertEqual(comps["blog"]["en"]["ROOT"], repo.resolve() / "en" / "blog" / "modules" / "ROOT")
+        self.assertEqual(comps["blog"]["ru"]["ROOT"], repo.resolve() / "ru" / "blog" / "modules" / "ROOT")
+
+    def test_flat_repo_layout_is_unchanged(self):
+        repo = self._make_repo("flat", "FLAT")
+        (repo / "en" / "modules" / "ROOT").mkdir(parents=True)
+        comps = dt._load_external_components([f"FLAT={repo}"])
+        self.assertEqual(comps["FLAT"]["en"]["ROOT"], repo.resolve() / "en" / "modules" / "ROOT")
+
+    def test_duplicate_component_name_is_warned_about(self):
+        """Two directories claiming one name silently shadow each other
+        (later wins); the warning must name both and the winner."""
+        self._make_repo("a-copy", "SAME")
+        self._make_repo("b-real", "SAME")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            specs = dt._auto_discover_external_root_specs(str(self.base))
+        err = buf.getvalue()
+        self.assertEqual(len(specs), 2)
+        self.assertIn("SAME", err)
+        self.assertIn("a-copy", err)
+        self.assertIn("b-real", err)
+        self.assertIn(f"using {(self.base / 'b-real').resolve()}", err)
+
+    def test_distinct_names_do_not_warn(self):
+        self._make_repo("a", "A")
+        self._make_repo("b", "B")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            dt._auto_discover_external_root_specs(str(self.base))
+        self.assertEqual(buf.getvalue(), "")
+
     def test_current_directory_is_excluded(self):
         """Scanning ".." naturally lists this repo's own directory as one
         of its own siblings -- it must not register itself as its own

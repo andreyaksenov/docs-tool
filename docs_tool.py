@@ -141,6 +141,49 @@ def module_roots():
         yield name, EN_MODULES_ROOT / name, RU_MODULES_ROOT / name
 
 
+def _external_lang_base(repo_root: Path, lang: str, name: str) -> Path:
+    """The directory holding `modules/` for component `name` in one
+    language of an external repo. Most repos are flat -- `<repo>/<lang>/
+    modules` with `<lang>/antora.yml` -- but a multi-component repo (the
+    Greengage landing: `<repo>/en/blog/`, `<repo>/en/doc-releases/`, ...)
+    keeps one antora.yml per component directory, so when `<lang>/modules`
+    doesn't exist, look for the `<lang>/*/` directory whose antora.yml
+    `name:` is `name`. Falls back to the flat path (which then simply has
+    no modules)."""
+    flat = repo_root / lang
+    if (flat / "modules").is_dir():
+        return flat
+    if flat.is_dir():
+        for child in sorted(flat.iterdir()):
+            if (child.is_dir() and (child / "modules").is_dir()
+                    and _parse_component_name(child / "antora.yml") == name):
+                return child
+    return flat
+
+
+def _repo_component_names(repo: Path):
+    """Component names an external-repo directory provides: the flat
+    `<lang>/antora.yml` name (first of en/ru that has one, as before) plus
+    the name of every nested `<lang>/*/antora.yml` component that has a
+    modules/ directory (see _external_lang_base)."""
+    names = []
+    for lang in ("en", "ru"):
+        name = _parse_component_name(repo / lang / "antora.yml")
+        if name:
+            names.append(name)
+            break
+    for lang in ("en", "ru"):
+        lang_dir = repo / lang
+        if not lang_dir.is_dir():
+            continue
+        for child in sorted(lang_dir.iterdir()):
+            if child.is_dir() and (child / "modules").is_dir():
+                name = _parse_component_name(child / "antora.yml")
+                if name and name not in names:
+                    names.append(name)
+    return names
+
+
 def _load_external_components(specs):
     """Parse --external-root NAME=PATH values into
     {component_name: {"en": {module: root}, "ru": {module: root}}}, by
@@ -160,8 +203,8 @@ def _load_external_components(specs):
         # would otherwise end up meaning something different by the time
         # a check actually reads from it.
         repo_root = Path(path_str).resolve()
-        en_root = repo_root / "en" / "modules"
-        ru_root = repo_root / "ru" / "modules"
+        en_root = _external_lang_base(repo_root, "en", name) / "modules"
+        ru_root = _external_lang_base(repo_root, "ru", name) / "modules"
         module_names = set()
         for base in (en_root, ru_root):
             if base.is_dir():
@@ -172,7 +215,8 @@ def _load_external_components(specs):
             elif not repo_root.is_dir():
                 reason = "path is not a directory"
             else:
-                reason = "no en/modules or ru/modules found under it"
+                reason = ("no en/modules or ru/modules found under it, nor a "
+                          f"en/*/ or ru/*/ component named {name}")
             print(f"warning: --external-root {name}={path_str}: {reason} -- "
                   f"every reference into {name}: will be silently left unchecked, "
                   f"same as if --external-root had never been passed for it",
@@ -219,14 +263,30 @@ def _auto_discover_external_root_specs(dir_arg):
     for entry in sorted(base.iterdir()):
         if not entry.is_dir() or entry.resolve() == here:
             continue
-        name = None
-        for lang in ("en", "ru"):
-            name = _parse_component_name(entry / lang / "antora.yml")
-            if name:
-                break
-        if name:
+        for name in _repo_component_names(entry):
             specs.append(f"{name}={entry}")
+    _warn_duplicate_component_names(specs)
     return specs
+
+
+def _warn_duplicate_component_names(specs):
+    """Two discovered directories claiming the same component name (a stale
+    copy next to the real repo, or a second repo reusing a name like `blog`)
+    silently shadow each other -- the later one wins, so references can be
+    checked against the wrong content and reported broken (or fine) for no
+    visible reason. Name every claimant and say which one is in effect; an
+    explicit --external-root NAME=PATH overrides the choice."""
+    by_name = {}
+    for spec in specs:
+        name, _, path = spec.partition("=")
+        by_name.setdefault(name, []).append(path)
+    for name, paths in by_name.items():
+        paths = list(dict.fromkeys(paths))
+        if len(paths) > 1:
+            print(f"warning: --auto-external-root: component {name} is provided by "
+                  f"{len(paths)} directories: {', '.join(paths)} -- using {paths[-1]}; "
+                  f"pass --external-root {name}=PATH to choose another",
+                  file=sys.stderr)
 
 
 def _merged_external_root_specs(auto_dir, explicit_specs):
