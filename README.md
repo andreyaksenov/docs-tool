@@ -468,6 +468,10 @@ Heuristic family — treat findings as a review list, not a hard gate.
   implicit-header rule). A header split one cell per line does **not** get a
   header even with a correct `cols` attribute -- that's a real Asciidoctor
   quirk, not a bug in this check.
+  A table that explicitly declares a single column (`[cols="1"]`, `cols=1a`,
+  ...) is exempt -- there is no second column for a header to label. Only a
+  declared `cols=` counts, so a table that just happens to have one column
+  without saying so is still checked.
   ```bash
   ./docs_tool.py check style --table-header
   ./docs_tool.py check style --table-header --page resource_groups.adoc

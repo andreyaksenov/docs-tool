@@ -2973,6 +2973,42 @@ class PagesTableHeaderTests(FixtureTestCase):
     with the gem, and the reverse of what an early version of this check
     assumed."""
 
+    def test_single_column_table_is_exempt(self):
+        """docs-adb release notes: 346 `[cols="1"]` tables with no header."""
+        self.write("en/modules/ROOT/pages/page.adoc",
+                    '[cols="1"]\n|===\n|First item\n|Second item\n|===\n')
+        ok, out = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok, out)
+
+    def test_single_column_spellings_are_exempt(self):
+        for attrs in ('[cols=1]', '[cols="1a"]', '[cols="1a",options="noheader"]', '[cols="1*"]', '[%autowidth,cols=1]'):
+            with self.subTest(attrs=attrs):
+                self.write("en/modules/ROOT/pages/page.adoc", attrs + "\n|===\n|Only\n|===\n")
+                ok, out = self.run_check(dt.check_pages_table_header)
+                self.assertTrue(ok, out)
+
+    def test_multi_column_cols_is_still_checked(self):
+        for attrs in ('[cols="1,1"]', '[cols="2*"]', '[cols="1;2"]', '[cols="1a,3"]'):
+            with self.subTest(attrs=attrs):
+                self.write("en/modules/ROOT/pages/page.adoc",
+                           attrs + "\n|===\n|A\n|B\n|1\n|2\n|===\n")
+                ok, _ = self.run_check(dt.check_pages_table_header)
+                self.assertFalse(ok)
+
+    def test_single_column_without_cols_attr_is_still_checked(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "|===\n|Only\n|Another\n|===\n")
+        ok, _ = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+
+    def test_declared_column_count_parsing(self):
+        f = dt._declared_column_count
+        self.assertEqual(f('[cols="1"]'), 1)
+        self.assertEqual(f('[cols="3*"]'), 3)
+        self.assertEqual(f('[cols="2,5,3"]'), 3)
+        self.assertEqual(f('[cols="1;1"]'), 2)
+        self.assertEqual(f('[cols="1a,2*"]'), 3)
+        self.assertIsNone(f('[options=header]'))
+
     def test_packed_first_row_with_blank_line_gets_implicit_header(self):
         """The real docs-adh convention: no attrs at all, just a packed
         row followed by a blank line."""

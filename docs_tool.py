@@ -4524,6 +4524,27 @@ _TABLE_HEADER_ATTR_RE = re.compile(r'options\s*=\s*"?[\w,]*\bheader\b[\w,]*"?|%h
 _TABLE_NOHEADER_ATTR_RE = re.compile(r'options\s*=\s*"?[\w,]*\bnoheader\b[\w,]*"?|%noheader\b')
 
 
+_TABLE_COLS_ATTR_RE = re.compile(r'\bcols\s*=\s*(?:"([^"]*)"|([^\s,\]]+))')
+_COLS_MULTIPLIER_RE = re.compile(r'\s*(\d+)\s*\*')
+
+
+def _declared_column_count(attrs: str):
+    """How many columns a block-attribute line declares via `cols=`
+    (`"1"`, `"1a"`, `"3*"` = 3, `"2,5,3"`, `"1;1"`), or None when there is
+    no cols= (the count is then implicit in the rows)."""
+    m = _TABLE_COLS_ATTR_RE.search(attrs)
+    if not m:
+        return None
+    spec = m.group(1) if m.group(1) is not None else m.group(2)
+    total = 0
+    for token in re.split(r"[,;]", spec):
+        if not token.strip():
+            continue
+        mm = _COLS_MULTIPLIER_RE.match(token)
+        total += int(mm.group(1)) if mm else 1
+    return total or None
+
+
 def check_pages_table_header() -> bool:
     """New check: house style wants every table to have a header row so
     columns are labeled -- a table with no header renders every row as
@@ -4560,7 +4581,11 @@ def check_pages_table_header() -> bool:
     the block), but any other line -- including a blank one, which really
     does break the association in AsciiDoc -- resets it, so an attribute
     stack left over from an unrelated preceding block is never credited to
-    this table. Deliberately simple like check_pages_table_empty_cells: no
+    this table. An explicitly single-column table (`[cols="1"]`) is exempt:
+    a one-column table is a list in a box, there is no second column for a
+    header to label (docs-adb's release notes has 346 of them). Only a
+    declared cols= counts -- a table that merely happens to have one
+    column without saying so is still checked. Deliberately simple like check_pages_table_empty_cells: no
     in_code tracking, so a `|===` shown as literal example text inside a
     source block would be mistaken for a real table -- a known, accepted
     gap shared with that check."""
@@ -4589,7 +4614,9 @@ def check_pages_table_header() -> bool:
                             attrs = " ".join(pending_attrs)
                             explicit_header = bool(attrs and _TABLE_HEADER_ATTR_RE.search(attrs))
                             explicit_noheader = bool(attrs and _TABLE_NOHEADER_ATTR_RE.search(attrs))
-                            if explicit_noheader:
+                            if attrs and _declared_column_count(attrs) == 1:
+                                has_header = True   # one column: nothing for a header to label
+                            elif explicit_noheader:
                                 has_header = False
                             elif explicit_header:
                                 has_header = True
