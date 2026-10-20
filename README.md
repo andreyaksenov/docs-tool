@@ -521,9 +521,11 @@ Heuristic family — treat findings as a review list, not a hard gate.
   as a section-title label when it starts with a capital letter; lower-case or
   non-letter-first text is running prose and is left alone. To keep the signal
   usable a text is only reported when it also is not a UI path (`A -> B`), does
-  not contain the title (or vice versa), has at least two words, and shares a
-  word with the title -- a text with nothing in common is a deliberate, different
-  label. Anchors on non-heading blocks are skipped; a missing anchor is `RF01`'s
+  not contain the title (or vice versa), has at least two words, and is mostly
+  made of the title's own words (at least two of them, and two thirds of the
+  link text's content words, stem-matched) -- a text that only shares a product
+  name or one word (`Prometheus web interface` -> `View metrics in Prometheus`)
+  is a deliberate, different label. Anchors on non-heading blocks are skipped; a missing anchor is `RF01`'s
   business. Resolves targets like `check refs --broken`, so pass the same
   `--external-root` / `--auto-external-root` flags.
   ```bash

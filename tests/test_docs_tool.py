@@ -1019,6 +1019,58 @@ class PagesXrefTitleTests(FixtureTestCase):
         ok, out = self.run_check(dt.check_pages_xref_title)
         self.assertTrue(ok, out)
 
+    def test_label_sharing_only_a_product_name_is_not_flagged(self):
+        """Reported by a docs-adb author: `Prometheus web interface`
+        pointing at `View metrics in Prometheus` shares just the product
+        name -- a different, deliberate phrase, not a stale title."""
+        self._setup("= T\n\n[#a]\n== View metrics in Prometheus\n",
+                    "User credentials for logging into the xref:target.adoc#a[Prometheus web interface].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_label_with_an_inflected_title_word_but_little_else_is_not_flagged(self):
+        self._setup("= T\n\n[#a]\n== Architecture\n",
+                    "See xref:target.adoc#a[ADB Control architectural schema].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertTrue(ok, out)
+
+    def test_stem_coverage_counts_shared_content_words(self):
+        f = dt._stem_coverage
+        self.assertEqual(f("Upgrading with ADBM", "Upgrade procedure when using ADBM"), (2, 2))
+        self.assertEqual(f("Prometheus web interface", "View metrics in Prometheus"), (1, 3))
+        self.assertEqual(f("Create a restore point manually", "Create restore point"), (3, 4))
+
+    def test_short_acronym_counts_as_a_content_word(self):
+        """`Master UI` vs `Master Server UI` (docs-adh): without `UI`
+        only one word is left and the near-identical text was swallowed."""
+        self._setup("= T\n\n[#a]\n== Master Server UI\n",
+                    "Open the xref:target.adoc#a[Master UI].\n")
+        ok, out = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+        self.assertIn("Master Server UI", out)
+
+    def test_plural_and_singular_are_the_same_word(self):
+        """`Add a host to an action host group` vs `Add hosts to a cluster
+        config group` (docs-adcm): host/hosts must match."""
+        self._setup("= T\n\n[#a]\n== Add hosts to a cluster config group\n",
+                    "See xref:target.adoc#a[Add a host to an action host group].\n")
+        ok, _ = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+
+    def test_lowercase_short_words_are_not_content(self):
+        t = dt._title_words
+        self.assertEqual(t("Go to the UI of ES"), {"ui", "es"})
+        self.assertEqual(dt._word_stem("hosts"), "host")
+        self.assertEqual(dt._word_stem("indexing"), "index")
+        self.assertTrue(dt._same_word("host", "hosts"))
+        self.assertFalse(dt._same_word("data", "database"))
+
+    def test_mostly_title_words_text_is_flagged(self):
+        self._setup("= T\n\n== Create restore point\n",
+                    "See xref:target.adoc#create-restore-point[Create a restore point manually].\n")
+        ok, _ = self.run_check(dt.check_pages_xref_title)
+        self.assertFalse(ok)
+
     def test_unrelated_label_is_not_flagged(self):
         """No shared word: a deliberate, different label, not a stale
         quote of the title."""

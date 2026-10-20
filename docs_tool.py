@@ -6177,19 +6177,44 @@ _TITLE_STOPWORDS = frozenset({
 
 
 def _title_words(s: str):
-    return {w for w in _TITLE_WORD_RE.findall(_plain_title(s))
-            if len(w) >= 3 and w not in _TITLE_STOPWORDS}
+    """Content words of a title or link text, lower-cased: 3+ letter words
+    that aren't stopwords, plus 2-letter ALL-CAPS ones (`UI`, `ES`, `DB`) --
+    an acronym is content, unlike `to`/`of`/`in`."""
+    cleaned = _XREF_TEXT_MARKUP_RE.sub("", s).replace("\u00a0", " ")
+    out = set()
+    for w in _TITLE_WORD_RE.findall(cleaned):
+        lw = w.casefold()
+        if lw in _TITLE_STOPWORDS:
+            continue
+        if len(w) >= 3 or (len(w) == 2 and w.isalpha() and w.isupper()):
+            out.add(lw)
+    return out
 
 
-def _word_stems_overlap(a: str, b: str) -> bool:
-    """True if any word of `a` and any word of `b` are the same word up to
-    an ending (upgrading/upgrade, restore/restoring): equal, or both at
-    least 4 letters with the same first 5 letters."""
-    for x in _title_words(a):
-        for y in _title_words(b):
-            if x == y or (len(x) >= 4 and len(y) >= 4 and x[:5] == y[:5]):
-                return True
-    return False
+def _word_stem(w: str) -> str:
+    """Crude inflection stripper: host/hosts, index/indexing/indexed,
+    box/boxes all meet. Only strips when 3+ letters remain."""
+    for suffix in ("ing", "es", "ed", "s"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+            return w[:-len(suffix)]
+    return w
+
+
+def _same_word(x: str, y: str) -> bool:
+    """Equal up to an ending: same stem, or both at least 4 letters with
+    the same first 5 letters (upgrading/upgrade)."""
+    return (x == y or _word_stem(x) == _word_stem(y)
+            or (len(x) >= 4 and len(y) >= 4 and x[:5] == y[:5]))
+
+
+def _stem_coverage(text: str, title: str):
+    """(shared, total): how many of `text`'s content words also occur in
+    `title` up to an ending (see _same_word), out of all of `text`'s
+    content words."""
+    title_words = _title_words(title)
+    text_words = _title_words(text)
+    shared = sum(1 for x in text_words if any(_same_word(x, y) for y in title_words))
+    return shared, len(text_words)
 
 
 def _xref_text_is_stale_title(text: str, title: str) -> bool:
@@ -6206,9 +6231,13 @@ def _xref_text_is_stale_title(text: str, title: str) -> bool:
         still named, or the text is a shortened form of it),
       - is at least two words (a single capitalized word is a verb or a
         noun label, not a title), and
-      - shares a word with the title (see _word_stems_overlap): a text
-        with nothing in common is a different, deliberate label, while a
-        text that overlaps but doesn't match is the stale-title case --
+      - is mostly made of the title's own words (see _stem_coverage): at
+        least two of them and at least two thirds of its content words.
+        A text with little in common is a different, deliberate label
+        (`Prometheus web interface` -> `View metrics in Prometheus` shares
+        only the product name; `ADB Control architectural schema` ->
+        `Architecture`), while a text that is mostly the title's words but
+        no longer matches it is the stale-title case --
         `Upgrading with ADBM` vs `Upgrade procedure when using ADBM`."""
     a, b = _plain_title(text), _plain_title(title)
     if a == b or "->" in a or "\u2192" in a:
@@ -6217,7 +6246,8 @@ def _xref_text_is_stale_title(text: str, title: str) -> bool:
         return False
     if len(a.split()) < 2:
         return False
-    return _word_stems_overlap(a, b)
+    shared, total = _stem_coverage(text, title)   # raw text: ALL-CAPS acronyms count
+    return shared >= 2 and shared * 3 >= total * 2
 
 
 def check_pages_xref_title() -> bool:
