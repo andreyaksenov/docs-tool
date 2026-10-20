@@ -50,6 +50,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.GLOSSARY = {}
         dt.LINK_OFFLINE = False
         dt.LINK_ALLOW_DOMAINS = set()
+        dt.NOFOLLOW_EXEMPT_HOSTS = set(dt.DEFAULT_NOFOLLOW_EXEMPT_HOSTS)
         dt.LINK_INSECURE = False
         dt.LINK_SHOW_UNVERIFIED = False
         dt.LINK_CACHE_PATH = None
@@ -644,6 +645,47 @@ class PagesLinkNewTabTests(FixtureTestCase):
     def _page(self, body):
         self.antora_yml("en", "TEST")
         self.write("en/modules/ROOT/pages/p.adoc", body)
+
+    def test_own_family_host_needs_new_tab_but_not_nofollow(self):
+        """docs-adb's 200 greengagedb.org links carried ^ but no
+        opts=nofollow, by house choice."""
+        self._page("See https://greengagedb.org/en/docs-gg/current/intro.html[Greengage DB^].\n"
+                   "And https://docs.arenadata.io/en/ADB/current/x.html[ADB docs^].\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_own_family_host_still_needs_the_new_tab_marker(self):
+        self._page("See https://greengagedb.org/en/home/index.html[Greengage DB].\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertIn("missing ^", out)
+        self.assertNotIn("nofollow", out.split("Total")[0].split("(")[-1])
+
+    def test_lookalike_host_is_not_exempt(self):
+        self._page("See https://evilgreengagedb.org/x[Evil^] and https://greengagedb.org.attacker.net/x[Evil2^].\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
+        self.assertEqual(out.count("missing opts=nofollow"), 2, out)
+
+    def test_nofollow_exempt_flag_adds_a_host(self):
+        self._page("See https://example.org/x[Ex^].\n")
+        dt.NOFOLLOW_EXEMPT_HOSTS = set(dt.DEFAULT_NOFOLLOW_EXEMPT_HOSTS) | {"example.org"}
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
+
+    def test_configure_adds_to_defaults_and_none_clears_them(self):
+        import argparse
+        dt._configure_links_from_args(argparse.Namespace(nofollow_exempt=["Extra.org"]))
+        self.assertEqual(dt.NOFOLLOW_EXEMPT_HOSTS, set(dt.DEFAULT_NOFOLLOW_EXEMPT_HOSTS) | {"extra.org"})
+        dt._configure_links_from_args(argparse.Namespace(nofollow_exempt=["none", "only.org"]))
+        self.assertEqual(dt.NOFOLLOW_EXEMPT_HOSTS, {"only.org"})
+        dt._configure_links_from_args(argparse.Namespace())
+        self.assertEqual(dt.NOFOLLOW_EXEMPT_HOSTS, set(dt.DEFAULT_NOFOLLOW_EXEMPT_HOSTS))
+
+    def test_exempt_host_bare_url_is_still_flagged(self):
+        self._page("See https://greengagedb.org/en/home/index.html for details.\n")
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertFalse(ok)
 
     def test_fully_decorated_link_is_ok(self):
         self._page("See https://greenplum.org/[Greenplum^,opts=nofollow] docs.\n")

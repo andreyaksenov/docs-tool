@@ -5119,6 +5119,14 @@ def check_pages_ru_latin_homoglyphs() -> bool:
 LINK_TIMEOUT = 10.0
 LINK_OFFLINE = False
 LINK_ALLOW_DOMAINS = set()
+# Hosts that are this project's own family of sites. ST10 still wants a new
+# tab (`^`) on a link to them, but not `opts=nofollow`: nofollow withholds
+# SEO weight from *other* sites, which is the opposite of what an author
+# wants for a link between the product's own docs and its sister sites.
+# Suffix-matched (subdomains included). --nofollow-exempt HOST adds to the
+# list; `--nofollow-exempt none` empties it.
+DEFAULT_NOFOLLOW_EXEMPT_HOSTS = frozenset({"greengagedb.org", "arenadata.io"})
+NOFOLLOW_EXEMPT_HOSTS = set(DEFAULT_NOFOLLOW_EXEMPT_HOSTS)
 LINK_CACHE_PATH = None          # off by default; --link-cache PATH opts in
 LINK_INSECURE = False           # skip TLS verification without the per-run note
 LINK_SHOW_UNVERIFIED = False    # also list the server-said-no links (403/429/5xx)
@@ -5830,17 +5838,23 @@ def _iter_external_link_attrs(line):
     return out
 
 
-def _missing_link_decoration(attrs):
+def _nofollow_exempt(url):
+    host = _host_of(url) if url else ""
+    return bool(host) and any(_host_suffix_match(host, d) for d in NOFOLLOW_EXEMPT_HOSTS)
+
+
+def _missing_link_decoration(attrs, url=None):
     """None if `attrs` already carries both a new-tab marker (`^`, quoted
     or not, or the `window=_blank` alternative -- see _LINK_TARGET_BLANK_RE/
     _WINDOW_BLANK_RE) and `opts=nofollow`; otherwise a short reason string
-    for the report. `attrs=None` means the URL had no [...] at all."""
+    for the report. `attrs=None` means the URL had no [...] at all. A `url`
+    on a NOFOLLOW_EXEMPT_HOSTS host only needs the new-tab marker."""
     if attrs is None:
         return "no [...] attrs at all"
     missing = []
     if not (_LINK_TARGET_BLANK_RE.search(attrs) or _WINDOW_BLANK_RE.search(attrs)):
         missing.append("^")
-    if "nofollow" not in attrs:
+    if "nofollow" not in attrs and not _nofollow_exempt(url):
         missing.append("opts=nofollow")
     return f"missing {' and '.join(missing)}" if missing else None
 
@@ -5865,7 +5879,12 @@ def check_pages_link_new_tab() -> bool:
     "not actually a live link a browser would open": a private/
     loopback/placeholder host (FQDN:PORT, 10.x, *.internal, ...), a
     `.git` clone remote, an unsubstituted `{attribute}`, or an obvious
-    placeholder (TODO/CHANGEME/<...>). Decorating a `_http://FQDN:PORT_`
+    placeholder (TODO/CHANGEME/<...>).
+
+    A link to one of the project's own sites (NOFOLLOW_EXEMPT_HOSTS:
+    greengagedb.org and arenadata.io by default, subdomains included; extend
+    with --nofollow-exempt HOST, or `--nofollow-exempt none` to clear) must
+    still open in a new tab but does not need `opts=nofollow`. Decorating a `_http://FQDN:PORT_`
     example shown as illustrative text with `^`/opts=nofollow would be
     nonsensical, not a style gap. Comment lines and ---- / .... blocks
     are skipped (_excluded_ref_lines). Scans pages/ and partials/ in
@@ -5889,7 +5908,7 @@ def check_pages_link_new_tab() -> bool:
                     for url, attrs in _iter_external_link_attrs(line):
                         if not _should_probe(url):
                             continue
-                        reason = _missing_link_decoration(attrs)
+                        reason = _missing_link_decoration(attrs, url)
                         if reason:
                             hits.append((i, url, reason))
                 if hits:
@@ -8035,6 +8054,11 @@ def _add_link_args(parser):
                         help="'check links': list the external links found, don't fetch them.")
     parser.add_argument("--allow-domain", action="append", metavar="HOST",
                         help="'check links': skip this host (suffix match). Repeatable.")
+    parser.add_argument("--nofollow-exempt", action="append", metavar="HOST",
+                        help="'check style --link-new-tab': also don't require opts=nofollow "
+                             "on links to this host (suffix match; greengagedb.org and "
+                             "arenadata.io are built in). Repeatable; 'none' clears the "
+                             "built-in list.")
     parser.add_argument("--link-cache", metavar="PATH",
                         help="'check links': cache results to PATH (7-day TTL) so reruns "
                              "skip re-fetching. Off by default -- every run is fresh.")
@@ -8053,6 +8077,10 @@ def _configure_links_from_args(args):
         LINK_TIMEOUT = args.timeout
     LINK_OFFLINE = bool(getattr(args, "offline", False))
     LINK_ALLOW_DOMAINS = {d.lower() for d in (getattr(args, "allow_domain", None) or [])}
+    global NOFOLLOW_EXEMPT_HOSTS
+    extra = {d.lower() for d in (getattr(args, "nofollow_exempt", None) or [])}
+    NOFOLLOW_EXEMPT_HOSTS = (extra - {"none"} if "none" in extra
+                             else set(DEFAULT_NOFOLLOW_EXEMPT_HOSTS) | extra)
     # Resolved to absolute right away, same reason as _load_external_
     # components' repo_root: a --repo loop chdir's between repos, and one
     # shared cache file is the point -- a relative PATH must keep meaning
@@ -8174,6 +8202,7 @@ _LINK_FLAG_NAMES = ("--timeout", "--offline", "--allow-domain", "--link-cache",
                     "--show-unverified", "--insecure")
 _FLAG_FAMILY_SCOPE = {
     **{f: {"links"} for f in _LINK_FLAG_NAMES},
+    "--nofollow-exempt": {"style"},
     "--glossary": {"terms"},
     "--external-root": {_family_of(_rule_of(k)) for k in _RULES_WITH_EXTERNAL_ROOT},
 }

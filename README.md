@@ -404,8 +404,13 @@ Heuristic family — treat findings as a review list, not a hard gate.
   (a comma in it forces `["text^",opts=nofollow]`, caret before the closing quote
   rather than the comma — MK04's own fix for the comma), and the `[...]` can span
   more than one physical source line (an author hand-wrapping a long one).
+  Links to the project's own sites (`greengagedb.org`, `arenadata.io`, subdomains
+  included) still need the new-tab marker but not `opts=nofollow` — `nofollow`
+  withholds SEO weight from *other* sites. `--nofollow-exempt HOST` (repeatable)
+  adds more such hosts; `--nofollow-exempt none` clears the built-in list.
   ```bash
   ./docs_tool.py check style --link-new-tab
+  ./docs_tool.py check style --link-new-tab --nofollow-exempt example.org
   ./docs_tool.py check style --link-new-tab --page resource_groups.adoc
   ```
 
