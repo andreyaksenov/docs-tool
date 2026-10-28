@@ -1991,6 +1991,71 @@ class PagesBrokenRefsTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_broken_refs)
         self.assertTrue(ok, output)
 
+    def test_anchor_macro_in_a_table_cell_resolves(self):
+        """Regression test for the real docs-adcm use-adcm-installer.adoc
+        case: `|anchor:adcm-db-ssl-mode[]adcm-db-ssl-mode` -- AsciiDoc's
+        inline anchor: macro, not [#id]/[[id]] -- defines a real,
+        working anchor (confirmed against real Asciidoctor: renders
+        `<a id="adcm-db-ssl-mode"></a>`), but the tool only recognized
+        the other two forms and reported the link broken."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/params.adoc",
+            "= Params\n\n"
+            "|===\n"
+            "|anchor:adcm-db-ssl-mode[]adcm-db-ssl-mode\n"
+            "|Description\n"
+            "|===\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:params.adoc#adcm-db-ssl-mode[x]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_anchor_macro_with_reftext_resolves(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/params.adoc",
+                   "= Params\n\nCustom anchor:my-id[Custom label] text.\n")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:params.adoc#my-id[x]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_escaped_anchor_macro_does_not_resolve(self):
+        """Verified against real Asciidoctor: a leading backslash escapes
+        anchor:id[] into literal text (`anchor:my-id[]`), not a real
+        anchor -- must still be reported broken, not loosened into a
+        false pass."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/params.adoc",
+                   "= Params\n\nEscaped \\anchor:my-id[] text.\n")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:params.adoc#my-id[x]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("my-id", output)
+
+    def test_anchor_macro_inside_an_unrequested_tagged_region_is_broken(self):
+        """Mirrors test_anchor_inside_an_unrequested_tagged_region_is_
+        broken -- the tag= scoping _anchor_exists already does for
+        [#id]/[[id]] must apply to anchor:id[] too, since both are found
+        by the same per-line scan."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/common.adoc",
+            "tag::wanted[]\nWanted content.\nend::wanted[]\n"
+            "tag::other[]\nanchor:other-anchor[]Other content.\nend::other[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/source.adoc",
+            "= Source\n\ninclude::partial$common.adoc[tag=wanted]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "xref:source.adoc#other-anchor[Other]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("other-anchor", output)
+
     def test_anchor_mid_line_in_a_list_item_resolves(self):
         """Regression test for the real docs-adbes adbm-run-actions.adoc
         case: `* [#flag-fail]*_Fail on low space_* -- a flag that...` --

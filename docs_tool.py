@@ -950,19 +950,28 @@ def check_nav_structure_parity() -> bool:
 # --------------------------------------------------------------------------
 
 _REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2}|link:{1,2})[^\]\[\s]+\[')
-# `[#id]` is AsciiDoc's inline anchor form -- it attaches to whatever
-# touches it immediately after, with no space, wherever it appears in the
-# line: a block-attribute line by itself (`[#id]`), right after a table
-# cell marker (`a|[#id]`, the docs-adpg configure-logging.adoc case), or
-# inline mid-list-item (`* [#id]*_Text_* -- ...`, the real docs-greengagedb
-# report this was fixed for -- an anchor was missed on a list item because
-# the old regex required the WHOLE line to be just `[#id]`). Verified
-# against real Asciidoctor: a *space* right after `[#id]` breaks the
-# anchor outright (it renders as literal text and logs "possible invalid
-# reference" instead), so the `(?!\s)` here isn't just tidiness -- it's
-# the actual rule AsciiDoc itself enforces, not merely how this tool
-# reads it.
-_ANCHOR_ID_TPL = r'\[#{0}\](?!\s)|\[\[{0}(,|\]\])'
+# Three AsciiDoc forms create an anchor, all handled here:
+# 1. `[#id]`, the inline block-attribute form -- it attaches to whatever
+#    touches it immediately after, with no space, wherever it appears in
+#    the line: a block-attribute line by itself (`[#id]`), right after a
+#    table cell marker (`a|[#id]`, the docs-adpg configure-logging.adoc
+#    case), or inline mid-list-item (`* [#id]*_Text_* -- ...`, the real
+#    docs-greengagedb report this was fixed for -- an anchor was missed on
+#    a list item because the old regex required the WHOLE line to be just
+#    `[#id]`). Verified against real Asciidoctor: a *space* right after
+#    `[#id]` breaks the anchor outright (it renders as literal text and
+#    logs "possible invalid reference" instead), so the `(?!\s)` here
+#    isn't just tidiness -- it's the actual rule AsciiDoc itself enforces,
+#    not merely how this tool reads it.
+# 2. `[[id]]`/`[[id,reftext]]`, the legacy double-bracket anchor form.
+# 3. `anchor:id[]`/`anchor:id[reftext]`, the inline anchor macro -- a real
+#    docs-adcm case: `|anchor:adcm-db-ssl-mode[]adcm-db-ssl-mode` inside a
+#    table cell, linked via `xref:adcm-db-ssl-mode[...]`. Verified against
+#    real Asciidoctor: unlike `[#id]`, text immediately after the `]` is
+#    normal (the real case has it), so no `(?!\s)` guard here; a leading
+#    backslash (`\anchor:id[]`) escapes it into literal text instead of an
+#    anchor, so `(?<!\\)` excludes that.
+_ANCHOR_ID_TPL = r'\[#{0}\](?!\s)|\[\[{0}(,|\]\])|(?<!\\)\banchor:{0}\[[^\]]*\]'
 
 # Antora injects these as page-scoped attributes pointing at each family's
 # directory for the current module (https://docs.antora.org -- "family
