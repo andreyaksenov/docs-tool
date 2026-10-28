@@ -2502,6 +2502,108 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("tag::example[]", output)
 
+    def test_xref_attribute_set_by_an_including_page_resolves(self):
+        """Regression test for a real docs-adb report: a shared partial
+        writes xref:{attr}/page.adoc[] where :attr: is a "parameterized
+        partial" set by whichever PAGE includes it, not defined in the
+        partial's own file at all. Antora assembles one continuous
+        document per rendered page, so the attribute IS visible there --
+        this must resolve, not be reported broken using the literal,
+        un-substituted `{attr}` form."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/sub/target.adoc",
+            "= Target\n\n[#anchor]\n== Section\n",
+        )
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See xref:{install-path}/target.adoc#anchor[link].\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            ":install-path: ROOT:sub\n\ninclude::partial$shared.adoc[]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_xref_attribute_tried_against_every_known_including_page(self):
+        """Two different pages set the same attribute to two DIFFERENT
+        values (the real docs-adb case: :monitoring-install-path: set
+        differently by online-install/ vs offline-install/ index.adoc,
+        both including the same partial) -- the reference must resolve
+        as long as AT LEAST ONE of them makes it work, even though the
+        OTHER one's value doesn't point anywhere real."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/real-target.adoc", "= Real\n")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See xref:{install-path}.adoc[link].\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page-a.adoc",
+            ":install-path: nonexistent\n\ninclude::partial$shared.adoc[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page-b.adoc",
+            ":install-path: real-target\n\ninclude::partial$shared.adoc[]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_xref_attribute_not_set_by_any_including_page_still_broken(self):
+        """No known includer defines the attribute at all -- still left
+        unresolved and reported, same as before this feature existed
+        (the documented fallback for a genuinely unknown attribute)."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See xref:{install-path}.adoc[link].\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("{install-path}", output)
+
+    def test_xref_attribute_defined_by_includer_but_still_broken_is_reported(self):
+        """Every known includer defines the attribute, but NONE of their
+        values resolve to a real page -- must still be reported broken
+        (using the un-substituted literal form, same as the "nothing
+        known works" case), not silently passed."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See xref:{install-path}.adoc[link].\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            ":install-path: nonexistent\n\ninclude::partial$shared.adoc[]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("{install-path}", output)
+
+    def test_xref_attribute_resolution_respects_tag_scoping(self):
+        """The including page's attrs context is only recorded because
+        it genuinely includes the partial -- an unrelated page that
+        happens to define the same attribute name but does NOT include
+        this partial at all must not count as a candidate."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/real-target.adoc", "= Real\n")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See xref:{install-path}.adoc[link].\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/unrelated.adoc",
+            ":install-path: real-target\n\nNo include here at all.\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("{install-path}", output)
+
 
 class PagesNoYoTests(FixtureTestCase):
     def test_yo_is_flagged(self):

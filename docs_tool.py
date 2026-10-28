@@ -1440,7 +1440,68 @@ def _substitute_attrs(text, attrs):
     return _ATTR_REF_RE.sub(lambda m: attrs.get(m.group(1), m.group(0)), text)
 
 
-def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None):
+def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots):
+    """The real `xref:` resolution + reporting logic, factored out of
+    _check_refs_in_file so a caller juggling more than one attribute-
+    substitution candidate for the same reference (see
+    partial_attrs_contexts) can try each one with `report=None` --
+    nothing printed, just the verdict -- and only report for real once
+    none of them work. `t` is the xref target with the leading `xref:`
+    already stripped (and already attribute-substituted, by whichever
+    candidate's attrs the caller is trying).
+
+    Returns True if the target resolves cleanly (nothing was/would be
+    reported), False if it's broken, or None for a version-pinned or
+    unregistered-external-component target -- "can't tell, left
+    unchecked" must not be mistaken for either a pass or a fail by a
+    caller deciding whether ANY candidate works."""
+    if _VERSION_PIN_RE.match(t):
+        return None
+    ref_lang_module_roots = lang_module_roots
+    m_component = _COMPONENT_PREFIX_RE.match(t)
+    if m_component:
+        component = m_component.group(0)[:-1]  # strip trailing ':'
+        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
+        if resolved is None:
+            return None  # external component xref (blog::x, ...)
+        candidate_roots = [resolved[0]]
+        t = resolved[1]
+        # Any anchor check below now looks inside `component`'s own
+        # content, not this file's -- a further include found while
+        # walking it must resolve against its own modules, not this
+        # repo's (see _component_context). `own_name`/`lang_module_roots`
+        # (this repo's true own) are still passed through unchanged as
+        # the anchor check's own_name/own_lang_module_roots below, so a
+        # self-reference back to this repo found inside that
+        # component's own content still resolves correctly.
+        ref_lang_module_roots = _component_context(component, lang, lang_module_roots)
+
+    fragment = ""
+    if "#" in t:
+        t, fragment = t.split("#", 1)
+
+    if t.endswith(".adoc"):
+        page_t = _strip_root_slash(t)
+        found_root = next((cand for cand in candidate_roots if (cand / "pages" / page_t).is_file()), None)
+        if found_root is None:
+            if report:
+                report(file, lineno, f"xref:{t}")
+            return False
+        if fragment and not _anchor_exists(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots, lang, own_name, lang_module_roots):
+            if report:
+                report(file, lineno, f"xref:{t}#{fragment} (anchor not found)")
+            return False
+        return True
+    if t:
+        if not any(_anchor_exists(file, t, cand, ref_lang_module_roots, lang, own_name, lang_module_roots) for cand in candidate_roots):
+            if report:
+                report(file, lineno, f"xref:{t} (anchor not found)")
+            return False
+        return True
+    return None  # empty after stripping the fragment -- nothing to resolve, left unchecked same as before
+
+
+def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None):
     """`lang_module_roots` (name -> module root, for the same language as
     `root`) lets a component-prefixed xref (`xref:other-module:page.adoc[]`)
     resolve against a sibling module on multi-module Antora sites, instead
@@ -1449,7 +1510,16 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
     against. `partial_includers` (see _build_partial_includers) lets an
     *unqualified* xref/include written inside a partial be checked against
     the module(s) that actually include it -- that's the context Antora
-    resolves it in, not the partial file's own directory."""
+    resolves it in, not the partial file's own directory.
+
+    `partial_attrs_contexts` (see _build_partial_attrs_contexts) does the
+    same for an attribute used in an xref: target but not defined in this
+    file's own doc_attrs -- if `file` is a partial known to be included by
+    one or more pages that DO define it (even to different values each),
+    each recorded context is tried in turn (via _resolve_xref, reporting
+    suppressed) and the reference counts as resolved if any one of them
+    works, instead of being reported broken using the un-substituted,
+    literal `{attr}` form."""
     lines = _read_lines(file)
     if lines is None:
         return
@@ -1459,54 +1529,31 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
     own_name = _own_component_name(lang)
     doc_attrs = _collect_doc_attrs(lines)
     fallback_roots = (partial_includers or {}).get(file) or {root}
+    attrs_contexts = (partial_attrs_contexts or {}).get(file)
 
     for lineno, line in enumerate(lines, 1):
         if lineno in excluded:
             continue
         for m in _REF_SCAN_RE.finditer(line):
-            target = m.group(0)[:-1]  # strip trailing '['
+            raw_target = m.group(0)[:-1]  # strip trailing '['
+            target = raw_target
             if "{" in target:
                 target = _substitute_attrs(target, doc_attrs)
 
             if target.startswith("xref:"):
                 t = target[len("xref:"):]
-                if _VERSION_PIN_RE.match(t):
-                    continue  # version@component:... pin -- can't resolve, left unchecked
-                candidate_roots = list(fallback_roots)
-                ref_lang_module_roots = lang_module_roots
-                m_component = _COMPONENT_PREFIX_RE.match(t)
-                if m_component:
-                    component = m_component.group(0)[:-1]  # strip trailing ':'
-                    resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
-                    if resolved is None:
-                        continue  # external component xref (blog::x, ...)
-                    candidate_roots = [resolved[0]]
-                    t = resolved[1]
-                    # Any anchor check below now looks inside `component`'s
-                    # own content, not this file's -- a further include
-                    # found while walking it must resolve against its own
-                    # modules, not this repo's (see _component_context).
-                    # `own_name`/`lang_module_roots` (this repo's true own)
-                    # are still passed through unchanged as the anchor
-                    # check's own_name/own_lang_module_roots below, so a
-                    # self-reference back to this repo found inside that
-                    # component's own content still resolves correctly.
-                    ref_lang_module_roots = _component_context(component, lang, lang_module_roots)
-
-                fragment = ""
-                if "#" in t:
-                    t, fragment = t.split("#", 1)
-
-                if t.endswith(".adoc"):
-                    page_t = _strip_root_slash(t)
-                    found_root = next((cand for cand in candidate_roots if (cand / "pages" / page_t).is_file()), None)
-                    if found_root is None:
-                        report(file, lineno, f"xref:{t}")
-                    elif fragment and not _anchor_exists(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots, lang, own_name, lang_module_roots):
-                        report(file, lineno, f"xref:{t}#{fragment} (anchor not found)")
-                elif t:
-                    if not any(_anchor_exists(file, t, cand, ref_lang_module_roots, lang, own_name, lang_module_roots) for cand in candidate_roots):
-                        report(file, lineno, f"xref:{t} (anchor not found)")
+                if "{" in t and attrs_contexts:
+                    resolved_by_a_context = False
+                    for ctx in attrs_contexts:
+                        candidate_t = _substitute_attrs(raw_target, {**ctx, **doc_attrs})[len("xref:"):]
+                        if "{" in candidate_t:
+                            continue  # this context doesn't define the missing attr(s) either
+                        if _resolve_xref(candidate_t, file, lineno, None, lang_module_roots, lang, own_name, list(fallback_roots)):
+                            resolved_by_a_context = True
+                            break
+                    if resolved_by_a_context:
+                        continue  # resolves under a known including page's own attrs -- not broken
+                _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, list(fallback_roots))
 
             elif target.startswith("include::"):
                 t = target[len("include::"):]
@@ -1661,6 +1708,89 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     return includers
 
 
+def _is_under(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _propagate_attrs_to_partials(file, root, lang_module_roots, lang, own_name, attrs, contexts, seen, depth=0):
+    """One top-level page's own traversal for _build_partial_attrs_
+    contexts -- `seen` is local to that single page's call (a fresh set
+    passed in by the caller for each top-level page), not shared across
+    different pages, so two different pages that both reach the same
+    partial each still get their own distinct attrs recorded for it,
+    instead of the second page's traversal being skipped as "already
+    seen". Depth-capped the same way _collect_include_partials is, to
+    guard against an accidental include cycle."""
+    if depth > 8 or file in seen:
+        return
+    seen.add(file)
+    text = _read_text(file)
+    if text is None:
+        return
+    directory = file.parent
+    for m in _INCLUDE_MACRO_RE.finditer(text):
+        t = m.group(1)
+        resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True)
+        if resolved is None:
+            continue
+        target_file, target_root = resolved
+        if not target_file.is_file():
+            continue
+        target_lines = _read_lines(target_file)
+        if target_lines is None:
+            continue
+        if _is_under(target_file, target_root / "partials"):
+            contexts.setdefault(target_file, []).append(attrs)
+        child_attrs = {**attrs, **_collect_doc_attrs(target_lines)}
+        _propagate_attrs_to_partials(target_file, target_root, lang_module_roots, lang, own_name,
+                                      child_attrs, contexts, seen, depth + 1)
+
+
+def _build_partial_attrs_contexts(module_list, lang_module_roots, lang):
+    """{partial_file: [attrs_dict, ...]} -- the document attributes
+    (`:name: value`) visible to a partials/*.adoc file once Antora
+    assembles it into whatever page(s) actually include it, one dict
+    per distinct page reached (directly, or transitively through
+    another partial). Antora/Asciidoctor builds one continuous document
+    per rendered page: an attribute the page itself sets before the
+    include point stays visible to everything pulled in after it,
+    including a shared partial a DIFFERENT page might set the same
+    attribute to a different value for -- the common "parameterized
+    partial" pattern, a real docs-adb case that motivated this:
+    `:monitoring-install-path:` is set to one value by online-install/
+    monitoring/index.adoc and to a different one by offline-install/
+    monitoring/index.adoc, both of which include the same install-
+    monitoring.adoc partial, which itself writes
+    `xref:{monitoring-install-path}/install-prometheus-monitoring.adoc[]`
+    -- a target this tool can only verify once it knows what the
+    attribute is actually bound to on each page that renders it.
+
+    _check_refs_in_file falls back to this, trying each recorded
+    context in turn, only for a reference whose attribute isn't defined
+    in the partial's own file -- the same "try several candidates, OK
+    if any works" policy fallback_roots already applies to an
+    unqualified reference found inside a partial (see
+    _build_partial_includers, which this mirrors but at page, not
+    module, granularity: two pages needing different attribute values
+    can easily sit in the very same module, as the real case above
+    does -- online-install/ and offline-install/ are both under
+    get-started/)."""
+    own_name = _own_component_name(lang)
+    contexts = {}
+    for _, module_root in module_list:
+        for f in _iter_files(module_root / "pages", ".adoc"):
+            lines = _read_lines(f)
+            if lines is None:
+                continue
+            _propagate_attrs_to_partials(f, module_root, lang_module_roots, lang, own_name,
+                                          _collect_doc_attrs(lines), contexts, set())
+    return contexts
+
+
 def _report_skipped_components():
     """Name the components whose references this run left unchecked. The
     counterpart to the --external-root warning in _load_external_components:
@@ -1722,14 +1852,16 @@ def check_pages_broken_refs() -> bool:
     ru_module_list = [(name, ru_root) for name, _, ru_root in modules]
     en_includers = _build_partial_includers(en_module_list, en_module_roots, "en")
     ru_includers = _build_partial_includers(ru_module_list, ru_module_roots, "ru")
+    en_attrs_contexts = _build_partial_attrs_contexts(en_module_list, en_module_roots, "en")
+    ru_attrs_contexts = _build_partial_attrs_contexts(ru_module_list, ru_module_roots, "ru")
 
     for _, en_root, ru_root in modules:
-        for lang, root, lang_module_roots, includers in (
-                ("en", en_root, en_module_roots, en_includers),
-                ("ru", ru_root, ru_module_roots, ru_includers),
+        for lang, root, lang_module_roots, includers, attrs_contexts in (
+                ("en", en_root, en_module_roots, en_includers, en_attrs_contexts),
+                ("ru", ru_root, ru_module_roots, ru_includers, ru_attrs_contexts),
         ):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-                _check_refs_in_file(f, root, report, lang_module_roots, lang, includers)
+                _check_refs_in_file(f, root, report, lang_module_roots, lang, includers, attrs_contexts)
 
     if ok:
         print("OK: no broken xref/include/image references found.")
