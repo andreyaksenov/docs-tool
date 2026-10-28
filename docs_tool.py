@@ -228,7 +228,7 @@ def _load_external_components(specs):
     return components
 
 
-def _auto_discover_external_root_specs(dir_arg):
+def _auto_discover_external_root_specs(dir_arg, override_names=None):
     """--auto-external-root DIR (default ".." -- siblings checked out next
     to this repo): scans DIR's immediate subdirectories and, for each one
     that looks like an Antora docs repo (en/modules or ru/modules present)
@@ -254,7 +254,13 @@ def _auto_discover_external_root_specs(dir_arg):
     to register, not an error. Also skips the current repo's own
     directory -- scanning ".." naturally lists it as one of its own
     siblings, and registering a repo as its own external root would be
-    redundant (self-qualified references already resolve via own_name)."""
+    redundant (self-qualified references already resolve via own_name).
+
+    `override_names` -- the set of names an explicit --external-root ALSO
+    covers in this same invocation -- is passed through to
+    _warn_duplicate_component_names so a duplicate-name warning doesn't
+    fire for a name the caller has already disambiguated; _merged_
+    external_root_specs is what actually supplies it."""
     base = Path(dir_arg).resolve()
     if not base.is_dir():
         _usage_error(f"error: --auto-external-root {dir_arg}: not a directory")
@@ -265,22 +271,35 @@ def _auto_discover_external_root_specs(dir_arg):
             continue
         for name in _repo_component_names(entry):
             specs.append(f"{name}={entry}")
-    _warn_duplicate_component_names(specs)
+    _warn_duplicate_component_names(specs, override_names)
     return specs
 
 
-def _warn_duplicate_component_names(specs):
+def _warn_duplicate_component_names(specs, override_names=None):
     """Two discovered directories claiming the same component name (a stale
     copy next to the real repo, or a second repo reusing a name like `blog`)
     silently shadow each other -- the later one wins, so references can be
     checked against the wrong content and reported broken (or fine) for no
     visible reason. Name every claimant and say which one is in effect; an
-    explicit --external-root NAME=PATH overrides the choice."""
+    explicit --external-root NAME=PATH overrides the choice.
+
+    A name already covered by `override_names` is skipped entirely: a
+    real docs-adb case that motivated this -- --auto-external-root found
+    both docs-blog and docs-greengage-landing claiming `blog`, and the
+    warning kept firing even after the user passed --external-root
+    blog=../docs-blog in that same command to resolve exactly that
+    ambiguity, since the warning used to be decided before the explicit
+    flag was even looked at. The explicit flag always wins regardless
+    (see _merged_external_root_specs), so a warning about an ambiguity
+    the caller has already settled is just noise, not a heads-up."""
+    override_names = override_names or set()
     by_name = {}
     for spec in specs:
         name, _, path = spec.partition("=")
         by_name.setdefault(name, []).append(path)
     for name, paths in by_name.items():
+        if name in override_names:
+            continue
         paths = list(dict.fromkeys(paths))
         if len(paths) > 1:
             print(f"warning: --auto-external-root: component {name} is provided by "
@@ -296,10 +315,16 @@ def _merged_external_root_specs(auto_dir, explicit_specs):
     appending the explicit ones last means an explicit --external-root
     always overrides whatever --auto-external-root guessed for the same
     name, same as _load_external_components(["A=x", "A=y"]) already
-    resolves to "y" -- no separate override logic needed here."""
+    resolves to "y" -- no separate override logic needed here.
+
+    Passes the explicit specs' own names through as auto-discovery's
+    `override_names`, so a duplicate-name warning doesn't fire for a
+    name the caller is already resolving explicitly in this same call --
+    see _warn_duplicate_component_names."""
     specs = []
     if auto_dir is not None:
-        specs.extend(_auto_discover_external_root_specs(auto_dir))
+        override_names = {s.partition("=")[0] for s in (explicit_specs or [])}
+        specs.extend(_auto_discover_external_root_specs(auto_dir, override_names))
     specs.extend(explicit_specs or [])
     return specs
 

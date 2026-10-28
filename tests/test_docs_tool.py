@@ -1374,6 +1374,39 @@ class AutoDiscoverExternalRootSpecsTests(unittest.TestCase):
         self.assertIn("b-real", err)
         self.assertIn(f"using {(self.base / 'b-real').resolve()}", err)
 
+    def test_duplicate_name_warning_suppressed_when_overridden_in_the_same_call(self):
+        """Regression test for a real case: --auto-external-root found
+        both docs-blog and docs-greengage-landing claiming `blog`, and
+        the warning kept firing even after the caller passed an explicit
+        --external-root blog=PATH in that SAME command to resolve
+        exactly that ambiguity. The explicit flag always wins regardless
+        (_merged_external_root_specs), so the warning is just noise
+        once the caller has already settled it -- _auto_discover_
+        external_root_specs on its own (no override_names) must still
+        warn, since a direct call has no such override in play."""
+        self._make_repo("a-copy", "SAME")
+        self._make_repo("b-real", "SAME")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            specs = dt._auto_discover_external_root_specs(str(self.base), override_names={"SAME"})
+        self.assertEqual(buf.getvalue(), "")
+        self.assertEqual(len(specs), 2)
+
+    def test_merged_specs_suppresses_the_warning_for_an_explicitly_overridden_name(self):
+        """End-to-end through _merged_external_root_specs: passing
+        --external-root SAME=... alongside --auto-external-root must
+        not print the duplicate-name warning for SAME, and the explicit
+        path must be what's actually in effect afterward."""
+        self._make_repo("a-copy", "SAME")
+        self._make_repo("b-real", "SAME")
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            specs = dt._merged_external_root_specs(str(self.base), ["SAME=/explicit/winner"])
+        self.assertEqual(buf.getvalue(), "")
+        self.assertEqual(specs[-1], "SAME=/explicit/winner")
+        components = dt._load_external_components(specs)
+        self.assertEqual(components["SAME"]["en"], {})  # /explicit/winner has no en/modules
+
     def test_distinct_names_do_not_warn(self):
         self._make_repo("a", "A")
         self._make_repo("b", "B")
