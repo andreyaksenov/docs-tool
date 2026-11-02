@@ -2637,6 +2637,128 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("{install-path}", output)
 
+    def test_xref_in_never_included_tag_region_of_partial_not_reported(self):
+        """Regression test for the real docs-adb report: a partial carries
+        a broken xref inside tag::unused[] while every include:: of that
+        partial asks for other tags -- the region renders nowhere, so the
+        reference can't be a broken link on any built page and must not
+        be reported (the dead region itself is RF06's signal)."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::unused[]\nSee xref:nowhere.adoc[link].\nend::unused[]\n"
+            "tag::used[]\nPlain body.\nend::used[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[tag=used]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_xref_in_included_tag_region_of_partial_still_reported(self):
+        """Control for the above: the same broken xref inside a region an
+        include:: DOES pull in renders on the built page and must still
+        be reported."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::used[]\nSee xref:nowhere.adoc[link].\nend::used[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[tag=used]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("nowhere.adoc", output)
+
+    def test_xref_outside_tag_regions_of_partial_still_checked(self):
+        """Conservative on purpose: regionless lines of a partial that is
+        only ever included via tag= don't render either, but they stay
+        checked -- latent-bug signal for whoever includes the file whole
+        next."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::used[]\nPlain body.\nend::used[]\n"
+            "See xref:nowhere.adoc[link].\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[tag=used]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("nowhere.adoc", output)
+
+    def test_whole_file_include_makes_every_tag_region_live(self):
+        """A no-tag include pulls the whole file, so a broken xref inside
+        any region of it must still be reported."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::any[]\nSee xref:nowhere.adoc[link].\nend::any[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("nowhere.adoc", output)
+
+    def test_negated_tag_include_keeps_other_regions_live(self):
+        """tags=**;!used pulls everything EXCEPT that region, so a broken
+        xref inside a different region still renders and must still be
+        reported."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::used[]\nPlain body.\nend::used[]\n"
+            "tag::other[]\nSee xref:nowhere.adoc[link].\nend::other[]\n",
+        )
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "include::partial$shared.adoc[tags=**;!used]\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("nowhere.adoc", output)
+
+    def test_attribute_xref_in_dead_region_is_not_reported(self):
+        """The exact reported docs-adb shape: an attribute-parameterized
+        xref target inside a never-included region, with a live includer
+        of a DIFFERENT region that defines the attribute to a value that
+        resolves nowhere. The dead-region skip must fire before the
+        attribute-context fallback even runs -- otherwise the fallback
+        fails on a target that renders nowhere and a bogus BROKEN line
+        is printed."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/real.adoc", "= Real\n")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::unused[]\nSee xref:{p}/real.adoc[link].\nend::unused[]\n"
+            "tag::used[]\nPlain body.\nend::used[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            ":p: nowhere-dir\n\ninclude::partial$shared.adoc[tag=used]\n",
+        )
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
+    def test_broken_page_message_keeps_the_fragment(self):
+        """The BROKEN line must name the target as written: a missing
+        page linked with #fragment used to be reported without it."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "See xref:missing-page.adoc#some-anchor[link].\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("xref:missing-page.adoc#some-anchor", output)
+
+    def test_broken_anchor_message_keeps_the_fragment(self):
+        """Same for the anchor-only branch (a target with no page part):
+        the fragment is part of what the author wrote and must survive
+        into the report."""
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "See xref:no-such-anchor#some-fragment[link].\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("xref:no-such-anchor#some-fragment", output)
+
 
 class PagesNoYoTests(FixtureTestCase):
     def test_yo_is_flagged(self):

@@ -225,6 +225,9 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
 - **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
   `link:` reference resolves to a real file or anchor. `--external-root NAME=PATH`
   (repeatable) resolves references into a sibling Antora repo checked out locally.
+  A reference inside a `tag::` region of a `partials/` file that no `include::`
+  pulls in is skipped — dead content renders nowhere (the region itself is
+  flagged by `--orphaned --target tags`).
   ```bash
   ./docs_tool.py check refs --broken
   ./docs_tool.py check refs --broken --external-root ADCM=../docs-adcm

@@ -1504,29 +1504,34 @@ def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, ca
     fragment = ""
     if "#" in t:
         t, fragment = t.split("#", 1)
+    # Report the target as written: a reference that fails AFTER the "#"
+    # split still names its fragment in the message (the real docs-adb
+    # `xref:{install-link}#step-3-configure-the-service[]` report used to
+    # print just `xref:{install-link}`, hiding what was actually linked).
+    disp = f"{t}#{fragment}" if fragment else t
 
     if t.endswith(".adoc"):
         page_t = _strip_root_slash(t)
         found_root = next((cand for cand in candidate_roots if (cand / "pages" / page_t).is_file()), None)
         if found_root is None:
             if report:
-                report(file, lineno, f"xref:{t}")
+                report(file, lineno, f"xref:{disp}")
             return False
         if fragment and not _anchor_exists(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots, lang, own_name, lang_module_roots):
             if report:
-                report(file, lineno, f"xref:{t}#{fragment} (anchor not found)")
+                report(file, lineno, f"xref:{disp} (anchor not found)")
             return False
         return True
     if t:
         if not any(_anchor_exists(file, t, cand, ref_lang_module_roots, lang, own_name, lang_module_roots) for cand in candidate_roots):
             if report:
-                report(file, lineno, f"xref:{t} (anchor not found)")
+                report(file, lineno, f"xref:{disp} (anchor not found)")
             return False
         return True
     return None  # empty after stripping the fragment -- nothing to resolve, left unchecked same as before
 
 
-def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None):
+def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None):
     """`lang_module_roots` (name -> module root, for the same language as
     `root`) lets a component-prefixed xref (`xref:other-module:page.adoc[]`)
     resolve against a sibling module on multi-module Antora sites, instead
@@ -1544,11 +1549,18 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
     each recorded context is tried in turn (via _resolve_xref, reporting
     suppressed) and the reference counts as resolved if any one of them
     works, instead of being reported broken using the un-substituted,
-    literal `{attr}` form."""
+    literal `{attr}` form.
+
+    `partial_live` (see _build_partial_live_lines) is consulted only for
+    files under partials/: a reference on a line inside a tag:: region no
+    include:: anywhere pulls in never renders in any built page, so it
+    can't be a broken link on the site and is skipped -- the dead region
+    itself is flagged by `check refs --orphaned --target tags` instead."""
     lines = _read_lines(file)
     if lines is None:
         return
     excluded = _excluded_ref_lines(file)
+    live_entry = (partial_live or {}).get(file) if _is_under(file, root / "partials") else None
     directory = file.parent
     lang_module_roots = lang_module_roots or {}
     own_name = _own_component_name(lang)
@@ -1559,6 +1571,8 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
     for lineno, line in enumerate(lines, 1):
         if lineno in excluded:
             continue
+        if live_entry is not None and lineno in live_entry[0] and lineno not in live_entry[1]:
+            continue  # dead tag region -- no include:: renders this line (see _build_partial_live_lines)
         for m in _REF_SCAN_RE.finditer(line):
             raw_target = m.group(0)[:-1]  # strip trailing '['
             target = raw_target
@@ -1879,14 +1893,16 @@ def check_pages_broken_refs() -> bool:
     ru_includers = _build_partial_includers(ru_module_list, ru_module_roots, "ru")
     en_attrs_contexts = _build_partial_attrs_contexts(en_module_list, en_module_roots, "en")
     ru_attrs_contexts = _build_partial_attrs_contexts(ru_module_list, ru_module_roots, "ru")
+    en_live = _build_partial_live_lines(en_module_roots, "en")
+    ru_live = _build_partial_live_lines(ru_module_roots, "ru")
 
     for _, en_root, ru_root in modules:
-        for lang, root, lang_module_roots, includers, attrs_contexts in (
-                ("en", en_root, en_module_roots, en_includers, en_attrs_contexts),
-                ("ru", ru_root, ru_module_roots, ru_includers, ru_attrs_contexts),
+        for lang, root, lang_module_roots, includers, attrs_contexts, partial_live in (
+                ("en", en_root, en_module_roots, en_includers, en_attrs_contexts, en_live),
+                ("ru", ru_root, ru_module_roots, ru_includers, ru_attrs_contexts, ru_live),
         ):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-                _check_refs_in_file(f, root, report, lang_module_roots, lang, includers, attrs_contexts)
+                _check_refs_in_file(f, root, report, lang_module_roots, lang, includers, attrs_contexts, partial_live)
 
     if ok:
         print("OK: no broken xref/include/image references found.")
@@ -2138,6 +2154,59 @@ def _collect_tag_usage(lang_module_roots, lang):
                     tags, negated, whole_file = _parse_include_attrs(attrs)
                     events.setdefault(target_file, []).append((tags, negated, whole_file))
     return events
+
+
+def _build_partial_live_lines(lang_module_roots, lang):
+    """{partial_file: (region_lines, pulled_lines)} for every partial some
+    include:: reaches -- the lines sitting inside ANY tag::/end:: region
+    of that partial, and the subset of them some include:: actually pulls
+    in (the union of _tag_filtered_line_numbers over every call site from
+    _collect_tag_usage: same language, nav.adoc counted as an includer,
+    and registered --external-root components' content scanned too, so an
+    includer living in a sibling repo still makes its regions live).
+
+    Backs check refs --broken's dead-region skip: a line inside a tag
+    region that no include requests never renders in any built page (the
+    real docs-adb case: install-monitoring.adoc's open-grafana-with-adm
+    region, added for a page that doesn't exist yet), so a reference on
+    it can't be a broken link on the site -- reporting it is noise, and
+    an unresolved-attribute reference there drags the
+    _build_partial_attrs_contexts fallback into misfiring too. The dead
+    regions themselves are still flagged -- that's `check refs
+    --orphaned --target tags`' job.
+
+    Deliberately conservative about what gets skipped: only lines inside
+    a tag region, and only in partials -- a page renders standalone, so
+    its untagged regions still reach the site. A partial with NO known
+    includers is absent from the map entirely and keeps its old,
+    fully-checked behavior (it is flagged orphaned separately anyway,
+    and its unchecked content may be a latent bug for whoever includes
+    it next). Likewise, lines outside every region stay checked even
+    when only tag=X includes exist: they don't render either, but
+    keeping them checked preserves that same latent-bug signal."""
+    events = _collect_tag_usage(lang_module_roots, lang)
+    live = {}
+    for f, evs in events.items():
+        lines = _read_lines(f)
+        if lines is None:
+            continue
+        regions = _parse_tag_regions(lines)
+        if not regions:
+            continue
+        pulled = set()
+        for tags, negated, whole_file in evs:
+            nums = _tag_filtered_line_numbers(lines, tags, negated, whole_file)
+            if nums is None:   # a whole-file pull renders everything
+                pulled = None
+                break
+            pulled |= nums
+        if pulled is None:
+            continue           # fully live -- no entry needed
+        region_lines = set()
+        for name, start, end in regions:
+            region_lines |= set(range(start, end + 1))
+        live[f] = (region_lines, pulled)
+    return live
 
 
 def check_tags_orphaned() -> bool:
