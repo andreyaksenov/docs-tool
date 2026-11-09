@@ -2500,6 +2500,63 @@ def check_pages_no_invisible_chars() -> bool:
     return ok
 
 
+_TRAILING_WHITESPACE_RE = re.compile(r'[ \t]+$')
+
+
+def _mark_trailing_whitespace(line: str) -> str:
+    return _TRAILING_WHITESPACE_RE.sub(
+        lambda m: m.group(0).replace(" ", "⟦SPACE⟧").replace("\t", "⟦TAB⟧") + "⟦END⟧",
+        line,
+    )
+
+
+def _check_no_trailing_whitespace(files, target: str) -> bool:
+    ok = True
+    total_hits = 0
+    for f in files:
+        lines = _read_lines(f)
+        if lines is None:
+            continue
+        hits = list(_first_match_hits(lines, _TRAILING_WHITESPACE_RE))
+        if hits:
+            ok = False
+            total_hits += len(hits)
+            print(f"FILE     {f}")
+            for i, col, l in hits:
+                print(f"  {f}:{i}:{col}: trailing whitespace")
+                print(f"    {_mark_trailing_whitespace(l)}")
+    if ok:
+        print(f"OK: no trailing spaces or tabs found in {target}.")
+    else:
+        print(f"\nTotal: {total_hits} line(s) with trailing whitespace.")
+    return ok
+
+
+def check_pages_no_trailing_whitespace() -> bool:
+    """Flags trailing ASCII spaces and tabs in en/ru pages/partials,
+    including whitespace-only lines. Comments and literal blocks are scanned
+    too because this is source hygiene, not rendered-prose validation. An
+    AsciiDoc hard break written as space-plus (` +`) is clean; ordinary
+    trailing spaces have no hard-break exemption. --page is honored."""
+    files = []
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                if _page_allowed(f):
+                    files.append(f)
+    return _check_no_trailing_whitespace(files, "pages")
+
+
+def check_examples_no_trailing_whitespace() -> bool:
+    """Same trailing-space/tab rule over every examples/ file type in en/ru,
+    including comments and verbatim content. Whole-site: ignores --page."""
+    files = []
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            files.extend(_iter_files(root / "examples"))
+    return _check_no_trailing_whitespace(files, "examples")
+
+
 def check_pages_no_unicode_dashes() -> bool:
     """Port of check_pages_no_unicode_dashes.sh (en/ and ru/, all modules)."""
     ok = True
@@ -6750,6 +6807,7 @@ def check_pages_heading_gerund() -> bool:
 
 CHECKS = {
     "examples-no-cyrillic": check_examples_no_cyrillic,
+    "examples-no-trailing-whitespace": check_examples_no_trailing_whitespace,
     "examples-orphaned": check_examples_orphaned,
     "examples-parity": check_examples_parity,
     "images-orphaned": check_images_orphaned,
@@ -6765,6 +6823,7 @@ CHECKS = {
     "pages-no-curly-quotes": check_pages_no_curly_quotes,
     "pages-no-cyrillic": check_pages_no_cyrillic,
     "pages-no-invisible-chars": check_pages_no_invisible_chars,
+    "pages-no-trailing-whitespace": check_pages_no_trailing_whitespace,
     "pages-no-unicode-dashes": check_pages_no_unicode_dashes,
     "pages-no-yo": check_pages_no_yo,
     "pages-orphaned": check_pages_orphaned,
@@ -6850,6 +6909,7 @@ FAMILIES = {
     "chars": {                        # L0 -- Unicode / encoding
         "no-cyrillic":  {"pages": "pages-no-cyrillic", "examples": "examples-no-cyrillic"},
         "no-invisible": {"pages": "pages-no-invisible-chars"},
+        "trailing-whitespace": {"pages": "pages-no-trailing-whitespace", "examples": "examples-no-trailing-whitespace"},
         # `dashes` is actually a style-guide rule ("every dash via --"), the
         # same Grammar-section source as ST04/ST05 -- kept here, not moved to
         # `style`, so it keeps chars' "suggest: block" tier. It's old and has
@@ -6918,8 +6978,8 @@ TIERS = {
 
 _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
 
-# `--target` values, for the two rules that have more than one target
-# (chars --no-cyrillic, refs --orphaned). Shown by `list targets`.
+# `--target` values, for rules that have more than one target (chars
+# --no-cyrillic, chars --trailing-whitespace, refs --orphaned).
 TARGET_DESC = {
     "pages":    "pages/ + partials/  (the default)",
     "partials": "partials/ only",
@@ -6942,6 +7002,8 @@ RULE_IDS = {
     "pages-no-invisible-chars":   "CH03",
     "pages-no-unicode-dashes":    "CH04",
     "pages-ru-latin-homoglyphs":  "CH05",
+    "pages-no-trailing-whitespace": "CH06",
+    "examples-no-trailing-whitespace": "CH07",
     "pages-stray-backticks":      "MK01",
     "pages-unbalanced-delimiters": "MK02",
     "pages-unbalanced-divs":      "MK03",
@@ -6989,6 +7051,8 @@ SUMMARIES = {
     "pages-no-cyrillic":           "no Cyrillic characters in en/ files (RU text left in EN)",
     "examples-no-cyrillic":        "same check, over examples/ (all file types)",
     "pages-no-invisible-chars":    "no zero-width / invisible / bidi-control characters",
+    "pages-no-trailing-whitespace": "no trailing ASCII spaces or tabs",
+    "examples-no-trailing-whitespace": "same check, over examples/ (all file types)",
     "pages-no-unicode-dashes":     "no literal en/em dash -- house style uses --",
     "pages-ru-latin-homoglyphs":   "Latin letters in ru/ prose that should be Cyrillic",
     "pages-stray-backticks":       "no line with an odd number of backticks",
@@ -7058,6 +7122,7 @@ _TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"
 RULE_FLAGS = {
     "pages-no-cyrillic":           "Cyrillic in EN files",
     "pages-no-invisible-chars":    "zero-width characters",
+    "pages-no-trailing-whitespace": "trailing spaces/tabs",
     "pages-no-unicode-dashes":     "literal en/em dashes",
     "pages-ru-latin-homoglyphs":   "Latin letters in RU prose",
     "pages-stray-backticks":       "odd backtick count",
@@ -7114,15 +7179,15 @@ def _rules_table():
                 cmd += " [--target ...]"
             rows.append((rid, cmd, RULE_FLAGS.get(primary, SUMMARIES.get(primary, ""))))
     w_id = max(len(r[0]) for r in rows)
-    w_cmd = max(len(r[1]) for r in rows)
     out = ["Rules:"]
-    out += [f"    {rid:<{w_id}}  {cmd:<{w_cmd}}  {what}" for rid, cmd, what in rows]
+    out += [f"    {rid:<{w_id}}  {cmd}  {what}" for rid, cmd, what in rows]
     return "\n".join(out) + "\n"
 
 
 _RULES_IGNORING_PAGE = {
-    "examples-no-cyrillic", "examples-parity", "nav-structure-parity",
-    "pages-broken-refs", "pages-orphaned", "examples-orphaned", "images-orphaned",
+    "examples-no-cyrillic", "examples-no-trailing-whitespace", "examples-parity",
+    "nav-structure-parity", "pages-broken-refs", "pages-orphaned",
+    "examples-orphaned", "images-orphaned",
 }
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",

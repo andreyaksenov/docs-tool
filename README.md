@@ -46,7 +46,7 @@ Rules are grouped into seven **families**:
 
 | Family   | Covers                                                                                   |
 |----------|------------------------------------------------------------------------------------------|
-| `chars`  | invisible chars, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files               |
+| `chars`  | invisible chars, trailing whitespace, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files |
 | `markup` | stray backticks, unbalanced block delimiters, comma-corrupted link text                  |
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
 | `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup, empty table cells |
@@ -133,6 +133,7 @@ own ID/Command/Flags table.
 | `CH03` | `check chars --no-invisible` | zero-width characters |
 | `CH04` | `check chars --dashes` | literal en/em dashes |
 | `CH05` | `check chars --homoglyphs` | Latin letters in RU prose |
+| `CH06` | `check chars --trailing-whitespace` | trailing spaces/tabs |
 
 - **`CH01` · `check chars --no-cyrillic`** — no Cyrillic in `en/` files (RU text
   left in an EN file). `--target examples` also scans `examples/` → `CH02`.
@@ -161,6 +162,19 @@ own ID/Command/Flags table.
   ```bash
   ./docs_tool.py check chars --homoglyphs
   ./docs_tool.py check chars --homoglyphs --page resource_groups.adoc
+  ```
+
+- **`CH06` · `check chars --trailing-whitespace`** — no trailing ASCII spaces or
+  tabs in `en/` or `ru/` pages/partials, including whitespace-only lines, comments,
+  and literal blocks. Findings show the whitespace with visible markers. AsciiDoc's
+  intentional space-plus (` +`) hard break is clean. `--target examples` scans every
+  example file type → `CH07`; that target ignores `--page`, like the other whole-site
+  example checks.
+  ```bash
+  ./docs_tool.py check chars --trailing-whitespace
+  ./docs_tool.py check chars --trailing-whitespace --page resource_groups.adoc
+  ./docs_tool.py check chars --trailing-whitespace --target examples
+  ./docs_tool.py check chars --trailing-whitespace --target all
   ```
 
 ### `markup` — AsciiDoc syntax

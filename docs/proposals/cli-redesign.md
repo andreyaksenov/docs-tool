@@ -38,7 +38,7 @@ deterministic a check is, whether it is safe to hard-block, its language scope, 
 
 | Lvl | Family | Tier | Authority | Checks it holds today | Default |
 |----:|--------|------|-----------|-----------------------|---------|
-| L0 | `chars`  | universal  | Unicode / encoding | no-invisible-chars, no-unicode-dashes, ru-latin-homoglyphs, no-cyrillic (EN) | block |
+| L0 | `chars`  | universal  | Unicode / encoding | no-invisible-chars, no-trailing-whitespace, no-unicode-dashes, ru-latin-homoglyphs, no-cyrillic (EN) | block |
 | L1 | `markup` | universal  | AsciiDoc spec | stray-backticks, unbalanced-delimiters | block |
 | L2 | `refs`   | universal  | Antora reference resolution | broken-refs, pages/partials/examples/images/tags-orphaned | block |
 | L3 | `style`  | house      | Arenadata style guide | no-yo, file-path-italics, table-cell-periods | warn |
@@ -170,6 +170,8 @@ Every current flag → its replacement. Nothing is dropped; the old flags still 
 | 20 | `--check-pages-unbalanced-delimiters`   | `docs_tool check markup --delimiters` |
 | 21 | `--check-partials-orphaned`             | `docs_tool check refs --orphaned --target partials` |
 | 22 | `--check-tags-orphaned`                 | `docs_tool check refs --orphaned --target tags` |
+| 23 | `--check-pages-no-trailing-whitespace`  | `docs_tool check chars --trailing-whitespace` |
+| 24 | `--check-examples-no-trailing-whitespace` | `docs_tool check chars --trailing-whitespace --target examples` |
 
 `links-external` (`LK01`) was added later and has no legacy predecessor in the original 22.
 The generated `--check-links-external` flag exists for symmetry, but the surface is

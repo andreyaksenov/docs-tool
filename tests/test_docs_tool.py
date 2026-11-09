@@ -1235,6 +1235,91 @@ class IterFilesTests(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class TrailingWhitespaceTests(FixtureTestCase):
+    def test_pages_and_partials_in_both_languages_are_checked(self):
+        en_page = self.write("en/modules/ROOT/pages/p.adoc", "clean\nabc \t\n")
+        ru_partial = self.write("ru/modules/ROOT/partials/snippet.adoc", "  \n")
+
+        ok, out = self.run_check(dt.check_pages_no_trailing_whitespace)
+
+        self.assertFalse(ok)
+        self.assertIn(f"{en_page}:2:4: trailing whitespace", out)
+        self.assertIn("abc⟦SPACE⟧⟦TAB⟧⟦END⟧", out)
+        self.assertIn(f"{ru_partial}:1:1: trailing whitespace", out)
+        self.assertIn("⟦SPACE⟧⟦SPACE⟧⟦END⟧", out)
+        self.assertIn("Total: 2 line(s) with trailing whitespace.", out)
+
+    def test_clean_lines_and_asciidoc_hard_break_pass(self):
+        self.write("en/modules/ROOT/pages/p.adoc", "clean\nfirst line +\nsecond line\n")
+
+        ok, out = self.run_check(dt.check_pages_no_trailing_whitespace)
+
+        self.assertTrue(ok, out)
+        self.assertIn("OK: no trailing spaces or tabs found in pages.", out)
+
+    def test_comments_and_listing_blocks_are_checked(self):
+        self.write("en/modules/ROOT/pages/p.adoc", "// comment \n----\nvalue\t\n----\n")
+
+        ok, out = self.run_check(dt.check_pages_no_trailing_whitespace)
+
+        self.assertFalse(ok)
+        self.assertIn("Total: 2 line(s) with trailing whitespace.", out)
+
+    def test_page_filter_limits_page_findings(self):
+        wanted = self.write("en/modules/ROOT/pages/wanted.adoc", "text \n")
+        other = self.write("en/modules/ROOT/pages/other.adoc", "text\t\n")
+        dt._PAGE_FILTER = {"names": {("wanted",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_pages_no_trailing_whitespace)
+
+        self.assertFalse(ok)
+        self.assertIn(str(wanted), out)
+        self.assertNotIn(str(other), out)
+
+    def test_examples_in_both_languages_and_all_file_types_are_checked(self):
+        en_example = self.write("en/modules/ROOT/examples/query.sql", "SELECT 1; \n")
+        ru_example = self.write("ru/modules/ROOT/examples/output.txt", "result\t\n")
+        self.write("en/modules/ROOT/examples/script.py", "print('clean')\n")
+
+        ok, out = self.run_check(dt.check_examples_no_trailing_whitespace)
+
+        self.assertFalse(ok)
+        self.assertIn(f"{en_example}:1:10: trailing whitespace", out)
+        self.assertIn(f"{ru_example}:1:7: trailing whitespace", out)
+        self.assertIn("Total: 2 line(s) with trailing whitespace.", out)
+
+    def test_clean_examples_pass(self):
+        self.write("en/modules/ROOT/examples/query.sql", "SELECT 1;\n")
+
+        ok, out = self.run_check(dt.check_examples_no_trailing_whitespace)
+
+        self.assertTrue(ok, out)
+        self.assertIn("OK: no trailing spaces or tabs found in examples.", out)
+
+    def test_examples_ignore_page_filter(self):
+        example = self.write("en/modules/ROOT/examples/query.sql", "SELECT 1; \n")
+        dt._PAGE_FILTER = {"names": {("unrelated",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_no_trailing_whitespace)
+
+        self.assertFalse(ok)
+        self.assertIn(str(example), out)
+
+    def test_family_selection_supports_pages_examples_and_all(self):
+        self.assertEqual(
+            dt._resolve_family_selection("chars", {"trailing-whitespace"}, None),
+            ["pages-no-trailing-whitespace"],
+        )
+        self.assertEqual(
+            dt._resolve_family_selection("chars", {"trailing-whitespace"}, "examples"),
+            ["examples-no-trailing-whitespace"],
+        )
+        self.assertEqual(
+            set(dt._resolve_family_selection("chars", {"trailing-whitespace"}, "all")),
+            {"pages-no-trailing-whitespace", "examples-no-trailing-whitespace"},
+        )
+
+
 class LoadExternalComponentsTests(unittest.TestCase):
     def test_valid_path_produces_no_warning(self):
         tmpdir = tempfile.mkdtemp(prefix="docs_tool_ext_")
