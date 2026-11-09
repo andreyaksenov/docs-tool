@@ -6883,12 +6883,11 @@ _NETWORK_FAMILIES = {"links"}
 # CHECK FAMILIES  (the `docs_tool check <family>` surface)
 # --------------------------------------------------------------------------
 #
-# The 22 flat CHECKS keys above stay the source of truth -- every check
+# The flat CHECKS keys above stay the source of truth -- every check
 # function, its behaviour, and the legacy `--check-<key>` flag are unchanged.
 # FAMILIES is a routing layer on top: it groups the same checks by where a
-# rule's authority comes from (the "writing-quality pyramid" -- see
-# docs/proposals/cli-redesign.md), which also predicts how deterministic a
-# check is and whether it should block a commit.
+# rule's authority comes from, which also predicts how deterministic a check
+# is and whether it should block a commit.
 #
 #   FAMILIES[family][rule] = {scan-target: CHECKS-key}
 #
@@ -8344,8 +8343,7 @@ def _run_selected(selected, glossary_paths, legacy_headers=False):
 def _main_legacy():
     """The pre-subcommand CLI: `docs_tool.py --check-<name> ...`,
     `--all-checks`, `--sync`, `--list-checks`, `--list-modules`. Still
-    supported; `docs_tool.py check <family>` is the current surface (see
-    docs/proposals/cli-redesign.md)."""
+    supported; `docs_tool.py check <family>` is the current surface."""
     global EXTERNAL_COMPONENTS
     parser = build_parser()
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":

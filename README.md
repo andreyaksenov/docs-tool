@@ -807,9 +807,9 @@ broken reference in the repo. Run `check refs` in CI, or by hand before a releas
 
 The pre-subcommand interface still works: `--check-<name>`, `--all-checks`,
 `--sync`, `--list-checks`, `--list-modules`. Every check is reachable both ways —
-upgrading a vendored copy doesn't break an existing hook or CI job. See the
-[migration map](docs/proposals/cli-redesign.md#4-full-migration-map) for the
-`check <family>` equivalent of each `--check-*` flag, or run `./docs_tool.py --list-checks`.
+upgrading a vendored copy doesn't break an existing hook or CI job. Run
+`./docs_tool.py list` for the current family/rule map, or `./docs_tool.py --list-checks`
+for the legacy flags.
 `--all-checks` runs everything **except `--check-links-external`** (network) — that
 one only runs when named.
 
