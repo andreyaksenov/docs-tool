@@ -229,38 +229,11 @@ def _load_external_components(specs):
 
 
 def _auto_discover_external_root_specs(dir_arg, override_names=None):
-    """--auto-external-root DIR (default ".." -- siblings checked out next
-    to this repo): scans DIR's immediate subdirectories and, for each one
-    that looks like an Antora docs repo (en/modules or ru/modules present)
-    with a readable antora.yml `name:`, returns a "NAME=PATH" spec -- the
-    same format --external-root already takes, so these merge into that
-    machinery as-is (see _merged_external_root_specs) rather than needing
-    a second resolver.
-
-    The name comes from actually reading antora.yml (_parse_component_name,
-    ground truth), not from guessing it off the directory's own name --
-    naive guessing (e.g. assume a directory named docs-adpg-control is
-    named "ADPGCONTROL" the same way docs-adpg is "ADPG") is wrong for a
-    real fraction of a real fleet: docs-adpg-control/docs-adqm-control are
-    ADPGCONTROL/ADQMCONTROL (not "ADPG-CONTROL"/"ADQM-CONTROL" or
-    "ADPGCONTROL" guessed from the hyphen), and docs-greengagedb/
-    docs-greengage-backup/docs-greengage-pxf are docs-gg/docs-backup/
-    docs-pxf (unrelated to their directory names entirely) -- exactly the
-    downside this flag exists to sidestep by reading the real answer
-    instead.
-
-    Silently skips a subdirectory that isn't a docs repo, or whose
-    antora.yml has no readable name: -- it's just not an Antora component
-    to register, not an error. Also skips the current repo's own
-    directory -- scanning ".." naturally lists it as one of its own
-    siblings, and registering a repo as its own external root would be
-    redundant (self-qualified references already resolve via own_name).
-
-    `override_names` -- the set of names an explicit --external-root ALSO
-    covers in this same invocation -- is passed through to
-    _warn_duplicate_component_names so a duplicate-name warning doesn't
-    fire for a name the caller has already disambiguated; _merged_
-    external_root_specs is what actually supplies it."""
+    """Discover NAME=PATH specs from DIR's immediate Antora repo children.
+    Component names come from antora.yml, never directory-name guesses.
+    Non-repos, unreadable names, and the current repo are skipped.
+    `override_names` contains explicitly configured components whose
+    duplicate-name warnings are already resolved by the caller."""
     base = Path(dir_arg).resolve()
     if not base.is_dir():
         _usage_error(f"error: --auto-external-root {dir_arg}: not a directory")
@@ -276,22 +249,9 @@ def _auto_discover_external_root_specs(dir_arg, override_names=None):
 
 
 def _warn_duplicate_component_names(specs, override_names=None):
-    """Two discovered directories claiming the same component name (a stale
-    copy next to the real repo, or a second repo reusing a name like `blog`)
-    silently shadow each other -- the later one wins, so references can be
-    checked against the wrong content and reported broken (or fine) for no
-    visible reason. Name every claimant and say which one is in effect; an
-    explicit --external-root NAME=PATH overrides the choice.
-
-    A name already covered by `override_names` is skipped entirely: a
-    real docs-adb case that motivated this -- --auto-external-root found
-    both docs-blog and docs-greengage-landing claiming `blog`, and the
-    warning kept firing even after the user passed --external-root
-    blog=../docs-blog in that same command to resolve exactly that
-    ambiguity, since the warning used to be decided before the explicit
-    flag was even looked at. The explicit flag always wins regardless
-    (see _merged_external_root_specs), so a warning about an ambiguity
-    the caller has already settled is just noise, not a heads-up."""
+    """Warn when multiple discovered paths claim one component name, naming
+    every claimant and the selected path. Explicit --external-root entries
+    override discovery, so names in `override_names` need no warning."""
     override_names = override_names or set()
     by_name = {}
     for spec in specs:
@@ -370,20 +330,10 @@ def _discover_default_glossaries():
 
 
 def _load_glossary(paths):
-    """Parses --glossary PATH pipe-delimited file(s) (columns
-    en|ru|ru_pattern|note; format documented in greengagedb-glossary.psv's
-    own header) into {lookup_key: {"ru_display": {...}, "patterns": [...]}}.
-    "|" -- not "," -- is the column separator specifically so that ordinary
-    EN/RU prose (which routinely contains commas, but essentially never a
-    literal "|") never needs quoting/escaping the way the format's retired
-    CSV predecessor did. `en` is used verbatim (lowercased) as the lookup
-    key -- there's no disambiguation note embedded in it to strip; that
-    context lives in the (match-irrelevant) `note` column instead. Multiple
-    files, or multiple rows within one file, sharing the same `en` are
-    merged: the key accumulates every contributing row's translation/pattern
-    as an alternative, since a sense that can't be told apart automatically
-    (e.g. the two "session" rows) must accept either as correct rather than
-    guessing which one applies."""
+    """Load pipe-delimited en|ru|ru_pattern|note files into lookup entries
+    containing display translations and compiled patterns. Lowercase EN text
+    is the key. Rows sharing a key contribute alternative translations and
+    patterns because their senses cannot be distinguished automatically."""
     glossary = {}
     for path_str in paths or []:
         path = Path(path_str)
@@ -788,32 +738,12 @@ _IMAGE_REF_RE = re.compile(r'(image:{1,2}|injectSvg:{1,2}|inlineSVG:{1,2})([^\]\
 
 
 def _collect_used_images(lang_module_roots, lang, includer_roots):
-    """Scans every pages/partials file (in this language) for
-    image:/image::/injectSvg:/injectSvg::/inlineSVG:/inlineSVG:: macros and
-    returns the set of concrete images/ file Paths they resolve to -- the
-    same resolution _check_refs_in_file's image branch uses: a
-    component/module-qualified prefix goes through _resolve_module_ref
-    (skipped if it names an unregistered external component, same as
-    broken-refs); an unqualified one resolves against whichever module(s)
-    actually include the file (includer_roots), or the file's own module
-    for content that is not included elsewhere. A page also keeps its own
-    module context because it can render standalone as well as through an
-    include. Registered external components are scanned as sources too:
-    their pages and partials can be included by this repo, with images
-    stored in the including page's module. This is deliberately
-    resolution-based rather than a basename-in-corpus-text check: two
-    different modules can each have their own same-named images/foo.png,
-    and only resolving each reference to a specific file -- instead of
-    asking whether "foo.png" appears anywhere in the site's text -- tells
-    a genuinely-unused duplicate apart from the one that's actually used
-    (a substring match also has the opposite failure mode:
-    images/services.png went unflagged for years because
-    images/adb_add_services.png, an unrelated file in another module,
-    happens to end in "services.png"). `own_name` lets a self-qualified
-    reference to this repo's own component (e.g.
-    `image::ADCM:ROOT:clusters/downloads_en.png[]`, written inside
-    docs-adcm's own partials -- a real, existing pattern) still resolve,
-    the same way an unqualified one would."""
+    """Return concrete image paths referenced by image and SVG macros in
+    local and registered external pages/partials. Resolve qualified targets
+    through _resolve_module_ref. Unqualified targets in included content use
+    each including module; pages also retain their own module because they
+    can render standalone. Path resolution, rather than basename matching,
+    keeps same-named images in different modules distinct."""
     used = set()
     own_name = _own_component_name(lang)
     sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
@@ -1099,23 +1029,10 @@ _ID_PREFIX_SEP_COMBOS = (("", "-"), ("_", "_"), ("", "_"), ("_", "-"))
 
 
 def _heading_autoids(title: str):
-    """Anchors are usually left implicit: a heading like `== 6.23.3` gets an
-    ID Asciidoctor derives from its text, not one written in the source, so
-    `_anchor_exists` can't just grep for `[#id]`/`[[id]]` -- it has to
-    reproduce that derivation. The exact result depends on the site's
-    `idprefix`/`idseparator` attributes (not visible to this tool, since
-    they live in the Antora playbook, not this repo), so this tries a few
-    common conventions and accepts a match against any of them.
-
-    A leading inline `[[id]]`/`[[id,reftext]]` anchor (`== [[id]]Title`) is
-    stripped first -- confirmed against real Asciidoctor that this form is
-    excluded from the heading's own visible title (and therefore its own
-    auto-id derivation too), rendered as a separate `<a id="id">` tag
-    alongside the normal `<h2 id="_title">`. Unlike that double-bracket
-    form, an inline `[#id]` (single bracket) is NOT a recognized anchor
-    position at all -- Asciidoctor renders it as plain literal text, which
-    genuinely is part of the title and must stay in the autoid
-    computation, so it's deliberately left untouched here."""
+    """Generate common Asciidoctor auto-ID variants for a heading. Multiple
+    prefix/separator conventions are accepted because playbook attributes are
+    unavailable here. Leading inline `[[id]]` anchors do not participate in
+    auto-ID generation; single-bracket `[#id]` text remains part of the title."""
     title = _HEADING_INLINE_ANCHOR_RE.sub("", title)
     plain = _ID_STRIP_MARKUP_RE.sub("", title).lower()
     return {
@@ -1132,26 +1049,9 @@ _BLOCK_ID_LINE_RE = re.compile(r'^\[#[\w-]+(?:\.[\w-]+)*\]\s*$|^\[\[[\w-]+(?:,[^
 
 
 def _explicit_id_suppresses_autoid(lines, idx):
-    """True if the (0-based) heading line at `idx` is immediately preceded
-    by an explicit block ID of its own (see _BLOCK_ID_LINE_RE), skipping
-    over other pure-attribute lines in between (e.g. `[.role]`,
-    `[discrete]`) the same way _has_caption_above skips an anchor line to
-    find a caption above it.
-
-    Confirmed against real Asciidoctor: an explicit ID given this way
-    REPLACES the heading's own auto-generated id entirely -- `[#single]`
-    directly above `==== *Прочие сервисы*` renders `id="single"` only,
-    never also the heading-text-derived `прочие-сервисы` -- so
-    _heading_autoids must not be consulted for that heading at all.
-
-    Deliberately NOT extended to an inline `[[id]]` embedded WITHIN the
-    heading's own title text on the same line (`== [[id]]Title`, which the
-    original bug report suggested treating the same way): verified against
-    real Asciidoctor that this does NOT suppress the auto-id -- it adds a
-    *second*, separate anchor alongside the normal one (`<h2
-    id="_title"><a id="id"></a>Title</h2>`). That inline anchor is already
-    matched independently by the plain line-pattern search in
-    _anchor_exists, so no special-casing is needed (or correct) here."""
+    """Return whether an explicit block ID above a heading replaces its
+    auto-ID, skipping intervening attribute lines. An inline `[[id]]` within
+    the heading instead adds a separate anchor and does not suppress auto-ID."""
     j = idx - 1
     while j >= 0 and _BLOCK_ATTR_LINE_RE.match(lines[j]):
         if _BLOCK_ID_LINE_RE.match(lines[j]):
@@ -1177,63 +1077,20 @@ def _own_component_name(lang):
 
 
 def _component_context(component, lang, lang_module_roots):
-    """If `component` names a successfully-registered --external-root
-    component, returns the module roots to use for resolving a BARE
-    module-qualified reference found in content that now lives inside
-    it -- its own modules, not the caller's. Real case: checking
-    docs-adbes with --external-root ADB=../docs-adb reported
-    `note: N referenced component(s) left unchecked -- blog,
-    get-started, how-to` -- get-started/how-to are real modules inside
-    ADB's own content, not external components, but every bare
-    reference resolved while walking into ADB kept reusing docs-adbes's
-    own lang_module_roots instead of switching to ADB's once content
-    from ADB was being scanned.
-
-    Deliberately does NOT touch `own_name`/home's own module roots --
-    those must stay pinned to this tool run's true home repo no matter
-    whose content is currently being walked, so that a *different*,
-    perfectly legitimate pattern keeps working: content living inside
-    this registered external component referencing the true home back
-    by its real name (e.g. `include::ADB:how-to:metrics.adoc[]` found
-    inside docs-adbes's own content when the home repo is "ADB") --
-    see _resolve_module_ref's `own_lang_module_roots`. Swapping both
-    together was tried and broke exactly that case (see
-    test_cross_repo_usage_via_external_root_is_not_orphaned).
-
-    Returns the current (unswapped) `lang_module_roots` for anything
-    else -- a bare module name within the current context, or a name
-    this tool can't resolve at all, left to the caller/
-    _resolve_module_ref to record as skipped."""
+    """Return the registered component's own modules when traversal enters
+    its content, so bare module-qualified references resolve locally. Keep
+    the original repo identity separate for references back home. For local
+    modules and unknown components, retain the current module mapping."""
     modules = EXTERNAL_COMPONENTS.get(component, {}).get(lang)
     return modules if modules is not None else lang_module_roots
 
 
 def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None, own_lang_module_roots=None):
-    """Resolve a single `name:` prefix already peeled off a target/include
-    path. `name` may be a module in this repo's current language, or (if
-    registered via --external-root) a sibling Antora component -- in which
-    case an optional following `module:` segment at the start of `rest`
-    selects the module within it (defaulting to ROOT, same as Antora).
-    `own_name` (this repo's own antora.yml `name:`, e.g. "ADB") lets a
-    self-qualified reference resolve back to this tool run's true home
-    repo too -- needed when `name`/`rest` come from a *different*
-    repo's content (see _collect_tag_usage scanning a registered
-    external component's pages/partials), which may reference this
-    repo the same fully-qualified way it would reference any other
-    sibling component, e.g. `include::ADB:how-to:metrics.adoc[tag=...]`
-    written in docs-adbes. `own_lang_module_roots` is what that
-    self-reference resolves into -- defaulting to `lang_module_roots`
-    itself, the right answer whenever a caller hasn't decoupled the
-    two (i.e. `lang_module_roots` already *is* home's own modules, the
-    common case). A caller that has switched `lang_module_roots` to a
-    *different* component's own modules (via _component_context, while
-    walking that component's own content) must pass home's true
-    modules here explicitly, so a self-reference found inside that
-    content still resolves back to the real home, not to whichever
-    component is currently being walked.
-    Returns (target_root, remaining_rest), or None if `name` names
-    something this tool can't resolve (unregistered external component --
-    left unchecked, not reported broken)."""
+    """Resolve a module or component prefix to (module_root, remaining_path).
+    Component targets may select a module in `rest`, defaulting to ROOT.
+    `own_name` and `own_lang_module_roots` resolve self-qualified references
+    back to the original repo even while scanning external content. Unknown
+    components return None and are recorded as skipped."""
     if name in lang_module_roots:
         return lang_module_roots[name], rest
     modules = EXTERNAL_COMPONENTS.get(name, {}).get(lang)
@@ -1273,60 +1130,15 @@ def _resolve_module_ref(name, rest, lang_module_roots, lang, own_name=None, own_
 
 
 def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, lang="en", depth=0, seen=None, own_name=None, own_lang_module_roots=None, only_lines=None):
-    """A page's anchors may live in content it pulls in via include::
-    (recursively), not its own source -- an explicit partial$/page$/
-    example$-marked target, a component/module-qualified target with no
-    family marker at all (Antora defaults that to the page family, e.g.
-    include::ADB:how-to:metrics.adoc[tag=x]), or a bare relative-path
-    include of a sibling file. Reuses _resolve_include_target (the same
-    resolver _check_refs_in_file's own include branch and
-    _collect_tag_usage already trust) for all three, instead of this
-    function keeping its own narrower, independently-drifting copy of
-    that logic -- a real docs-adbes report: an anchor inside a
-    tag=-included region of an external ADB page wasn't found unless the
-    include spelled out page$ explicitly, even though Antora resolves
-    the unmarked form identically. Depth-capped to guard against an
-    accidental include cycle.
+    """Recursively return included content as (file, only_lines) pairs.
+    `only_lines` contains the lines selected by tag/tags attributes, or None
+    for the whole file; nested includes in excluded regions are not walked.
+    Cycle detection keys on both file and selected lines so different tag
+    selections are traversed independently.
 
-    Returns a list of (file, only_lines) pairs, not bare paths --
-    `only_lines` is the set of 1-based line numbers of `file` that are
-    ACTUALLY pulled in (None means the whole file), computed from each
-    include::...[tag=/tags=...] attribute list via _parse_include_attrs/
-    _tag_filtered_line_numbers, the same primitives _flatten_delimiter_
-    lines (MK02) already uses for this. Real bug this fixes: an anchor
-    living in a tagged region a page never actually includes (e.g. a
-    heading inside tag::part-07[]/end::part-07[] when only part-01 and
-    part-20 are ever requested) used to count as reachable just because
-    it was *somewhere* in a file reached through *some* include chain --
-    `check refs --broken` then passed a real link that renders nowhere.
-    An include line that itself sits inside a region the CURRENT scope
-    excludes is skipped entirely (it never recurses into it), which also
-    covers a nested include inside an excluded tagged region.
-    `seen` is therefore keyed on (file, only_lines) rather than bare
-    file -- the same partial included twice with two different, non-
-    overlapping tags (a real, common pattern) must be walked both times,
-    not deduped away after the first.
-
-    `lang_module_roots` is the "local" module context -- whichever
-    component's own content is currently being walked -- and switches
-    on recursion (via _component_context) when an include crosses into
-    a different registered external component, so a BARE
-    module-qualified reference found inside THAT component's own
-    content (e.g. `get-started:partial$x.adoc[]` written inside
-    docs-adb itself) resolves against docs-adb's own modules instead of
-    wrongly looking like an unregistered external component.
-
-    `own_name`/`own_lang_module_roots` are this tool run's true home
-    repo identity and modules -- computed once at the true top-level
-    call and then passed down UNCHANGED through every level of
-    recursion, deliberately never swapped the way `lang_module_roots`
-    is -- so a self-qualified reference back to the real home found
-    deep inside a different component's own content (e.g.
-    `ADB:how-to:metrics.adoc[]` written inside docs-adbes's content,
-    when the home repo is "ADB") still resolves correctly even while
-    `lang_module_roots` itself now points at docs-adbes's own modules.
-    See _resolve_module_ref and _component_context for why these two
-    contexts can't be merged into one."""
+    `lang_module_roots` follows the component currently being walked, while
+    `own_name` and `own_lang_module_roots` keep the original repo context for
+    references back to it. Recursion is depth-capped."""
     if seen is None:
         seen = set()
     key = (file, None if only_lines is None else frozenset(only_lines))
@@ -1366,25 +1178,10 @@ def _collect_include_partials(file: Path, root: Path, lang_module_roots=None, la
 
 
 def _anchor_exists(target_file: Path, anchor_id: str, root: Path, lang_module_roots=None, lang="en", own_name=None, own_lang_module_roots=None) -> bool:
-    """`own_name`/`own_lang_module_roots` let a caller that has already
-    resolved `target_file` into a registered --external-root
-    component's own content (rather than the current repo's) pass this
-    tool run's true home identity/modules through to
-    _collect_include_partials unchanged, while `lang_module_roots`
-    itself is the *local* (target component's own) context -- see
-    _collect_include_partials and _resolve_module_ref for why those are
-    two different things.
-
-    _collect_include_partials now returns (file, only_lines) pairs, not
-    bare paths -- only_lines (None = whole file) is which of that file's
-    lines are actually pulled in by the include chain that reached it
-    (tag=/tags= honored), so a line outside that scope is skipped here
-    too, the same real-anchor-vs-unused-tagged-region distinction that
-    motivated returning it in the first place.
-
-    A heading line only counts via its auto-generated id when nothing
-    above it already gave it an explicit one -- see
-    _explicit_id_suppresses_autoid."""
+    """Search explicit anchors and heading auto-IDs in included content,
+    restricted to lines selected by the include chain. Keep the target
+    component's local modules separate from the original repo context.
+    Explicit heading block IDs suppress their auto-IDs."""
     pattern = re.compile(_ANCHOR_ID_TPL.format(re.escape(anchor_id)))
     for f, only_lines in _collect_include_partials(target_file, root, lang_module_roots, lang, own_name=own_name, own_lang_module_roots=own_lang_module_roots):
         lines = _read_lines(f)
@@ -1557,10 +1354,7 @@ def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, ca
     fragment = ""
     if "#" in t:
         t, fragment = t.split("#", 1)
-    # Report the target as written: a reference that fails AFTER the "#"
-    # split still names its fragment in the message (the real docs-adb
-    # `xref:{install-link}#step-3-configure-the-service[]` report used to
-    # print just `xref:{install-link}`, hiding what was actually linked).
+    # Keep the fragment in diagnostics even when validation fails after splitting.
     disp = f"{t}#{fragment}" if fragment else t
 
     if t.endswith(".adoc"):
@@ -1585,30 +1379,11 @@ def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, ca
 
 
 def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None):
-    """`lang_module_roots` (name -> module root, for the same language as
-    `root`) lets a component-prefixed xref (`xref:other-module:page.adoc[]`)
-    resolve against a sibling module on multi-module Antora sites, instead
-    of always being treated as pointing outside this repo. `lang` selects
-    which side of any registered --external-root component to resolve
-    against. `partial_includers` (see _build_partial_includers) lets an
-    *unqualified* xref/include written inside a partial be checked against
-    the module(s) that actually include it -- that's the context Antora
-    resolves it in, not the partial file's own directory.
-
-    `partial_attrs_contexts` (see _build_partial_attrs_contexts) does the
-    same for an attribute used in an xref: target but not defined in this
-    file's own doc_attrs -- if `file` is a partial known to be included by
-    one or more pages that DO define it (even to different values each),
-    each recorded context is tried in turn (via _resolve_xref, reporting
-    suppressed) and the reference counts as resolved if any one of them
-    works, instead of being reported broken using the un-substituted,
-    literal `{attr}` form.
-
-    `partial_live` (see _build_partial_live_lines) is consulted only for
-    files under partials/: a reference on a line inside a tag:: region no
-    include:: anywhere pulls in never renders in any built page, so it
-    can't be a broken link on the site and is skipped -- the dead region
-    itself is flagged by `check refs --orphaned --target tags` instead."""
+    """Check references using sibling and registered external module roots.
+    Unqualified references in partials use their including modules. Undefined
+    partial attributes are tried against each including page's attribute
+    context and pass if any context resolves. References in tag regions that
+    no include selects are skipped; orphan-tag checking reports them instead."""
     lines = _read_lines(file)
     if lines is None:
         return
@@ -1807,9 +1582,9 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
 
 
 def _build_included_content_roots(lang_module_roots, lang):
-    """{included_file: {including_module_root, ...}} for pages and partials
-    included by this repo or a registered external component. Image macros
-    in included content resolve in each including page's module context."""
+    """Map included pages/partials to their including module roots, scanning
+    this repo and registered external components. Resource references in
+    included content resolve in each including page's module context."""
     includers = {}
     own_name = _own_component_name(lang)
     sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
@@ -1872,34 +1647,10 @@ def _propagate_attrs_to_partials(file, root, lang_module_roots, lang, own_name, 
 
 
 def _build_partial_attrs_contexts(module_list, lang_module_roots, lang):
-    """{partial_file: [attrs_dict, ...]} -- the document attributes
-    (`:name: value`) visible to a partials/*.adoc file once Antora
-    assembles it into whatever page(s) actually include it, one dict
-    per distinct page reached (directly, or transitively through
-    another partial). Antora/Asciidoctor builds one continuous document
-    per rendered page: an attribute the page itself sets before the
-    include point stays visible to everything pulled in after it,
-    including a shared partial a DIFFERENT page might set the same
-    attribute to a different value for -- the common "parameterized
-    partial" pattern, a real docs-adb case that motivated this:
-    `:monitoring-install-path:` is set to one value by online-install/
-    monitoring/index.adoc and to a different one by offline-install/
-    monitoring/index.adoc, both of which include the same install-
-    monitoring.adoc partial, which itself writes
-    `xref:{monitoring-install-path}/install-prometheus-monitoring.adoc[]`
-    -- a target this tool can only verify once it knows what the
-    attribute is actually bound to on each page that renders it.
-
-    _check_refs_in_file falls back to this, trying each recorded
-    context in turn, only for a reference whose attribute isn't defined
-    in the partial's own file -- the same "try several candidates, OK
-    if any works" policy fallback_roots already applies to an
-    unqualified reference found inside a partial (see
-    _build_partial_includers, which this mirrors but at page, not
-    module, granularity: two pages needing different attribute values
-    can easily sit in the very same module, as the real case above
-    does -- online-install/ and offline-install/ are both under
-    get-started/)."""
+    """Map each partial to the document-attribute contexts of pages that
+    include it, directly or transitively. The same partial may see different
+    values on different pages. Reference checking tries these contexts only
+    for attributes not defined in the partial itself."""
     own_name = _own_component_name(lang)
     contexts = {}
     for _, module_root in module_list:
@@ -2109,28 +1860,12 @@ def _excluded_comment_lines(path: Path) -> set:
 
 
 def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name=None, with_root=False, own_lang_module_roots=None):
-    """Resolve an include::TARGET[...] target string to a concrete file
-    Path, the same way _check_refs_in_file's include branch does: an
-    optional component/module prefix (peeled off via _resolve_module_ref,
-    passing through `own_name` so a self-qualified reference to this repo
-    written in someone else's content still resolves), then family$name
-    (partial$/page$/example$) relative to that root's subdir. Lacking a
-    family marker, a *qualified* target (one that had a component/module
-    prefix, e.g. `include::ADB:how-to:metrics.adoc[tag=x]`) defaults to the
-    page family, same as xref: already does for a bare `module:page.adoc`
-    -- while a truly plain, unqualified target is a filesystem path
-    relative to the *including* file's own directory (e.g.
-    `include::freeipa_kerberos.adoc[tag=x]` from a sibling page$ file,
-    which is a real, common form -- not every include is Antora
-    resource-id-qualified). Returns None for an unregistered external
-    component, same as broken-refs: can't resolve, not this tool's problem
-    to check. `with_root=True` returns (target_file, candidate_root)
-    instead of just target_file -- a caller that recurses into the
-    resolved file's own includes (_collect_include_partials) needs the
-    *resolved* root, not its own, so a component-qualified target's
-    further nested includes keep resolving against that component, not
-    back against the original caller's. `own_lang_module_roots` is
-    forwarded to _resolve_module_ref unchanged -- see its docstring."""
+    """Resolve an include target to a file. Qualified targets use component
+    and module roots; family$ selects pages, partials, or examples. Qualified
+    targets without a family default to pages, while plain paths are relative
+    to the including file. Unknown components and version pins return None.
+    `with_root` also returns the resolved module root for nested includes;
+    home-component arguments are forwarded to _resolve_module_ref."""
     candidate_root = root
     qualified = False
     if _VERSION_PIN_RE.match(t):
@@ -2161,56 +1896,13 @@ _INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')
 
 
 def _collect_tag_usage(lang_module_roots, lang):
-    """Scans every pages/partials file (in this language) for
-    include::...[...] macros and returns a dict mapping a resolved target
-    file to a list of (tags, negated, whole_file) events, one per include
-    call site that references it -- kept per call site, deliberately not
-    merged into one blanket set of "tags ever requested"/"tags ever
-    negated" per file, because a nested tag's usage has to be judged
-    per call site: the same nested tag can be pulled in unnegated by one
-    include (`tag=parent`, which also renders everything nested inside
-    `parent`) and separately negated by another (`tags=parent;!nested`) --
-    merging those into one set would make the negation win globally and
-    call the nested tag orphaned even though the first include really
-    does render it (see check_tags_orphaned, and the real docs-greengagedb
-    case that motivated this: `compression_codecs_no_compression` nested
-    in `compression_codecs`, negated only in the includes that also list
-    `format_null`/`compression_codecs` explicitly alongside `!..._no_compression`,
-    but rendered plainly wherever `tag=compression_codecs` is used alone).
-    pages/partials/nav.adoc are scanned as *sources* of includes -- nav.adoc
-    routinely pulls in a whole partial via `include::partial$...[]` (e.g. a
-    long submenu factored out of the main nav tree, as in the real
-    docs-greengagedb case that motivated adding it here:
-    nav_reference_utils.adoc/nav_reference_admin_schemas.adoc, each included
-    only from nav.adoc and nowhere else, wrongly reported orphaned by
-    check_partials_orphaned before nav.adoc was scanned) -- while examples
-    are always a leaf, never something that itself includes other content.
+    """Map include targets to per-call-site (tags, negated, whole_file)
+    events. Call sites stay separate because one include may select a nested
+    tag that another excludes. Pages, partials, and nav.adoc are sources.
 
-    Sources aren't limited to this repo's own modules: a tag defined here
-    can just as well be pulled in from a registered --external-root
-    component's content (e.g. docs-adbes writing
-    `include::ADB:how-to:metrics.adoc[tag=view_metrics_prometheus]`), so
-    every registered external component's pages/partials (same `lang`) are
-    scanned too. `own_name` -- this repo's own antora.yml `name:` -- is
-    passed down so that a self-qualified reference like that one resolves
-    back into `lang_module_roots`, the same way it would for a genuinely
-    external sibling component. Without any --external-root, no component
-    is registered and this is exactly the previous, single-repo-only
-    behavior.
-
-    Each source root keeps its OWN "local" lang_module_roots paired with
-    it, rather than every root sharing this repo's single outer one -- an
-    include found while scanning a registered external component's own
-    pages/partials (e.g. a bare module-qualified include written inside
-    docs-adb's own content) must resolve against docs-adb's own modules,
-    not this repo's. `own_name`/`lang_module_roots` (this repo's true
-    own) are still passed to every call unchanged as
-    _resolve_include_target's own_name/own_lang_module_roots, so a
-    self-qualified reference back to THIS repo, found while scanning a
-    *different* component's own content (the `ADB:how-to:...[]` written
-    in docs-adbes case above), still resolves correctly -- see
-    _resolve_module_ref and _component_context for why the "local" and
-    "true home" contexts can't be merged into one."""
+    Registered external components are scanned too. Each source uses its own
+    component's module context, with the original repo context retained for
+    qualified references back to it."""
     events = {}
     own_name = _own_component_name(lang)
     sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
@@ -2239,33 +1931,11 @@ def _collect_tag_usage(lang_module_roots, lang):
 
 
 def _build_partial_live_lines(lang_module_roots, lang):
-    """{partial_file: (region_lines, pulled_lines)} for every partial some
-    include:: reaches -- the lines sitting inside ANY tag::/end:: region
-    of that partial, and the subset of them some include:: actually pulls
-    in (the union of _tag_filtered_line_numbers over every call site from
-    _collect_tag_usage: same language, nav.adoc counted as an includer,
-    and registered --external-root components' content scanned too, so an
-    includer living in a sibling repo still makes its regions live).
-
-    Backs check refs --broken's dead-region skip: a line inside a tag
-    region that no include requests never renders in any built page (the
-    real docs-adb case: install-monitoring.adoc's open-grafana-with-adm
-    region, added for a page that doesn't exist yet), so a reference on
-    it can't be a broken link on the site -- reporting it is noise, and
-    an unresolved-attribute reference there drags the
-    _build_partial_attrs_contexts fallback into misfiring too. The dead
-    regions themselves are still flagged -- that's `check refs
-    --orphaned --target tags`' job.
-
-    Deliberately conservative about what gets skipped: only lines inside
-    a tag region, and only in partials -- a page renders standalone, so
-    its untagged regions still reach the site. A partial with NO known
-    includers is absent from the map entirely and keeps its old,
-    fully-checked behavior (it is flagged orphaned separately anyway,
-    and its unchecked content may be a latent bug for whoever includes
-    it next). Likewise, lines outside every region stay checked even
-    when only tag=X includes exist: they don't render either, but
-    keeping them checked preserves that same latent-bug signal."""
+    """Map included partials to (tagged_region_lines, included_lines).
+    Broken-reference checking skips only tagged lines that no include selects;
+    orphan-tag checking reports those regions separately. Partials with no
+    known includer and lines outside tag regions remain fully checked to
+    preserve latent-bug detection."""
     events = _collect_tag_usage(lang_module_roots, lang)
     live = {}
     for f, evs in events.items():
@@ -2292,30 +1962,10 @@ def _build_partial_live_lines(lang_module_roots, lang):
 
 
 def check_tags_orphaned() -> bool:
-    """New check (not a port of an existing shell script): every
-    tag::NAME[]/end::NAME[] region defined in an examples/pages/partials
-    file must actually be pulled in somewhere -- directly via
-    include::...[tag=NAME]/[tags=NAME;...], nested inside another region
-    that is itself used, or via a plain/wildcarded include of the whole
-    file. A tag satisfying none of those is dead: nothing in the rendered
-    site ever shows that content, however it looks in the source. "Pulled
-    in somewhere" includes registered --external-root components' own
-    content, not just this repo's (see _collect_tag_usage) -- without that
-    flag, a tag only ever consumed by a sibling repo looks orphaned here
-    even though it's genuinely rendered there.
-
-    A file with no tag::/end:: regions at all is skipped here -- it has no
-    tagged region to judge -- but a partials/ file in that shape (content
-    meant to be pulled in only as a whole file via a bare include::...[])
-    isn't left unchecked: see check_partials_orphaned, which covers that
-    exact case.
-
-    --page filters which files' own tag regions get reported on, not the
-    usage scan: _collect_tag_usage still scans every page/partial in the
-    site regardless of --page, since a tag defined in the filtered-in file
-    can be include::...[tag=...]'d from any other page -- narrowing that
-    scan would risk a false "orphaned" report for a tag that's actually
-    used from a file --page filtered out."""
+    """Report tag regions never selected directly, through a used parent,
+    or by a whole-file/wildcard include. Usage includes registered external
+    components. Tag-less partials are covered by check_partials_orphaned.
+    --page filters reported files only; the usage scan remains site-wide."""
     ok = True
     orphaned_count = 0
     _SKIPPED_COMPONENTS.clear()
@@ -2384,26 +2034,9 @@ def check_tags_orphaned() -> bool:
 
 
 def check_partials_orphaned() -> bool:
-    """Every partials/ file with no tag::/end:: regions at all -- content
-    meant to be pulled in only as a whole file via a bare include::...[]
-    -- must actually be included somewhere. The same shape of check as
-    check_examples_orphaned (a whole content file nothing pulls in is
-    dead), but for partials/ instead of examples/, and reusing
-    _collect_tag_usage's include-macro resolution (component/module-
-    qualified targets, external roots, relative-path includes) instead of
-    a plain substring scan, since a partial can be referenced by a bare
-    include::sibling.adoc[] from another partial in the same directory,
-    not only include::partial$name.adoc[...].
-
-    A partial that DOES have tag::/end:: regions is judged tag-by-tag by
-    check_tags_orphaned instead -- this check only covers the whole-file
-    case, which check_tags_orphaned skips (nothing to match a tag against).
-    Without this check, a tag-less partial that nothing includes anymore
-    (e.g. after the last include::partial$foo.adoc[] referencing it was
-    deleted) would be invisible to every orphaned-content check -- pages
-    are covered by check_pages_orphaned (nav.adoc reachability) and
-    examples by check_examples_orphaned, but this exact gap in partials/
-    was the real-world docs-adb hosts-online.adoc case that motivated it."""
+    """Report tag-less partials never included as whole files. Resolution
+    supports qualified, relative-path, and external-component includes.
+    Tagged partials are left to check_tags_orphaned."""
     ok = True
     orphaned_count = 0
     _SKIPPED_COMPONENTS.clear()
@@ -2549,7 +2182,7 @@ def _mark_invisible_chars(line: str) -> str:
 
 
 def check_pages_no_invisible_chars() -> bool:
-    """New check (not a port of an existing shell script): flags zero-width
+    """flags zero-width
     and other invisible/formatting Unicode characters -- ZWSP, ZWNJ, ZWJ,
     word joiner, BOM, bidi control marks, and Unicode tag characters -- in
     en/ru pages/partials (see _INVISIBLE_RANGES for the full list and why).
@@ -2669,7 +2302,7 @@ _YO_RE = re.compile(r'[ёЁ]')
 
 
 def check_pages_no_yo() -> bool:
-    """New check (not a port of an existing shell script): flags the
+    """flags the
     letter ё/Ё in ru/ pages/partials -- house style spells it out as е
     instead, standard practice for most Russian technical writing (and
     already the convention this doc set's own content follows). The
@@ -2714,7 +2347,7 @@ def _count_delimiter_backticks(line: str) -> int:
 
 
 def check_pages_stray_backticks() -> bool:
-    """New check (not a port of an existing shell script): flags lines in
+    """flags lines in
     en/ru pages/partials with an odd number of backticks -- almost always a
     missing or stray ` around an inline monospace span (e.g. a trailing `
     left dangling after an xref, or a closing ` dropped from `code`). Lines
@@ -2745,24 +2378,10 @@ def check_pages_stray_backticks() -> bool:
     return ok
 
 
-# A well-formed external link's bracket has at most one comma OUTSIDE any
-# quoted ("..."/'...') or `++...++` passthrough span -- the house-style
-# `text^,opts=nofollow` separator (see check_pages_link_text_comma). Two
-# or more means a comma leaked out of what should have been plain link
-# text: AsciiDoc treats every comma inside `[...]` as an attribute
-# separator, so `[GROUPING SETS, CUBE, and ROLLUP^,opts=nofollow]`
-# silently truncates the visible text at the first comma and mangles the
-# `^`/opts=nofollow attributes with it (the external-link arrow
-# disappears) -- a real bug found in docs-greengagedb's select.adoc.
-#
-# Verified against real Asciidoctor (2.0.26): a comma inside a quoted
-# ("..." or '...') or `++...++`-passed-through span renders as literal
-# text, not an attribute separator, so `["text, more^",opts=nofollow]`
-# and `[++text, more++^,opts=nofollow]` both render the full text intact
-# -- not this check's concern, whether or not the `^` inside also earns
-# a working target=_blank (that's check_pages_link_new_tab's job, not
-# this one). A backslash-escaped comma (`\,`) protects nothing --
-# verified broken too, matching what the original bug report found.
+# Allow one unquoted comma for the `text^,opts=nofollow` separator. Additional
+# unprotected commas become attribute separators and corrupt link text/options.
+# Commas inside quotes or passthrough spans are literal; backslash escaping
+# does not protect them. New-tab behavior is checked separately.
 _LINK_TEXT_COMMA_RE = re.compile(r'https?://[^\s\[]*\[([^\]]*)\]')
 _QUOTED_ATTR_VALUE_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
 
@@ -2779,7 +2398,7 @@ def _unprotected_comma_count(bracket: str) -> int:
 
 
 def check_pages_link_text_comma() -> bool:
-    """New check (not a port of an existing shell script): flags a bare
+    """flags a bare
     `https?://...[...]` link whose bracket holds 2+ commas outside any
     quoted/passthrough-protected span -- see _LINK_TEXT_COMMA_RE and
     _unprotected_comma_count for why that's always broken, never a style
@@ -2912,30 +2531,11 @@ def _tag_filtered_line_numbers(lines, tags, negated, whole_file):
 
 
 def _flatten_delimiter_lines(file, root, lang_module_roots, lang, own_name, active_path, visited, depth=0, only_lines=None):
-    """Yields (source_file, source_lineno, line_text) for `file`, splicing
-    include::partial$/page$/example$ targets in place (recursively,
-    honoring tag=/tags= filtering and component/module qualification) the
-    way Asciidoctor actually assembles the rendered document -- so a
-    delimited block deliberately (or accidentally) split across an include
-    boundary is tracked as one continuous stream instead of two separately
-    "broken" files.
-
-    `active_path` guards against a genuine include cycle (A includes B
-    includes A) without preventing the same partial from being included
-    more than once at separate, non-overlapping points -- a real, common
-    pattern (see e.g. custom-ulimits.adoc, reused by three different
-    pages) where each occurrence's content must still be spliced in
-    independently. `visited` collects every file actually reached this
-    way, across the whole run, so the caller can afterward find partials
-    no page ever includes and still check those standalone.
-
-    A commented-out include:: line (inside a `////` block, or `//`-prefixed
-    on its own) is not specially detected here and would incorrectly be
-    resolved as if live -- a known, narrow limitation shared with the
-    rest of this tool's include handling, accepted because a real
-    disabled-include-inside-a-comment pattern hasn't been observed in
-    practice and detecting it fully would require duplicating full
-    comment-state tracking at every recursion level."""
+    """Yield (file, line, text) with includes spliced in recursively and tag
+    filters applied, preserving source locations. `active_path` prevents
+    cycles without suppressing repeated includes elsewhere; `visited` records
+    reached files so unreached partials can be checked separately. Commented
+    includes are a known limitation: this flattener may treat them as live."""
     if depth > 25 or file in active_path:
         return
     lines = _read_lines(file)
@@ -2966,47 +2566,12 @@ def _flatten_delimiter_lines(file, root, lang_module_roots, lang, own_name, acti
 
 
 def _scan_delimiter_stack(line_stream):
-    """Runs the LIFO delimiter-balance algorithm over `line_stream` -- an
-    iterable of (source_file, source_lineno, line_text), possibly splicing
-    content from more than one actual file via _flatten_delimiter_lines --
-    and returns every delimiter that never got a proper close: [(text,
-    source_file, source_lineno), ...], in the order each was opened.
-
-    Keyed by the delimiter's exact matched text (not just its family) to
-    mirror how Asciidoctor itself supports nesting a *container* block
-    (example/sidebar/quote/open/table) inside a same-type container: the
-    inner one uses a *different* length (e.g. a 5-equals `=====` example
-    block nested inside a 4-equals `====` one), so only a line matching the
-    text that opened the current innermost container can close it -- a
-    line of the same family but a different length instead opens a new,
-    independent nesting level.
-
-    A line whose text doesn't match the top of the stack isn't necessarily
-    such a nested open, though -- it's just as likely a forgotten close
-    somewhere below (e.g. a table's `|===` open with no matching `|===`
-    before the enclosing `====` block closes around it). Blindly stacking
-    a new level on every mismatch, as a naive LIFO would, means that one
-    missing delimiter derails the pairing of everything after it, and the
-    leftover-stack report ends up blaming unrelated, far-away lines instead
-    of the actual culprit. So on a mismatch this also checks *deeper* in
-    the stack: if some still-open entry below the top has the exact same
-    text, that line is almost certainly meant to close it, meaning
-    everything stacked on top of that entry was never really closed --
-    the same recovery a browser does for mismatched HTML tags. Those
-    in-between entries are reported as unclosed and popped along with the
-    match; only when no entry anywhere in the stack matches does the line
-    genuinely open a new, independent nesting level.
-
-    Listing (`----`), literal (`....`), and comment (`////`) blocks are
-    different: Asciidoctor treats them as verbatim/opaque leaves that
-    cannot contain a nested block of *any* kind, so once one is open, every
-    other delimiter-looking line is just its raw content, not a real
-    delimiter -- e.g. a `psql` ASCII-art table's own `----` separator row,
-    or an arbitrary run of dashes/dots/equals inside a terminal-output
-    `....` block, shown verbatim, must not be mistaken for a nested block
-    boundary. Only a line matching the *exact* text that opened it can
-    close such a block -- no deeper-stack recovery for these, since
-    nothing else can ever be pushed on top of one anyway while it's open."""
+    """Return unclosed (delimiter, file, line) entries from a flattened
+    (file, line, text) stream. Container blocks of the same family nest when
+    their delimiter lengths differ. If a delimiter matches a deeper stack
+    entry, intervening entries are reported unclosed before that entry is
+    popped. Listing, literal, and comment blocks are opaque: their contents
+    are ignored until the exact opening delimiter closes them."""
     stack = []
     unclosed = []
     for source_file, source_lineno, line in line_stream:
@@ -3034,30 +2599,10 @@ def _scan_delimiter_stack(line_stream):
 
 
 def check_pages_unbalanced_delimiters() -> bool:
-    """New check (not a port of an existing shell script): flags AsciiDoc
-    block delimiters -- open `--`, listing `----`, literal `....`, example
-    `====`, sidebar `****`, quote `____`, passthrough `++++`, table `|===`,
-    comment `////` -- left unclosed once a page's full include chain
-    (partial$/page$/example$, recursively, honoring tag=/tags= filtering)
-    is flattened into the single continuous document Asciidoctor actually
-    renders (see _flatten_delimiter_lines). Checking each file in
-    isolation would misfire both ways on a block deliberately split across
-    an include boundary -- a shared partial that opens a table and relies
-    on whichever page includes it to supply the closing `|===` -- reporting
-    the partial as broken even though it's fine in context, or the other
-    way around, reporting a page as broken because of decorative dashes
-    living inside a partial's own already-open literal block. Almost
-    always a forgotten closing delimiter, which silently swallows every
-    following line into that block (or, for a table, corrupts everything
-    after it) when actually rendered.
-
-    Every page is checked this way, since the flattened document is what a
-    page actually renders as. Partials never reached by any page's include
-    chain (in this language) -- typically genuinely orphaned content, also
-    caught by --check-pages-orphaned/--check-examples-orphaned for other
-    reasons -- are still checked standalone afterward, so a partial that
-    happens not to be wired up anywhere doesn't silently lose delimiter
-    coverage entirely."""
+    """Report unclosed AsciiDoc block delimiters after recursively flattening
+    each page's includes and applying tag filters. This permits blocks to
+    span include boundaries. Unreached partials are also checked standalone
+    so they retain delimiter coverage."""
     ok = True
     total_hits = 0
     modules = list(module_roots())
@@ -3631,26 +3176,12 @@ def _parity_refs(en_file, en_lines, ru_file, ru_lines):
 
 
 def check_pages_link_parity() -> bool:
-    """EN and RU pages must reference the same things.
-
-    Compares, per EN/RU page pair, the multiset of language-invariant link
-    targets -- xref target *files*, inline `image:` targets, and external
-    URLs. Link *text* is translated and ignored; only the destination is
-    compared. A mismatch means a cross-reference or link was dropped,
-    added, or retargeted in translation -- e.g. RU prose that silently
-    loses an xref the EN reader gets. Honours --page. Every finding
-    carries a clickable `path:line` -- the first hit on each side on the
-    row, any further occurrences one indented sub-line each.
-
-    Folded, not reported (deliberate localisation): a `#fragment` on an
-    xref (Antora derives it from the translated heading), a `/en/`|`/ru/`
-    URL path segment or `en.`/`ru.` host, a Wikipedia article, and an
-    `_en`|`_ru` tag on an image filename.
-
-    Beta: a repo that deliberately links the EN docs site from RU pages
-    (or vice versa), or writes an xref sometimes module-qualified and
-    sometimes not, shows up here -- treat the output as a review list.
-    Not compared: targets inside ---- / .... blocks or // comments."""
+    """Compare multisets of xref files, inline images, and external URLs in
+    EN/RU page pairs, ignoring translated link text. Normalize language-
+    specific fragments, URL hosts/paths, Wikipedia articles, and image suffixes.
+    Findings include source line locations. This beta review list can flag
+    intentional localization or qualification differences. Comments and
+    literal blocks are skipped; --page is honored."""
     ok = True
     mismatch_count = 0
     for en_file, ru_file in _en_ru_page_pairs():
@@ -3759,26 +3290,11 @@ def _pair_changed_literals(en_only, ru_only):
 
 
 def check_pages_literal_parity() -> bool:
-    """EN and RU pages must contain the same back-ticked literals.
-
-    Compares, per EN/RU page pair, the *set* of inline monospace spans
-    (`` `...` ``) -- identifiers, SQL keywords, parameter and function
-    names, verbatim error strings: text a translator has to carry across
-    unchanged. `foo()` and `foo` count as one token, a `++...++`
-    passthrough wrapper is unwrapped, and pure-punctuation spans plus
-    _LITERAL_PARITY_IGNORE entries are dropped.
-
-    Reported per file: CHANGED (a near-identical pair -- a likely
-    typo/case slip), then EN-only, then RU-only literals. Presence is
-    what's compared: a literal legitimately repeated a different number of
-    times on each side is normal and not a finding. Every finding carries
-    a clickable `path:line` -- the first hit on each side on the row, any
-    further occurrences one indented sub-line each.
-
-    Beta: RU technical prose that back-ticks a term EN left bare (or the
-    reverse) surfaces here and usually isn't a translation bug -- treat
-    the output as a review list. Not compared: spans inside ---- / ....
-    blocks or // comments."""
+    """Compare sets of backticked literals in EN/RU page pairs. Normalize
+    `foo()` to `foo`, unwrap passthroughs, and ignore configured or punctuation-
+    only spans. Report near-identical CHANGED pairs, then EN-only and RU-only
+    values with source lines. Repetition counts and formatting-only additions
+    are not findings. Comments and literal blocks are skipped."""
     ok = True
     mismatch_count = 0
     for en_file, ru_file in _en_ru_page_pairs():
@@ -4354,7 +3870,7 @@ def _collect_marked_hits(pattern, text, matches):
 
 
 def check_pages_file_path_italics() -> bool:
-    """New check (not a port of an existing shell script): flags file names
+    """flags file names
     (by a curated config/unit-file extension whitelist), directory paths
     (by well-known absolute-path prefixes), bare directory/file basenames
     (see _BARE_DIR_BASENAMES), and common dotfiles (see _ITALIC_DOTFILES)
@@ -4461,34 +3977,12 @@ def _looks_sentence_terminated(content: str) -> bool:
 
 
 def check_pages_table_cell_periods() -> bool:
-    """New check (not a port of an existing shell script): house style says
-    the last sentence in a table cell should not end with a period.
-    Exceptions found by inspecting real tables in this doc set:
-
-    - a cell containing a list (its last line is normal list-item prose and
-      keeps its period, e.g. table_compression.adoc's `compresslevel` cells);
-    - a cell containing a NOTE/TIP/WARNING/IMPORTANT/CAUTION admonition
-      (either the `LABEL: text` one-liner or a `[LABEL]`/`====` block),
-      since that marks the content as not just a plain descriptive sentence;
-    - a single space-free abbreviation like `Мин.`/`Макс.` (the period is
-      part of the abbreviation, not sentence-ending punctuation).
-
-    The admonition exception cuts the other way for the prose *before* a
-    trailing admonition (any of the five types): that paragraph is no longer
-    the visual end of the cell, so it *should* end like a finished sentence
-    -- a cell whose last text before a closing NOTE/TIP/... has no
-    `.`/`!`/`?`/`:` is flagged as `NO PERIOD`. (A one/two-word cell label
-    ahead of the admonition isn't prose, so it's left alone.)
-
-    Deliberately heuristic: cells are tracked by lookahead, but a blank line
-    is *never* by itself a cell boundary -- both `a|` cells (rebalance_status.
-    adoc) and even plain `|` cells (fs-commands/setfacl.adoc) can hold several
-    blank-line-separated paragraphs, so a line only counts as the last line
-    of its cell if the next *non-blank* line is `|===` or itself starts a
-    new cell. A single physical line can also pack multiple `|`-separated
-    plain cells (a compact header row like `|Algorithm |Default |Min |Max`);
-    only a bare `|` cell (not `a|`/`m|`/etc., which always occupy the rest
-    of their line) is split this way."""
+    """Require the last sentence of a plain table cell to omit its period.
+    Lists, admonitions, and standalone abbreviations are exempt. Prose before
+    a trailing admonition must instead end with sentence punctuation, except
+    for short labels. Cell boundaries are found by lookahead because blank
+    lines may separate paragraphs within a cell. Multiple bare `|` cells on
+    one physical line are supported; styled cells occupy the rest of it."""
     ok = True
     total_period = 0
     total_no_period = 0
@@ -4624,7 +4118,7 @@ _CURLY_QUOTE_RE = re.compile(r'[‘’“”]')
 
 
 def check_pages_no_curly_quotes() -> bool:
-    """New check (not a port of an existing shell script): house style
+    """house style
     requires straight quotes everywhere -- `'` for an apostrophe/single
     quote, `"` for a double quote -- in both en/ and ru/. Curly quotes
     (`' ' " "`) usually creep in from pasting out of Word or a smart-quote
@@ -4658,7 +4152,7 @@ _COPYRIGHT_SYMBOL_RE = re.compile(r'[©®™]')
 
 
 def check_pages_no_copyright_symbols() -> bool:
-    """New check (not a port of an existing shell script): house style
+    """house style
     drops ©/®/™ even for real trademarks -- write `Hive` instead of
     `Hive®`. Scans pages/partials in both languages, same shape as
     check_pages_no_unicode_dashes."""
@@ -4686,18 +4180,12 @@ def check_pages_no_copyright_symbols() -> bool:
     return ok
 
 
-# Order they're reported in on a MISSING line, not a priority order.
-# `page-author` was dropped (it used to be required alongside these three):
-# a real report found hundreds of pages in docs-greengagedb missing it, almost
-# all bulk-imported/ported reference pages (reference/gp_toolkit/*,
-# reference/data_types.adoc, etc.) with no individual human author to name --
-# unlike the ADxx-family repos, where it's well-maintained and still a real
-# attribute pages can set, just no longer one this check demands.
+# Order used in MISSING reports.
 _REQUIRED_PAGE_ATTRS = ("page-productlogo", "page-htmltitle", "description")
 
 
 def check_pages_required_attrs() -> bool:
-    """New check (not a port of an existing shell script): every
+    """every
     documentation page needs a product logo and title/description meta
     tags -- set via the `:page-productlogo:`, `:page-htmltitle:`, and
     `:description:` page attributes (SEO recommendations for texts).
@@ -4731,7 +4219,7 @@ def check_pages_required_attrs() -> bool:
 
 
 def check_pages_heading_no_period() -> bool:
-    """New check (not a port of an existing shell script): house style
+    """house style
     says "Do not use a dot at the end of headers." Reuses _HEADING_ID_RE,
     the same heading-line pattern _heading_autoids works from -- any
     heading level counts, not just H1-H3 (the guide's old three-level
@@ -4766,7 +4254,7 @@ def check_pages_heading_no_period() -> bool:
 
 
 def check_pages_heading_no_markup() -> bool:
-    """New check (not a port of an existing shell script): house style
+    """house style
     says "Do not use links in headers" and "Do not use any font styles in
     headers" -- two rules folded into one check since they're both
     "a heading's title text carries no markup at all", caught the same
@@ -4816,21 +4304,10 @@ _UNESCAPED_PIPE_RE = re.compile(r'(?<!\\)\|')
 
 
 def check_pages_table_empty_cells() -> bool:
-    """New check (not a port of an existing shell script): house style says
-    "tables should not have any empty cells. If there is no otherwise
-    meaningful value for a cell, enter -- ..." Reuses _TABLE_CELL_START_RE/
-    _A_CELL_START_RE, the same cell-boundary regexes check_pages_table_
-    cell_periods trusts, but the tracking is simpler here: a cell's whole
-    span (its start line's content plus every line up to the next cell
-    start or the closing `|===`, comments and blank lines aside) is
-    accumulated and flagged only if none of it has any non-whitespace
-    content -- there's no need to parse what that content *means* (prose,
-    a list, an admonition, an image) the way the periods check does, only
-    whether the cell is empty. A same-line compact row (`|A||C`, a bare
-    `|` cell only -- `a|`/`m|`/etc. always own the rest of their line) is
-    split the same way check_pages_table_cell_periods splits one (see
-    _UNESCAPED_PIPE_RE for the one difference), so an empty cell in the
-    middle of a packed header row is still caught."""
+    """Report cells with no non-whitespace content from their start through
+    the next cell or table end. Comments and blank lines do not make content.
+    Compact rows split on unescaped pipes in bare cells; styled cells own the
+    rest of their line."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -4920,49 +4397,13 @@ def _declared_column_count(attrs: str):
 
 
 def check_pages_table_header() -> bool:
-    """New check: house style wants every table to have a header row so
-    columns are labeled -- a table with no header renders every row as
-    plain body cells with nothing telling the reader what each column
-    holds.
-
-    "Has a header" is decided the same way Asciidoctor itself decides it --
-    verified empirically against the installed `asciidoctor` gem, not
-    assumed, because the real rule is narrower than it looks:
-      - an explicit `options=header`/`options="header"` (quotes optional --
-        both forms occur in this corpus) or `%header` shorthand on the
-        block-attribute line always wins (and `noheader`/`%noheader`
-        always loses, even over the implicit case below);
-      - otherwise, Asciidoctor *implicitly* treats the first row as a
-        header only when that whole row sits on one physical source line
-        immediately followed by a blank line (`|Command|Description` then
-        a blank line, e.g.) -- confirmed against this file's own
-        hbase-shell.adoc table. Splitting the same header across one line
-        per cell (`|Command` / `|Description` / blank line) does NOT get a
-        header, even with a correct `[cols="1,1"]` -- also confirmed with
-        the gem, and initially surprising enough that an early version of
-        this check assumed the opposite and had to be corrected.
-    This is necessarily an approximation of Asciidoctor's real table
-    parser (column-count mismatches, cell spans etc. aren't modeled), but
-    it matches everything found in this doc family's real tables.
-
-    Accumulates every consecutive `[...]` block-attribute line seen (real
-    AsciiDoc lets several stack, one per line, e.g. `[.divided]` /
-    `[options=header]` / `[cols="2,5,3"]` all applying to the same table --
-    a real pattern in this corpus; keeping only the last one, as an
-    earlier version of this check did, silently dropped `options=header`).
-    A `.Caption` title line between the stack and `|===` doesn't break the
-    association (real AsciiDoc syntax: attrs, then optional title, then
-    the block), but any other line -- including a blank one, which really
-    does break the association in AsciiDoc -- resets it, so an attribute
-    stack left over from an unrelated preceding block is never credited to
-    this table. An explicitly single-column table (`[cols="1"]`) is exempt:
-    a one-column table is a list in a box, there is no second column for a
-    header to label (docs-adb's release notes has 346 of them). Only a
-    declared cols= counts -- a table that merely happens to have one
-    column without saying so is still checked. Deliberately simple like check_pages_table_empty_cells: no
-    in_code tracking, so a `|===` shown as literal example text inside a
-    source block would be mistaken for a real table -- a known, accepted
-    gap shared with that check."""
+    """Require table headers using Asciidoctor's header rules. Explicit
+    header/noheader options take precedence; otherwise the first row is an
+    implicit header only when it occupies one line followed by a blank line.
+    Consecutive attribute lines apply to the table, with an optional title
+    between them and `|===`; a blank line breaks that association. Tables
+    explicitly declared with one column are exempt. This deliberately simple
+    parser does not track source blocks or model spans and column mismatches."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -5031,64 +4472,12 @@ _SHELL_BLOCK_LANG_RE = re.compile(r'\bsource\s*,\s*([\w+-]+)')
 
 
 def check_pages_shell_block_lang() -> bool:
-    """New check, both directions of the same house rule: a `----`-
-    delimited source block whose first content line is a shell prompt
-    (`$ some-command`) should be tagged `[source,console]`, AND a block
-    already tagged `[source,console]` should open with a `$` prompt. Real
-    survey of docs-adh's own `$`-prompted blocks found the house
-    convention overwhelmingly is `[source,console]` (with or without extra
-    `subs=` attributes and comma-spacing variants -- all accepted here, only
-    the language token itself is checked), plus a handful of genuine
-    mistakes the forward direction catches: no `[source,...]` attribute at
-    all, or the wrong language (`bash`, `shell`, even `sql` on an actual
-    shell command).
-
-    The reverse direction is deliberately noisier -- confirmed against real
-    docs-adh data before adding it, and kept anyway because catching every
-    one of these is part of this team's actual review process, not a nice-
-    to-have. About 130 real `[source,console]` blocks in docs-adh don't
-    open with `$`: some are genuine misses (`mkdir /usr/lib/hadoop/logs`,
-    `sudo -u hbase hbase shell`), but many are legitimate -- a command typed
-    inside a *different* already-entered interactive shell (`scan
-    'hive_test'` inside the HBase shell, `list -file ...` inside the SSM
-    shell), a config-file excerpt styled as console for the monospace look,
-    or a `[cols]`-bracketed usage/syntax template rather than a literal
-    command. There's no reliable mechanical signal in the block text alone
-    to separate most of those from a real miss, so every `[source,console]`
-    block not starting with `$` is flagged -- this half is a review list to
-    triage by hand, same tier as this tool's other beta checks, not a
-    zero-false-positive gate.
-
-    One such nested-shell case IS given a reliable mechanical exemption,
-    though: a first line starting with a leading backslash is a
-    psql/Greenplum meta-command (`\\dt`, `\\d+ table_name`, `\\q`, ...),
-    typed inside an already-open `psql` session and never `$`-prefixed by
-    convention -- confirmed against 60 real occurrences across docs-adb/
-    docs-adbes/docs-greengagedb/docs-adh, all genuine psql meta-commands,
-    with zero real bash `\\command`-alias-bypass usage found that this
-    would wrongly suppress (that idiom would anyway need its own `$` too,
-    since it still runs in bash, not psql -- a real conflict never showed
-    up in this corpus). Distinct from a trailing line-continuation
-    backslash (`/bin/spark3-submit \\`), which is a different position on
-    the line and
-    unaffected by this leading-backslash check.
-
-    Scoped to `----` (dash) source blocks only -- a `....` (dot) literal
-    block has no language-attribute mechanism at all, so "add/fix
-    [source,console]" doesn't apply to it the same way; converting one to
-    a source block is a different, bigger edit than this check's message
-    implies, and only 2 such blocks exist in the whole docs-adh corpus, so
-    they're deliberately out of scope rather than mis-worded.
-
-    Recognizes a `[...]` attribute line prefixed with a table-cell style
-    letter (`a|[source,console]`, etc.) -- a real pattern (beeline-cli.adoc
-    uses it) that a plain `^\\[...\\]$` match would miss entirely, silently
-    mistaking a correctly-tagged block for an untagged one. Also enforces
-    the same real AsciiDoc rule check_pages_table_header relies on: a blank
-    line between the attribute stack and the delimiter breaks the
-    association, so an orphaned `[source,console]` two lines above a block
-    (a real docs-adh case, hdfs-commands/mover.adoc) doesn't functionally
-    apply and the block is correctly still flagged."""
+    """Check both directions of the console-block convention: `$`-prompted
+    `----` blocks need `[source,console]`, and console blocks should start
+    with `$`. The latter is a noisy review list, not a zero-false-positive
+    gate. Leading-backslash psql meta-commands are exempt. Literal `....`
+    blocks are out of scope. Table-cell style prefixes on attribute lines
+    are accepted; a blank line separates attributes from the block."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -5291,41 +4680,13 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, rep
 
 
 def check_pages_terminology() -> bool:
-    """New check (not a port of an existing shell script): flags an EN
-    glossary term (see --glossary) whose aligned RU line contains its
-    accepted RU translation fewer times than the EN term appears, catching a
-    translator drifting onto an inconsistent or outdated Russian term for
-    something the glossary already has a house-style answer for -- including
-    the case where an EN line uses the term (or several glossary terms) more
-    than once and only some mentions were translated correctly.
-
-    An EN term is located via a longest-first regex alternation over every
-    glossary key. Whether the RU line "has the right translation" is then
-    decided entirely by the glossary author's own ru_pattern column, not a
-    guessed heuristic: each pattern is a set of word tokens, a `word<>` one
-    matching that stem plus any suffix (declension/conjugation-tolerant)
-    and a bare `word` one requiring that exact word -- e.g. a
-    do-not-translate entry's pattern is just the EN term's own words, all
-    bare, so it's effectively required verbatim. All tokens in a pattern
-    must be found somewhere in the RU line (any order) for that pattern to
-    count as a match; an entry is credited once per full set of its
-    pattern tokens the line can form, and that count is compared against
-    how many times the EN term occurs on the aligned line. This still
-    can't tell "right words in an unrelated sentence" from a real match,
-    and the repeat comparison additionally trips on Russian's habit of not
-    repeating a noun it already named, so it's deliberately biased toward
-    fewer false positives at the cost of some missed drift -- same "beta,
-    review list" tradeoff as this file's other heuristic checks.
-
-    Two glossary rows sharing an EN key (e.g. the two "session" senses) are
-    merged into one set of alternative patterns, so either translation
-    counts as correct -- a bare EN term match can't tell the senses apart,
-    so this deliberately doesn't try.
-
-    Requires --glossary PATH (repeatable) -- or, if omitted, at least one
-    *-glossary.psv file discoverable in the current directory; exits with
-    an error if neither is available, since that's a misconfiguration, not
-    "nothing to check"."""
+    """Compare EN glossary-term counts with accepted RU translation counts
+    on aligned lines. Glossary `ru_pattern` tokens define matches: `word<>`
+    accepts suffixes, bare `word` is exact, and all tokens may appear in any
+    order. Rows sharing an EN term provide alternative patterns. The count
+    comparison is heuristic and favors fewer false positives over catching
+    every omitted repetition. Requires explicit --glossary paths or a local
+    *-glossary.psv file."""
     if not GLOSSARY:
         _usage_error("error: 'check terms' needs a glossary -- pass --glossary PATH "
                      "(no *-glossary.psv in the current directory to default to)")
@@ -5433,31 +4794,11 @@ def _find_homoglyph_hits(masked: str):
 
 
 def check_pages_ru_latin_homoglyphs() -> bool:
-    """New check (not a port of an existing shell script): flags Latin
-    letters that look like they were meant to be Cyrillic in ru/ prose --
-    the mirror image of check_pages_no_cyrillic (which only looks for
-    Cyrillic contaminating en/; the reverse direction there, a stray
-    Cyrillic letter inside an otherwise-Latin word like "A Сlient ID",
-    is already caught by that check's broad Cyrillic-anywhere-in-en/
-    scan, so it doesn't need repeating here).
-
-    Two patterns, both requiring an actual mix of scripts rather than
-    just "any Latin in ru/" (which would flag every legitimate product
-    name/command and be useless):
-
-    - a word containing BOTH Cyrillic and Latin letters (token boundary
-      is any non-letter, so "PAM-аутентификация" is two clean single-
-      script tokens, not one mixed one -- this is a very common pattern
-      in this doc set and must not misfire on it);
-    - a standalone single Latin letter matching one of the four homoglyph
-      one-letter Russian words (see _HOMOGLYPH_STANDALONE_LETTER_RE).
-
-    Deliberately heuristic and ru/-only: code/literal blocks, comments,
-    tables, headings, and attribute lines are skipped via
-    _iter_prose_lines, and inline code spans/macros/xrefs/URLs are
-    additionally blanked per-line, since legitimate Latin content
-    (commands, product names, xref targets) lives in exactly those
-    places."""
+    """Flag likely Latin homoglyphs in RU prose: words mixing Cyrillic and
+    Latin letters, and standalone Latin letters used as Cyrillic one-letter
+    words. Hyphenated single-script terms remain separate tokens. Structural
+    content is skipped by _iter_prose_lines; inline code, macros, xrefs, and
+    URLs are masked before matching."""
     ok = True
     total_hits = 0
     for _, _, ru_root in module_roots():
@@ -5949,43 +5290,18 @@ def _save_link_cache(cache):
 
 
 def check_links_external() -> bool:
-    """Fetch every http(s) link in pages/ and partials/ (both languages).
+    """Fetch distinct HTTP(S) links in pages and partials. Only BROKEN
+    (404/410 or unresolved host) fails the run. Permanent substantive URL
+    changes are REDIRECT; network failures are UNREACHABLE or VPN?. Responses
+    such as 401/403/429/5xx are unverified and shown only with
+    --show-unverified. Supports --offline, --page, per-host concurrency, and
+    an optional seven-day --link-cache. Invalid local TLS trust is retried
+    once without verification unless --insecure already disables it.
 
-    Printed line by line:
-
-        BROKEN       404 / 410, or a host that does not resolve  -- fails the run
-        REDIRECT     permanent (301/308) to a genuinely different URL
-        UNREACHABLE  timeout / connection refused / DNS failure
-        VPN?         unreachable on a host known to region-lock
-
-    UNREACHABLE / VPN? don't fail the run -- re-run behind a VPN to tell a
-    dead link from a blocked route. Collapsed to a one-line count (the
-    server answered, just not usefully): 401/403 anti-bot walls, 429s, 5xx.
-    --show-unverified lists those too.
-
-    Only BROKEN fails the run. Links are de-duplicated site-wide (one fetch
-    per distinct URL, at most a few concurrent per host). Every run is fresh
-    unless --link-cache PATH is given (then results are cached there with a
-    7-day TTL). --offline skips fetching and just lists the links found.
-    Honours --page. Past a handful of fetches a "checking k/N" progress line
-    is written to stderr.
-
-    Hosts whose TLS certificate the local trust store can't validate (a
-    missing CA bundle, a MITM proxy) are retried once without verification
-    and noted -- pass --insecure to make that the default and drop the note.
-
-    Only what AsciiDoc renders as a live link is checked: comment lines and
-    ---- / .... blocks are skipped, and so is a bare URL that is
-    backslash-escaped (\\http://x) or wrapped in a formatting pair
-    (_http://x_, `http://x`). Also skipped: RFC-2606 example hosts,
-    localhost, private/link-local IPs, doc-only hosts (FQDN:PORT,
-    *.internal, 10.x, ...), *.git remotes, and any host passed to
-    --allow-domain.
-
-    A 301/308 that only rewrites the URL cosmetically -- http->https, +/-
-    www., +/- trailing slash, a dropped #fragment, a change of letter case
-    -- is treated as clean, not a REDIRECT. Findings are grouped
-    BROKEN, then REDIRECT, then UNREACHABLE/VPN?."""
+    Comments, literal blocks, escaped/formatted bare URLs, example/private
+    hosts, Git remotes, and --allow-domain hosts are skipped. Cosmetic
+    redirects (HTTP to HTTPS, www, trailing slash, fragment, or case changes)
+    are clean."""
     _LINK_TLS_FELL_BACK.clear()
     _LINK_HOST_SEMAPHORES.clear()
     sites = {}
@@ -6142,29 +5458,13 @@ def check_links_external() -> bool:
 # check in _should_probe.
 _STYLE_LINK_MACRO_RE = re.compile(r'\blink:{1,2}(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
 _STYLE_BARE_URL_RE = re.compile(r'(?<![:\w])(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
-# A caret immediately before a comma or end-of-attrs is AsciiDoc's
-# target=_blank shorthand (`text^,opts=nofollow` or bare `^`) -- a caret
-# elsewhere (inside the link text itself) doesn't count. An optional quote
-# (`"`/`'`) between the caret and the comma/end covers the same case MK04
-# protects: `["GROUPING SETS, CUBE^",opts=nofollow]`, where the comma inside
-# the text forced the whole first attribute to be quoted, pushing `^` right
-# before the closing quote instead of right before the comma. Verified
-# against real Asciidoctor (2.0.26): the quoted form renders
-# target="_blank" exactly like the bare one -- a real docs-adpg false
-# positive (combine-queries.adoc) before this.
+# A caret before a comma or end-of-attrs is target=_blank shorthand. Quoted
+# first attributes may place the closing quote between the caret and comma.
 _LINK_TARGET_BLANK_RE = re.compile(r'\^["\']?\s*(?:,|$)')
-# AsciiDoc's other way to open a link in a new tab -- also verified against
-# real Asciidoctor to render identically to `^`. Quotes/spacing around the
-# value are optional (`window=_blank`, `window="_blank"`, `window = _blank`).
+# window=_blank is equivalent; value quotes and surrounding spaces are optional.
 _WINDOW_BLANK_RE = re.compile(r'window\s*=\s*["\']?_blank["\']?')
-# Antora/AsciiDoc joins a paragraph's physical source lines into one block
-# before running inline substitution, so a link's [...] attribute list can
-# legally span more than one line when an author hand-wraps a long one --
-# verified against real Asciidoctor (docs-adpg's known-issues.adoc wraps a
-# GitHub issue title exactly this way, `^,opts=nofollow]` landing on the
-# next line, and still renders target="_blank"/rel="nofollow noopener"
-# correctly). Scanning line-by-line alone can't see the `]` on the next
-# line -- see _join_unclosed_link_brackets, which closes that gap.
+# AsciiDoc reflows paragraph lines before inline substitution, so link attribute
+# lists may span lines. _join_unclosed_link_brackets reconstructs them.
 _LINK_BRACKET_CONTINUATION_LIMIT = 5
 
 
@@ -6208,21 +5508,9 @@ def _join_unclosed_link_brackets(lines, excluded):
 
 
 def _iter_external_link_attrs(line):
-    """Yield (url, attrs) for every http(s) link: macro or bare autolink on
-    this line that AsciiDoc would actually render as a live link -- same
-    criteria check_links_external's _extract_urls_from_line uses: a bare
-    URL that's backslash-escaped (`\\http://x`), wrapped in a formatting
-    pair (`_http://x_`), or immediately preceded by a quote (an XML/HTML
-    attribute value, e.g. `xmlns="http://.../svg"` inside an inline
-    `+++<svg>+++` passthrough -- not a link at all) isn't a real link and
-    is skipped outright, since decorating example/illustrative text with
-    `^`/opts=nofollow would be meaningless. `url` is run through _trim_url
-    so trailing prose punctuation or a leftover markup character (an
-    italic-close `_`, a sentence period) never leaks into the reported
-    target or confuses the host check callers run on it. `attrs` is the
-    raw [...] content (empty string for `[]`, None if the URL carries no
-    brackets at all -- which AsciiDoc also can't decorate, so it's
-    reported the same way)."""
+    """Yield (url, attrs) for live HTTP(S) link macros and bare autolinks.
+    Skip escaped, formatted, or quoted non-link URLs and trim trailing prose
+    punctuation. `attrs` is the raw bracket content, or None when absent."""
     out = []
     masked = line
     for m in _STYLE_LINK_MACRO_RE.finditer(line):
@@ -6261,35 +5549,11 @@ def _missing_link_decoration(attrs, url=None):
 
 
 def check_pages_link_new_tab() -> bool:
-    """New check (not a port of an existing shell script): house style says
-    every external http(s) link should open in a new tab (`^`, or the
-    `window=_blank` alternative) with `opts=nofollow` set (SEO) -- e.g.
-    `https://greenplum.org/[Greenplum^, opts=nofollow]`. Internal xref:
-    links are explicitly exempt in the guide (a different macro entirely,
-    never matched here). The first attribute's text can legally be quoted
-    (`["GROUPING SETS, CUBE^",opts=nofollow]` -- MK04's fix for a comma in
-    the text) and the whole [...] can legally span more than one physical
-    line (an author hand-wrapping a long one) -- both verified against
-    real Asciidoctor and both real false positives this check used to
-    have (docs-adpg's combine-queries.adoc and known-issues.adoc) before
-    _LINK_TARGET_BLANK_RE/_WINDOW_BLANK_RE and
-    _join_unclosed_link_brackets accounted for them.
-
-    Only checks a URL _should_probe would also consider a real,
-    checkable external link -- check_links_external's own filter for
-    "not actually a live link a browser would open": a private/
-    loopback/placeholder host (FQDN:PORT, 10.x, *.internal, ...), a
-    `.git` clone remote, an unsubstituted `{attribute}`, or an obvious
-    placeholder (TODO/CHANGEME/<...>).
-
-    A link to one of the project's own sites (NOFOLLOW_EXEMPT_HOSTS:
-    greengagedb.org and arenadata.io by default, subdomains included; extend
-    with --nofollow-exempt HOST, or `--nofollow-exempt none` to clear) must
-    still open in a new tab but does not need `opts=nofollow`. Decorating a `_http://FQDN:PORT_`
-    example shown as illustrative text with `^`/opts=nofollow would be
-    nonsensical, not a style gap. Comment lines and ---- / .... blocks
-    are skipped (_excluded_ref_lines). Scans pages/ and partials/ in
-    both languages."""
+    """Require external HTTP(S) links to open in a new tab and use
+    `opts=nofollow`. Quoted link text and multiline attribute lists are
+    supported. Hosts in NOFOLLOW_EXEMPT_HOSTS still need a new tab but not
+    nofollow. Uses the external-link filter to skip placeholders, private
+    hosts, Git remotes, comments, and literal blocks."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -6326,23 +5590,10 @@ def check_pages_link_new_tab() -> bool:
 
 
 def check_pages_xref_own_product() -> bool:
-    """New check (not a port of an existing shell script): house style says
-    an internal xref: to this same product's own content must not carry
-    the product's own component name -- `xref:foo.adoc[]`, not
-    `xref:ADH:foo.adoc[]` -- because a qualified xref always resolves to
-    the *latest* published version. A reader on an older version who
-    clicks it is bounced to latest instead of staying on their version.
-    `xref:<version>@<product>:...` is the guide's own sanctioned way to
-    pin a specific version deliberately, and is exempt -- the same
-    _VERSION_PIN_RE check _check_refs_in_file uses to leave it unresolved.
-
-    Scoped to pages/ only: the guide's own stated exception -- a partial
-    meant to be include::'d into a *different* product's docs must use
-    the qualified form, since "this product" won't be true once it's
-    spliced in elsewhere -- would need to know every place a partial is
-    ever included from (including from other repos) to detect reliably.
-    A page is never itself an include target, so pages/ has no such
-    exception to worry about."""
+    """Reject xrefs that name their own component without a version pin,
+    since an unpinned qualified xref resolves to the latest published version.
+    Explicit version@component pins are exempt. Only pages are checked:
+    partials shared with other products may legitimately require qualification."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -6404,12 +5655,8 @@ def _image_has_alt(attrs: str) -> bool:
 
 
 def check_pages_image_alt() -> bool:
-    """New check (SEO recommendations for texts -> Pictures and
-    screenshots): every image:: needs alt text -- either the `alt=`
-    attribute or Asciidoctor's implicit first-positional-attribute slot
-    (see _image_has_alt). injectSvg:/inlineSVG: (a different raw-SVG
-    embedding mechanism with no alt slot of its own) are out of scope.
-    Scans pages/ and partials/ in both languages."""
+    """Require image:: alt text via `alt=` or the first positional attribute.
+    Raw SVG embedding macros have no alt slot and are out of scope."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -6451,30 +5698,9 @@ _INLINE_IMAGE_MACRO_RE = re.compile(r'\bimage:(?!:)([^\[\]\s]+)\[')
 
 
 def check_pages_icon_svg() -> bool:
-    """New check (house style, not an existing shell script): a real
-    feature request -- an inline image:TARGET[] macro (used
-    mid-sentence for a small icon, e.g. `click
-    image:how-to:icons/delete_default.svg[width=30]`) should point at an
-    .svg file, not a raster one: a PNG icon rendered at icon size looks
-    visibly blurry next to a crisp SVG one.
-
-    Deliberately scoped to the INLINE image: form only (a single colon,
-    not image::) -- the block form is for screenshots/diagrams, where a
-    raster format is normal and often necessary (a real screenshot isn't
-    vector art), not icon misuse. This was checked directly across the
-    fleet rather than assumed: every block image:: target is screenshot-
-    scale (clustering at 362/724px), nothing icon-sized; of 2068 inline
-    image: targets fleet-wide, 2066 (99.9%) were already .svg, and the
-    only two non-svg hits (the real-world case that prompted this check)
-    were a genuine toolbar icon (ranger-grey-plus.png, width=24) in
-    docs-adh. A `width=` cutoff was considered and dropped: inline usage
-    never exceeds width=60 fleet-wide and block usage never drops below
-    screenshot scale, so the inline/block distinction alone already
-    separates icons from screenshots with no measured false positive --
-    adding a width check on top would only add a %-vs-pixel parsing edge
-    case for no practical benefit. injectSvg:/inlineSVG: (a different raw-
-    SVG embedding mechanism, inherently SVG already) are out of scope, the
-    same as ST12. Scans pages/ and partials/ in both languages."""
+    """Require inline image: macros to target SVG icons. Block image::
+    macros may use raster screenshots/diagrams, and injectSvg:/inlineSVG:
+    need no format check. Scans pages and partials in both languages."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -6592,27 +5818,10 @@ def _stem_coverage(text: str, title: str):
 
 
 def _xref_text_is_stale_title(text: str, title: str) -> bool:
-    """Does `text` look like an attempt to quote `title` that no longer
-    matches it? Measured against a real fleet repo, "starts with a capital
-    letter" alone flags a few hundred links that are deliberate labels
-    (`Install`, `Arenadata DB Control overview`, `Audit -> Operations`),
-    so a link text is only reported when, besides differing from the
-    title, it:
-      - is not a UI navigation path (`A -> B`),
-      - has no containment relation with the title (`Database service
-        configuration parameters` -> `Database`, `ADBM 2.14.2` -> `2.14.2`,
-        `Resume` -> `Resume a data flow` are all fine: the title is
-        still named, or the text is a shortened form of it),
-      - is at least two words (a single capitalized word is a verb or a
-        noun label, not a title), and
-      - is mostly made of the title's own words (see _stem_coverage): at
-        least two of them and at least two thirds of its content words.
-        A text with little in common is a different, deliberate label
-        (`Prometheus web interface` -> `View metrics in Prometheus` shares
-        only the product name; `ADB Control architectural schema` ->
-        `Architecture`), while a text that is mostly the title's words but
-        no longer matches it is the stale-title case --
-        `Upgrading with ADBM` vs `Upgrade procedure when using ADBM`."""
+    """Return whether differing link text looks like a stale section title.
+    UI paths, containment/short forms, and one-word labels are accepted.
+    Otherwise require at least two shared word stems covering two thirds of
+    the label, which distinguishes stale titles from deliberate labels."""
     a, b = _plain_title(text), _plain_title(title)
     if a == b or "->" in a or "\u2192" in a:
         return False
@@ -6625,29 +5834,11 @@ def _xref_text_is_stale_title(text: str, title: str) -> bool:
 
 
 def check_pages_xref_title() -> bool:
-    """New check (house style, a real feature request): an xref that
-    points at a section should name that section. `xref:upgrade.adoc#
-    upgrade_with_adbm[Upgrading with ADBM]` where the section is actually
-    titled "Upgrade procedure when using ADBM" reads as a stale label --
-    the section was renamed and the link text never followed.
-
-    The heuristic that tells a section-title label from ordinary running
-    text (`see the xref:x.adoc#y[settings below]`): the link text starts
-    with a capital letter (after inline markup is dropped). Lower-case
-    or non-letter-first text (a parameter name, a number, a `code span`)
-    is prose or a literal and is left alone.
-
-    Compared as plain text, case-insensitively, with inline markup and
-    whitespace differences ignored. Only xrefs with a #fragment that
-    resolves to a *heading* are compared -- an anchor on a table or a
-    paragraph has no section name, and a missing anchor is RF01's
-    business. A heading or link text that carries an {attribute} or a
-    nested macro can't be rendered from source, so it's left unchecked.
-    Target resolution mirrors _check_refs_in_file (component-qualified
-    refs against --external-root, partial includers, includes with tag=
-    scoping), so run it with the same --external-root/--auto-external-
-    root flags as `check refs --broken`. Scans pages/ and partials/ in
-    both languages."""
+    """Flag xref labels that no longer resemble their target section title.
+    Only capitalized labels and fragments resolving to headings are compared.
+    Comparison ignores case, inline markup, and whitespace; attributes and
+    nested macros are left unchecked. Target resolution follows broken-ref
+    rules, including external roots, includer modules, and tag scoping."""
     ok = True
     total_hits = 0
     _SKIPPED_COMPONENTS.clear()
@@ -6758,15 +5949,8 @@ def _has_caption_above(lines, idx):
 
 
 def check_pages_admonition_caption() -> bool:
-    """New check: house style says every admonition (NOTE/TIP/WARNING/
-    IMPORTANT/CAUTION -- block `[TYPE]` form or inline `TYPE:` label form,
-    see _ADMONITION_BLOCK_RE/_ADMONITION_LABEL_RE) needs a caption, a
-    `.Caption text` block title placed directly above it (see
-    _has_caption_above). The guide also wants the caption text itself to
-    differ by language and to come from a controlled per-type list --
-    that part needs a maintained vocabulary (the same shape as the
-    terminology glossary) and is deferred; this only checks presence.
-    Scans pages/ and partials/ in both languages."""
+    """Require a `.Caption` title directly above block or inline admonitions.
+    Only caption presence is checked, not its wording."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -6802,14 +5986,7 @@ _HEADING_STARTS_WITH_ARTICLE_RE = re.compile(r'^(A|An|The)\b')
 
 
 def check_pages_heading_article() -> bool:
-    """New check: house style says "Do not start headers with articles,
-    e.g. use Example instead of An example." English-specific by
-    construction -- an RU heading never starts with the literal Latin
-    words "A"/"An"/"The", so scanning both languages uniformly is
-    harmless. Reuses _HEADING_ID_RE, the same heading-line pattern
-    check_pages_heading_no_period/check_pages_heading_no_markup work
-    from; any heading level counts. Scans pages/ and partials/ in both
-    languages."""
+    """Flag headings at any level beginning with A, An, or The."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -6844,17 +6021,8 @@ _HEADING_GERUND_OBJECT_RE = re.compile(
 
 
 def check_pages_heading_gerund() -> bool:
-    """New check: house style says to use infinitives instead of gerunds in
-    headings, e.g. "Create a cluster" instead of "Creating a cluster". A bare
-    gerund heading ("Logging", "Monitoring", "Partitioning") is a legitimate
-    topic-noun section title and NOT a violation -- real-world survey across
-    all repos showed those dominate and are never followed by a
-    determiner/possessive. Only a gerund immediately followed by a
-    determiner-like word (a/an/the/your/our/their/its/this/that/these/those)
-    -- mirroring the wiki's own "Creating a cluster" example -- is flagged.
-    English-specific by construction, same reasoning as
-    check_pages_heading_article. Scans pages/ and partials/ in both
-    languages; any heading level counts."""
+    """Flag gerund headings followed by a determiner or possessive, as in
+    "Creating a cluster". Bare topic nouns such as "Logging" are accepted."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -7985,30 +7153,10 @@ def run_sync(en_file: str, dry_run: bool):
 # --------------------------------------------------------------------------
 
 def _discover_page_completions():
-    """(names, dirs) -- every EN/RU pages/partials .adoc filename, and
-    every content-relative directory (see _content_relpath) at every
-    nesting level, across all discovered modules. Shared source for both
-    --page (accepts files and directories) and --sync (files only) tab
-    completion. A no-op unless argcomplete is installed and active (see
-    Tab completion in the README); harmless to always attach.
-
-    Each directory candidate carries a trailing "/" (e.g. "reference/",
-    not "reference") -- --page's own parsing tolerates either form (a
-    trailing slash is stripped, see main()), but the completer needs it:
-    without it, no candidate starts with what the shell has typed the
-    moment the user types the "/" themselves (real path completion always
-    appends it too, for the same reason), so completion would go dead
-    right after completing a directory instead of continuing into it.
-
-    Each file gets one candidate per suffix-length qualified form, from
-    the bare filename up to its full content-relative path (e.g. for
-    reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc:
-    "gp_ao_diskquota_no_perm_map.adoc", then
-    "gp_toolkit/gp_ao_diskquota_no_perm_map.adoc", then the full path) --
-    matching every qualified form --page/--sync's own suffix-matching (see
-    _page_allowed/_resolve_page_stem) actually accepts, so completion can
-    keep going after a directory prefix to narrow down to one file, e.g.
-    when the bare filename alone would be ambiguous across directories."""
+    """Return file and directory candidates for --page/--sync completion.
+    Directory candidates end in `/` so path completion can continue. Files
+    include every accepted suffix-qualified form, from the bare filename to
+    the full content-relative path, across EN/RU pages and partials."""
     names = set()
     dirs = set()
     for _, en_root, ru_root in module_roots():
@@ -8357,23 +7505,11 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args):
 
 
 def _repo_glossary_paths(base_glossary, selected):
-    """The glossary path list for one repo inside a --repo loop. An
-    explicit --glossary is a base shared across every target, but that
-    doesn't mean a repo's own *-glossary.psv should be silently ignored
-    -- the two are merged (base_glossary + this repo's own, deduped),
-    the "shared base + per-product terms" story that only makes sense
-    once --repo is sweeping several repos. _load_glossary already merges
-    multiple files/same-EN-term rows into accepted alternatives rather
-    than one overwriting the other, so this is just building the right
-    *list* of paths -- no new merge logic needed. A single-repo run (no
-    --repo) never calls this and keeps the older either/or behavior:
-    explicit --glossary alone fully replaces auto-discovery, entirely in
-    _run_selected. No-op (returns base_glossary as-is) when
-    pages-terminology isn't even selected, or when no explicit base was
-    given at all -- _run_selected's own auto-discovery already covers
-    that case with its own message. Prints which files ended up in play
-    when a merge actually happens, since a silent one would be hard to
-    debug when a term does or doesn't get flagged."""
+    """In a multi-repo terminology run, combine the explicit base glossary
+    with the current repo's local glossaries and report the combined paths.
+    Return the base unchanged when terminology is unselected, no base was
+    supplied, or no new local files exist. Single-repo explicit paths retain
+    their replacement semantics."""
     if "pages-terminology" not in selected or not base_glossary:
         return base_glossary
     local = [p for p in _discover_default_glossaries() if p not in base_glossary]
