@@ -1662,6 +1662,43 @@ class CompileGlossaryPatternTests(unittest.TestCase):
         self.assertFalse(dt._glossary_entry_ru_count(entry, "работает в кластере gpdb") > 0)
 
 
+class ExamplesOrphanedTests(FixtureTestCase):
+    def test_example_included_by_another_module_is_not_orphaned(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/mod-a/pages/page.adoc", "include::mod-b:example$query.sql[]\n")
+        self.write("en/modules/mod-b/examples/query.sql", "SELECT 1;\n")
+
+        ok, output = self.run_check(dt.check_examples_orphaned)
+
+        self.assertTrue(ok, output)
+
+    def test_example_used_by_tagged_external_page_included_here_is_not_orphaned(self):
+        """An example$ include inside an external page region resolves in
+        the module of the local page that includes that region."""
+        for lang in ("en", "ru"):
+            self.antora_yml(lang, "ADBES")
+            self.write(f"{lang}/modules/ROOT/pages/metrics.adoc",
+                       "include::ADB:how-to:metrics.adoc[tag=query]\n")
+            self.write(f"{lang}/modules/ROOT/examples/query.sql", "SELECT 1;\n")
+            self.write(f"adb/{lang}/modules/how-to/pages/metrics.adoc",
+                       "// tag::query[]\ninclude::example$query.sql[]\n// end::query[]\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={self.root / 'adb'}"])
+
+        ok, output = self.run_check(dt.check_examples_orphaned)
+
+        self.assertTrue(ok, output)
+
+    def test_commented_out_include_does_not_count_as_usage(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/page.adoc", "// include::example$dead.sql[]\n")
+        self.write("en/modules/ROOT/examples/dead.sql", "SELECT 1;\n")
+
+        ok, output = self.run_check(dt.check_examples_orphaned)
+
+        self.assertFalse(ok)
+        self.assertIn("dead.sql", output)
+
+
 class ImagesOrphanedTests(FixtureTestCase):
     def test_duplicate_basename_only_unused_copy_is_flagged(self):
         """Regression test for the promql-prometheus-query-language_dark.png

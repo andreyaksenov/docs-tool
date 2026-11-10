@@ -304,13 +304,13 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   ./docs_tool.py check refs --orphaned --target partials \
     --external-root ADB=../docs-adb --external-root ADH=../docs-adh
   ```
-  `partials`/`images`/`tags` are riskier than `pages`/`examples` without
-  `--external-root`: a tag or partial only ever pulled in by a sibling repo's
-  own pages (via `include::...[tag=...]`) looks orphaned here with no in-repo
-  signal to say otherwise, since the reference lives entirely in that other
-  repo's source. Registered external roots are also scanned for image macros,
-  so an image stored here but referenced from included external content (a page
-  or partial) is recognized as used. Same two notes as `--broken` above — the generic one when
+  `partials`/`examples`/`images`/`tags` are riskier than `pages` without
+  `--external-root`: content only ever pulled in by a sibling repo's own pages
+  looks orphaned here with no in-repo signal to say otherwise, since the
+  reference lives entirely in that other repo's source. Registered external
+  roots are scanned for image macros and example includes, so content stored
+  here but referenced from included external content (a page or partial) is
+  recognized as used. Same two notes as `--broken` above — the generic one when
   nothing was registered at all, the specific one whenever this repo's own
   content happens to reference a component by name that still isn't.
 

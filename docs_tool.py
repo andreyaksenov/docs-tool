@@ -609,28 +609,70 @@ def check_examples_no_cyrillic() -> bool:
     return ok
 
 
+def _collect_used_examples(lang_module_roots, lang, includer_roots):
+    """Resolve example$ includes in local and registered external content.
+    Unqualified targets in included pages/partials use each including
+    page's module context; a page also retains its own module context."""
+    used = set()
+    own_name = _own_component_name(lang)
+    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    for root, this_lang_module_roots in sources:
+        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+            lines = _read_lines(f)
+            if lines is None:
+                continue
+            excluded = _excluded_comment_lines(f)
+            fallback_roots = includer_roots.get(f) or {root}
+            if _is_under(f, root / "pages"):
+                fallback_roots = fallback_roots | {root}
+            for lineno, line in enumerate(lines, 1):
+                if lineno in excluded:
+                    continue
+                for t, _attrs in _INCLUDE_MACRO_RE.findall(line):
+                    if _VERSION_PIN_RE.match(t):
+                        continue
+                    candidate_roots = fallback_roots
+                    m_component = _COMPONENT_PREFIX_RE.match(t)
+                    if m_component:
+                        component = m_component.group(0)[:-1]
+                        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], this_lang_module_roots,
+                                                       lang, own_name, lang_module_roots)
+                        if resolved is None:
+                            continue
+                        candidate_roots = {resolved[0]}
+                        t = resolved[1]
+                    if not t.startswith("example$"):
+                        continue
+                    name = _strip_root_slash(t[len("example$"):])
+                    for cand in candidate_roots:
+                        used.add(cand / "examples" / name)
+    return used
+
+
 def check_examples_orphaned() -> bool:
-    """Port of check_examples_orphaned.sh: every examples/ file must be
-    pulled in by an include::example$<path>[] somewhere in that module's
-    pages/partials."""
+    """Every examples/ file must be the resolved target of an
+    include::example$<path>[] in local or registered external content."""
     ok = True
     orphaned_count = 0
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            examples_root = root / "examples"
-            if not examples_root.is_dir():
-                continue
-            corpus_parts = []
-            for d in (root / "pages", root / "partials"):
-                for f in _iter_files(d):
-                    text = _read_text(f)
-                    if text is not None:
-                        corpus_parts.append(text)
-            corpus = "\n".join(corpus_parts)
-            for f in _iter_files(examples_root):
-                rel = f.relative_to(examples_root).as_posix()
-                needle = f"example$${rel}".replace("$$", "$")
-                if needle not in corpus:
+    _SKIPPED_COMPONENTS.clear()
+    _warn_if_no_external_root()
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+    en_includers = _build_included_content_roots(en_module_roots, "en")
+    ru_includers = _build_included_content_roots(ru_module_roots, "ru")
+
+    for lang, lang_module_roots, includers in (
+            ("en", en_module_roots, en_includers),
+            ("ru", ru_module_roots, ru_includers),
+    ):
+        used = _collect_used_examples(lang_module_roots, lang, includers)
+        for root in lang_module_roots.values():
+            for f in _iter_files(root / "examples"):
+                if f not in used:
                     ok = False
                     orphaned_count += 1
                     print(f"ORPHANED  {f}  (not included in any pages/partials)")
@@ -638,6 +680,7 @@ def check_examples_orphaned() -> bool:
         print("OK: all examples are included somewhere.")
     else:
         print(f"\nTotal: {orphaned_count} orphaned example file(s).")
+    _report_skipped_components()
     return ok
 
 
@@ -7229,7 +7272,7 @@ _RULES_IGNORING_PAGE = {
 }
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",
-    "partials-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
+    "partials-orphaned", "examples-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
 }
 
 
