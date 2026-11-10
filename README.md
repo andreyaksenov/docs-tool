@@ -308,7 +308,9 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   `--external-root`: a tag or partial only ever pulled in by a sibling repo's
   own pages (via `include::...[tag=...]`) looks orphaned here with no in-repo
   signal to say otherwise, since the reference lives entirely in that other
-  repo's source. Same two notes as `--broken` above — the generic one when
+  repo's source. Registered external roots are also scanned for image macros,
+  so an image stored here but referenced from included external content (a page
+  or partial) is recognized as used. Same two notes as `--broken` above — the generic one when
   nothing was registered at all, the specific one whenever this repo's own
   content happens to reference a component by name that still isn't.
 

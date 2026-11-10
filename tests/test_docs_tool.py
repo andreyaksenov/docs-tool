@@ -1711,6 +1711,44 @@ class ImagesOrphanedTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("dead.png", output)
 
+    def test_image_used_by_external_partial_included_here_is_not_orphaned(self):
+        """An ADB partial can reference an image stored in ADBES, whose
+        page includes that partial. The unqualified image target resolves
+        in the including page's module, not the partial's own component."""
+        for lang in ("en", "ru"):
+            self.antora_yml(lang, "ADBES")
+            self.write(f"{lang}/modules/ROOT/pages/monitoring.adoc",
+                       "include::ADB:ROOT:partial$promql.adoc[]\n")
+            self.write(f"{lang}/modules/ROOT/images/monitoring/promql_dark.png", "used")
+            self.write(f"adb/{lang}/modules/ROOT/partials/promql.adoc",
+                       "image::monitoring/promql_dark.png[]\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={self.root / 'adb'}"])
+
+        ok, output = self.run_check(dt.check_images_orphaned)
+
+        self.assertTrue(ok, output)
+
+    def test_image_in_tagged_external_page_included_here_is_not_orphaned(self):
+        """Regression for docs-adbes including
+        ADB:how-to:metrics.adoc[tag=view_metrics_prometheus]: images in the
+        included page region resolve against the ADBES ROOT module."""
+        for lang in ("en", "ru"):
+            self.antora_yml(lang, "ADBES")
+            self.write(f"{lang}/modules/ROOT/pages/metrics.adoc",
+                       "include::ADB:how-to:metrics.adoc[tag=view_metrics_prometheus]\n")
+            for theme in ("dark", "light"):
+                self.write(f"{lang}/modules/ROOT/images/monitoring/promql_{theme}.png", "used")
+            self.write(f"adb/{lang}/modules/how-to/pages/metrics.adoc",
+                       "// tag::view_metrics_prometheus[]\n"
+                       "image::monitoring/promql_dark.png[]\n"
+                       "image::monitoring/promql_light.png[]\n"
+                       "// end::view_metrics_prometheus[]\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={self.root / 'adb'}"])
+
+        ok, output = self.run_check(dt.check_images_orphaned)
+
+        self.assertTrue(ok, output)
+
 
 class TagsOrphanedTests(FixtureTestCase):
     def test_unused_tag_is_flagged(self):

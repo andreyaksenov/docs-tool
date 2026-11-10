@@ -744,7 +744,7 @@ def check_examples_parity() -> bool:
 _IMAGE_REF_RE = re.compile(r'(image:{1,2}|injectSvg:{1,2}|inlineSVG:{1,2})([^\]\[\s]+)\[')
 
 
-def _collect_used_images(lang_module_roots, lang, partial_includers):
+def _collect_used_images(lang_module_roots, lang, includer_roots):
     """Scans every pages/partials file (in this language) for
     image:/image::/injectSvg:/injectSvg::/inlineSVG:/inlineSVG:: macros and
     returns the set of concrete images/ file Paths they resolve to -- the
@@ -752,29 +752,40 @@ def _collect_used_images(lang_module_roots, lang, partial_includers):
     component/module-qualified prefix goes through _resolve_module_ref
     (skipped if it names an unregistered external component, same as
     broken-refs); an unqualified one resolves against whichever module(s)
-    actually include the file (partial_includers), or the file's own
-    module for a page. This is deliberately resolution-based rather than a
-    basename-in-corpus-text check: two different modules can each have
-    their own same-named images/foo.png, and only resolving each reference
-    to a specific file -- instead of asking whether "foo.png" appears
-    anywhere in the site's text -- tells a genuinely-unused duplicate
-    apart from the one that's actually used (a substring match also has
-    the opposite failure mode: images/services.png went unflagged for
-    years because images/adb_add_services.png, an unrelated file in
-    another module, happens to end in "services.png"). `own_name` lets a
-    self-qualified reference to this repo's own component (e.g.
+    actually include the file (includer_roots), or the file's own module
+    for content that is not included elsewhere. A page also keeps its own
+    module context because it can render standalone as well as through an
+    include. Registered external components are scanned as sources too:
+    their pages and partials can be included by this repo, with images
+    stored in the including page's module. This is deliberately
+    resolution-based rather than a basename-in-corpus-text check: two
+    different modules can each have their own same-named images/foo.png,
+    and only resolving each reference to a specific file -- instead of
+    asking whether "foo.png" appears anywhere in the site's text -- tells
+    a genuinely-unused duplicate apart from the one that's actually used
+    (a substring match also has the opposite failure mode:
+    images/services.png went unflagged for years because
+    images/adb_add_services.png, an unrelated file in another module,
+    happens to end in "services.png"). `own_name` lets a self-qualified
+    reference to this repo's own component (e.g.
     `image::ADCM:ROOT:clusters/downloads_en.png[]`, written inside
     docs-adcm's own partials -- a real, existing pattern) still resolve,
     the same way an unqualified one would."""
     used = set()
     own_name = _own_component_name(lang)
-    for root in lang_module_roots.values():
+    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    for root, this_lang_module_roots in sources:
         for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
             lines = _read_lines(f)
             if lines is None:
                 continue
             excluded = _excluded_ref_lines(f)
-            fallback_roots = partial_includers.get(f) or {root}
+            fallback_roots = includer_roots.get(f) or {root}
+            if _is_under(f, root / "pages"):
+                fallback_roots = fallback_roots | {root}
             for lineno, line in enumerate(lines, 1):
                 if lineno in excluded:
                     continue
@@ -790,7 +801,8 @@ def _collect_used_images(lang_module_roots, lang, partial_includers):
                     m_component = _COMPONENT_PREFIX_RE.match(t)
                     if m_component:
                         component = m_component.group(0)[:-1]
-                        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
+                        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], this_lang_module_roots,
+                                                       lang, own_name, lang_module_roots)
                         if resolved is None:
                             continue  # external component image, not registered via --external-root
                         candidate_roots = [resolved[0]]
@@ -808,8 +820,8 @@ def check_images_orphaned() -> bool:
     injectSvg:/injectSvg::/inlineSVG:/inlineSVG:: macro somewhere in that
     language across the whole site, not just its own module, since a page
     in one module can reference another module's image via a qualified
-    image::<module>:path[] macro, or, for a partial's image, via whichever
-    module(s) actually include that partial."""
+    image::<module>:path[] macro, or included content can use the including
+    page's module context."""
     ok = True
     orphaned_bytes = 0
     orphaned_count = 0
@@ -818,10 +830,8 @@ def check_images_orphaned() -> bool:
     modules = list(module_roots())
     en_module_roots = {name: en_root for name, en_root, _ in modules}
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
-    en_module_list = [(name, en_root) for name, en_root, _ in modules]
-    ru_module_list = [(name, ru_root) for name, _, ru_root in modules]
-    en_includers = _build_partial_includers(en_module_list, en_module_roots, "en")
-    ru_includers = _build_partial_includers(ru_module_list, ru_module_roots, "ru")
+    en_includers = _build_included_content_roots(en_module_roots, "en")
+    ru_includers = _build_included_content_roots(ru_module_roots, "ru")
 
     for lang, lang_module_roots, includers in (
             ("en", en_module_roots, en_includers),
@@ -1720,16 +1730,21 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
 def _build_partial_includers(module_list, lang_module_roots, lang):
     """{partial_file: {module_root, ...}} for every partials/*.adoc file
     (in this language) actually pulled in via include::...partial$...[]
-    somewhere in the site. Antora resolves an unqualified xref/include
-    found *inside* a partial using the context of whichever page includes
-    it -- the partial's content becomes part of that page's document during
-    conversion -- not the partial file's own directory. So a bare
-    `xref:foo.adoc[]` written in a partial that's only ever included from
-    module A must be checked against module A, even though the partial
-    physically lives under module B's partials/."""
+    somewhere in the site, including registered external components.
+    Antora resolves an unqualified xref/include found *inside* a partial
+    using the context of whichever page includes it -- the partial's
+    content becomes part of that page's document during conversion -- not
+    the partial file's own directory. So a bare `xref:foo.adoc[]` written
+    in a partial that's only ever included from module A must be checked
+    against module A, even though the partial physically lives under
+    module B's partials/."""
     includers = {}
     own_name = _own_component_name(lang)
-    for _, module_root in module_list:
+    sources = [(root, lang_module_roots) for _, root in module_list]
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    for module_root, this_lang_module_roots in sources:
         for f in list(_iter_files(module_root / "pages", ".adoc")) + list(_iter_files(module_root / "partials", ".adoc")):
             text = _read_text(f)
             if text is None:
@@ -1739,11 +1754,35 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
                     continue
                 target_root = module_root
                 if prefix1:
-                    resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", lang_module_roots, lang, own_name)
+                    resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", this_lang_module_roots,
+                                                   lang, own_name, lang_module_roots)
                     if resolved is None:
                         continue
                     target_root, _ = resolved
                 includers.setdefault(target_root / "partials" / _strip_root_slash(name), set()).add(module_root)
+    return includers
+
+
+def _build_included_content_roots(lang_module_roots, lang):
+    """{included_file: {including_module_root, ...}} for pages and partials
+    included by this repo or a registered external component. Image macros
+    in included content resolve in each including page's module context."""
+    includers = {}
+    own_name = _own_component_name(lang)
+    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    for root, this_lang_module_roots in sources:
+        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+            text = _read_text(f)
+            if text is None:
+                continue
+            for t, _attrs in _INCLUDE_MACRO_RE.findall(text):
+                target = _resolve_include_target(t, f.parent, root, this_lang_module_roots, lang, own_name,
+                                                 own_lang_module_roots=lang_module_roots)
+                if target is not None:
+                    includers.setdefault(target, set()).add(root)
     return includers
 
 
