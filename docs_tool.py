@@ -1689,26 +1689,31 @@ def _report_skipped_components():
           "checked out locally", file=sys.stderr)
 
 
+_EXTERNAL_ROOT_WARNING_SHOWN = False
+
+
 def _warn_if_no_external_root():
-    """A generic heads-up, printed before an --external-root-aware check's
-    findings, for the blind spot _report_skipped_components can't cover:
-    that one only ever names a component this repo's own content actually
-    referenced. The orphaned family has no such signal to go on --
-    nothing in this repo's source says "ADCM consumes this partial" when
-    the include:: that says so lives entirely in ADCM's own file, never
-    read without --external-root registering it (see _collect_tag_usage).
-    broken-refs has the opposite risk: a reference into an unregistered
-    component is silently left unverified rather than reported broken,
-    so a real break there reads exactly like a clean pass. Fires only
-    when nothing at all was registered -- with at least one --external-
-    root, _report_skipped_components' specific, evidence-based note at
-    the end is the more useful signal. Not a finding, so it doesn't fail
-    the run."""
-    if EXTERNAL_COMPONENTS:
+    """A generic heads-up, printed once per invocation before the first
+    --external-root-aware check's findings, for the blind spot
+    _report_skipped_components can't cover: that one only ever names a
+    component this repo's own content actually referenced. The orphaned
+    family has no such signal to go on -- nothing in this repo's source says
+    "ADCM consumes this partial" when the include:: that says so lives
+    entirely in ADCM's own file, never read without --external-root
+    registering it (see _collect_tag_usage). Broken-refs has the opposite
+    risk: a reference into an unregistered component is silently left
+    unverified rather than reported broken, so a real break there reads
+    exactly like a clean pass. Fires only when nothing at all was registered
+    -- with at least one --external-root, _report_skipped_components'
+    specific, evidence-based note at the end is the more useful signal. Not a
+    finding, so it doesn't fail the run."""
+    global _EXTERNAL_ROOT_WARNING_SHOWN
+    if EXTERNAL_COMPONENTS or _EXTERNAL_ROOT_WARNING_SHOWN:
         return
     print("note: no --external-root registered -- findings below may be wrong "
           "if another product's repo references this one; pass --external-root "
           "NAME=PATH for each one you have checked out locally", file=sys.stderr)
+    _EXTERNAL_ROOT_WARNING_SHOWN = True
 
 
 def check_pages_broken_refs() -> bool:
@@ -6152,12 +6157,12 @@ _NETWORK_FAMILIES = {"links"}
 #
 # Selection rules (see _resolve_family_selection):
 #   check <family>                       -> every rule in the family, all targets
-#   check <family> --<rule>              -> that rule, target "pages" (or its
-#                                           sole target)
+#   check <family> --<rule>              -> that rule's default target(s): usually
+#                                           "pages", or RULE_DEFAULT_TARGETS[rule]
 #   check <family> --<rule> --target X   -> that rule, target X
 #   check <family> --target X            -> every rule in the family that has
 #                                           a target X
-#   --target all                            -> every target of whatever is selected
+#   --target all                         -> every target of whatever is selected
 #
 # TIERS is advisory and display-only: `list`/`show` render it as
 # "suggest: block"/"suggest: warn", a hint for what a pre-commit hook should
@@ -6227,6 +6232,10 @@ FAMILIES = {
     },
 }
 
+RULE_DEFAULT_TARGETS = {
+    "orphaned": "all",
+}
+
 TIERS = {
     "universal": ("chars", "markup", "refs"),   # deterministic  -> block by default
     "house":     ("style", "terms"),            # per-vendor      -> warn by default
@@ -6239,7 +6248,7 @@ _SCAN_TARGETS = ("pages", "partials", "examples", "images", "tags", "nav")
 # `--target` values, for rules that have more than one target (chars
 # --no-cyrillic, chars --trailing-whitespace, refs --orphaned).
 TARGET_DESC = {
-    "pages":    "pages/ + partials/  (the default)",
+    "pages":    "pages/ + partials/  (default for content checks)",
     "partials": "partials/ only",
     "examples": "examples/",
     "images":   "images/",
@@ -6523,13 +6532,16 @@ def _resolve_family_selection(family, picked_rules, target):
         for rule, targets in FAMILIES[fam].items():
             if picked and rule not in picked:
                 continue
-            if target == "all":
+            selected_target = target
+            if picked and selected_target is None:
+                selected_target = RULE_DEFAULT_TARGETS.get(rule)
+                if selected_target is None:
+                    selected_target = "pages" if "pages" in targets else next(iter(targets))
+            if selected_target == "all":
                 out.extend(targets.values())
-            elif target:
-                if target in targets:
-                    out.append(targets[target])
-            elif picked:
-                out.append(targets.get("pages") or next(iter(targets.values())))
+            elif selected_target:
+                if selected_target in targets:
+                    out.append(targets[selected_target])
             else:
                 out.extend(targets.values())
     seen = set()
@@ -7571,7 +7583,8 @@ def _main_legacy():
     """The pre-subcommand CLI: `docs_tool.py --check-<name> ...`,
     `--all-checks`, `--sync`, `--list-checks`, `--list-modules`. Still
     supported; `docs_tool.py check <family>` is the current surface."""
-    global EXTERNAL_COMPONENTS
+    global EXTERNAL_COMPONENTS, _EXTERNAL_ROOT_WARNING_SHOWN
+    _EXTERNAL_ROOT_WARNING_SHOWN = False
     parser = build_parser()
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         # Blank out the SUPPRESS sentinel so it doesn't leak into the completion
@@ -7935,7 +7948,8 @@ def _v2_show(name):
 
 
 def _main_v2():
-    global EXTERNAL_COMPONENTS
+    global EXTERNAL_COMPONENTS, _EXTERNAL_ROOT_WARNING_SHOWN
+    _EXTERNAL_ROOT_WARNING_SHOWN = False
     parser = _build_v2_parser()
     if not sys.argv[1:]:                 # bare `docs_tool.py` -> full help, exit 0
         parser.print_help()

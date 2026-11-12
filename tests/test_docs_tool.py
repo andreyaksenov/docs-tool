@@ -38,6 +38,7 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_en = dt.EN_MODULES_ROOT
         self._orig_ru = dt.RU_MODULES_ROOT
         self._orig_external = dt.EXTERNAL_COMPONENTS
+        self._orig_external_warning = dt._EXTERNAL_ROOT_WARNING_SHOWN
         self._orig_page_filter = dt._PAGE_FILTER
         self._orig_glossary = dt.GLOSSARY
         self._orig_links = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
@@ -46,6 +47,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.EN_MODULES_ROOT = self.root / "en" / "modules"
         dt.RU_MODULES_ROOT = self.root / "ru" / "modules"
         dt.EXTERNAL_COMPONENTS = {}
+        dt._EXTERNAL_ROOT_WARNING_SHOWN = False
         dt._PAGE_FILTER = None
         dt.GLOSSARY = {}
         dt.LINK_OFFLINE = False
@@ -60,6 +62,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.EN_MODULES_ROOT = self._orig_en
         dt.RU_MODULES_ROOT = self._orig_ru
         dt.EXTERNAL_COMPONENTS = self._orig_external
+        dt._EXTERNAL_ROOT_WARNING_SHOWN = self._orig_external_warning
         dt._PAGE_FILTER = self._orig_page_filter
         dt.GLOSSARY = self._orig_glossary
         (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
@@ -5378,6 +5381,13 @@ class FamilySelectionTests(unittest.TestCase):
             ["pages-no-cyrillic"],
         )
 
+    def test_orphaned_rule_without_target_defaults_to_all(self):
+        self.assertEqual(
+            dt._resolve_family_selection("refs", {"orphaned"}, None),
+            ["pages-orphaned", "partials-orphaned", "examples-orphaned",
+             "images-orphaned", "tags-orphaned"],
+        )
+
     def test_rule_with_target_picks_it(self):
         self.assertEqual(
             dt._resolve_family_selection("chars", {"no-cyrillic"}, "examples"),
@@ -5566,6 +5576,17 @@ class CliV2RoutingTests(unittest.TestCase):
     def test_target_flag_is_accepted(self):
         code, _, err = self._run("check", "refs", "--orphaned", "--target", "images")
         self.assertEqual(code, 0, err)
+
+    def test_orphaned_without_target_runs_all_five(self):
+        code, out, err = self._run("check", "refs", "--orphaned")
+        self.assertEqual(code, 0, err)
+        for rid in ("RF02", "RF03", "RF04", "RF05", "RF06"):
+            self.assertIn(f"=== {rid}  check refs --orphaned", out)
+
+    def test_multi_check_run_shows_external_root_warning_once(self):
+        code, _, err = self._run("check", "refs", "--orphaned")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err.count("note: no --external-root registered"), 1)
 
     def test_bad_target_value_is_rejected(self):
         code, _, err = self._run("check", "chars", "--target", "bogus")
