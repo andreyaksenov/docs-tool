@@ -1383,8 +1383,9 @@ def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, ca
 
 def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None):
     """Check references using sibling and registered external module roots.
-    Unqualified references in partials use their including modules. Undefined
-    partial attributes are tried against each including page's attribute
+    Unqualified xrefs, images, and family-attribute links in partials use their
+    including modules; nested includes retain the partial's own module context.
+    Undefined partial attributes are tried against each including page's attribute
     context and pass if any context resolves. References in tag regions that
     no include selects are skipped; orphan-tag checking reports them instead."""
     lines = _read_lines(file)
@@ -1433,7 +1434,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                 t = target[len("include::"):]
                 if _VERSION_PIN_RE.match(t):
                     continue  # version@component:... pin -- can't resolve, left unchecked
-                candidate_roots = list(fallback_roots)
+                candidate_roots = [root]
                 qualified = False
                 m_component = _COMPONENT_PREFIX_RE.match(t)
                 if m_component:
@@ -1556,13 +1557,14 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     """{partial_file: {module_root, ...}} for every partials/*.adoc file
     (in this language) actually pulled in via include::...partial$...[]
     somewhere in the site, including registered external components.
-    Antora resolves an unqualified xref/include found *inside* a partial
+    Antora resolves an unqualified xref/image found *inside* a partial
     using the context of whichever page includes it -- the partial's
     content becomes part of that page's document during conversion -- not
     the partial file's own directory. So a bare `xref:foo.adoc[]` written
     in a partial that's only ever included from module A must be checked
     against module A, even though the partial physically lives under
-    module B's partials/."""
+    module B's partials/. Nested includes are the exception: they retain
+    the included file's own context."""
     includers = {}
     own_name = _own_component_name(lang)
     sources = [(root, lang_module_roots) for _, root in module_list]
@@ -1590,8 +1592,8 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
 
 def _build_included_content_roots(lang_module_roots, lang):
     """Map included pages/partials to their including module roots, scanning
-    this repo and registered external components. Resource references in
-    included content resolve in each including page's module context."""
+    this repo and registered external components. References that use the
+    including page's context, such as images, resolve in these modules."""
     includers = {}
     own_name = _own_component_name(lang)
     sources = [(root, lang_module_roots) for root in lang_module_roots.values()]

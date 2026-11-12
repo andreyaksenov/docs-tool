@@ -2168,6 +2168,40 @@ class PagesBrokenRefsTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_pages_broken_refs)
         self.assertTrue(ok, output)
 
+    def test_nested_include_uses_external_partials_own_component(self):
+        """A partial shared with another component keeps its own context for
+        nested includes, rather than resolving them in the including page."""
+        self.antora_yml("en", "ADCM")
+        self.write("en/modules/ROOT/partials/et/add-components.adoc",
+                   "include::partial$typical-cluster/add-components.adoc[tag=part-01]\n")
+        self.write("en/modules/ROOT/partials/typical-cluster/add-components.adoc",
+                   "tag::part-01[]\nbody\nend::part-01[]\n")
+        self.write("adb/en/antora.yml", "name: ADB\nversion: '1.0'\n")
+        self.write("adb/en/modules/ROOT/pages/page.adoc",
+                   "include::ADCM:ROOT:partial$et/add-components.adoc[]\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={self.root / 'adb'}"])
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(ok, output)
+
+    def test_nested_include_does_not_use_including_components_target(self):
+        """A target that exists only in the including component must not make
+        a nested include pass when the partial's own component lacks it."""
+        self.antora_yml("en", "ADCM")
+        self.write("en/modules/ROOT/partials/shared.adoc",
+                   "include::partial$nested.adoc[]\n")
+        self.write("adb/en/antora.yml", "name: ADB\nversion: '1.0'\n")
+        self.write("adb/en/modules/ROOT/pages/page.adoc",
+                   "include::ADCM:ROOT:partial$shared.adoc[]\n")
+        self.write("adb/en/modules/ROOT/partials/nested.adoc", "wrong context\n")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components([f"ADB={self.root / 'adb'}"])
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertFalse(ok)
+        self.assertIn("include::partial$nested.adoc", output)
+
     def test_quoted_and_negated_tag_includes_are_not_reported(self):
         """tag="name" and tag=!name resolve to tags that exist in the
         target; the quotes must not end up in the looked-up tag name."""

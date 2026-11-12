@@ -239,7 +239,9 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
 - **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
   `link:` reference resolves to a real file or anchor. An `xref:` target not
   immediately followed by `[...]` is reported as `(missing [])` even when the
-  target exists, because Asciidoctor does not render it as a link.
+  target exists, because Asciidoctor does not render it as a link. Nested
+  includes retain the included file's own component/module context, even when
+  an external product includes that file.
   `--external-root NAME=PATH` (repeatable) resolves references into a sibling
   Antora repo checked out locally.
   A reference inside a `tag::` region of a `partials/` file that no `include::`
