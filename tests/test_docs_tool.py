@@ -2144,6 +2144,30 @@ class PartialsOrphanedTests(FixtureTestCase):
 
 
 class PagesBrokenRefsTests(FixtureTestCase):
+    def test_xref_without_brackets_is_broken_even_when_target_exists(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc", "= Target\n")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "See xref:TEST:ROOT:target.adoc).\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("xref:TEST:ROOT:target.adoc (missing [])", output)
+
+    def test_xref_with_space_before_brackets_is_broken(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc", "= Target\n")
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "See xref:target.adoc [Target].\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn("xref:target.adoc (missing [])", output)
+
+    def test_literal_xref_syntax_without_brackets_is_ignored(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "The xref: macro and \\xref:target.adoc are literal examples.\n")
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+
     def test_quoted_and_negated_tag_includes_are_not_reported(self):
         """tag="name" and tag=!name resolve to tags that exist in the
         target; the quotes must not end up in the looked-up tag name."""

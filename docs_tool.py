@@ -958,6 +958,9 @@ def check_nav_structure_parity() -> bool:
 # --------------------------------------------------------------------------
 
 _REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|image:{1,2}|link:{1,2})[^\]\[\s]+\[')
+# A separate candidate scan catches an xref whose required bracketed attribute
+# list is missing; _REF_SCAN_RE deliberately only matches resolvable macros.
+_XREF_CANDIDATE_RE = re.compile(r'(?<!\\)\bxref:([^\[\]\s]+)(\[)?')
 # Three AsciiDoc forms create an anchor, all handled here:
 # 1. `[#id]`, the inline block-attribute form -- it attaches to whatever
 #    touches it immediately after, with no space, wherever it appears in
@@ -1401,6 +1404,10 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
             continue
         if live_entry is not None and lineno in live_entry[0] and lineno not in live_entry[1]:
             continue  # dead tag region -- no include:: renders this line (see _build_partial_live_lines)
+        for m in _XREF_CANDIDATE_RE.finditer(line):
+            if m.group(2) is None:
+                target = m.group(1).rstrip(".,;!?)]")
+                report(file, lineno, f"xref:{target} (missing [])")
         for m in _REF_SCAN_RE.finditer(line):
             raw_target = m.group(0)[:-1]  # strip trailing '['
             target = raw_target

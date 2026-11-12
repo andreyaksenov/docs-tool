@@ -237,8 +237,11 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
 `check refs` runs `--broken` plus every orphan target.
 
 - **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
-  `link:` reference resolves to a real file or anchor. `--external-root NAME=PATH`
-  (repeatable) resolves references into a sibling Antora repo checked out locally.
+  `link:` reference resolves to a real file or anchor. An `xref:` target not
+  immediately followed by `[...]` is reported as `(missing [])` even when the
+  target exists, because Asciidoctor does not render it as a link.
+  `--external-root NAME=PATH` (repeatable) resolves references into a sibling
+  Antora repo checked out locally.
   A reference inside a `tag::` region of a `partials/` file that no `include::`
   pulls in is skipped — dead content renders nowhere (the region itself is
   flagged by `--orphaned --target tags`).
