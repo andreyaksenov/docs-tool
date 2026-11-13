@@ -1240,17 +1240,18 @@ class IterFilesTests(unittest.TestCase):
 
 class TrailingWhitespaceTests(FixtureTestCase):
     def test_pages_and_partials_in_both_languages_are_checked(self):
-        en_page = self.write("en/modules/ROOT/pages/p.adoc", "clean\nabc \t\n")
+        en_page = self.write("en/modules/ROOT/pages/p.adoc", "clean\nabc  \t\n")
         ru_partial = self.write("ru/modules/ROOT/partials/snippet.adoc", "  \n")
 
         ok, out = self.run_check(dt.check_pages_no_trailing_whitespace)
 
         self.assertFalse(ok)
-        self.assertIn(f"{en_page}:2:4: trailing whitespace", out)
-        self.assertIn("abc⟦SPACE⟧⟦TAB⟧⟦END⟧", out)
-        self.assertIn(f"{ru_partial}:1:1: trailing whitespace", out)
-        self.assertIn("⟦SPACE⟧⟦SPACE⟧⟦END⟧", out)
-        self.assertIn("Total: 2 line(s) with trailing whitespace.", out)
+        self.assertEqual([
+            f"{en_page}:2:4: trailing whitespace: 2 spaces, 1 tab",
+            f"{ru_partial}:1:1: whitespace-only line",
+            "",
+            "Total: 2 line(s) with trailing whitespace.",
+        ], out.splitlines())
 
     def test_clean_lines_and_asciidoc_hard_break_pass(self):
         self.write("en/modules/ROOT/pages/p.adoc", "clean\nfirst line +\nsecond line\n")

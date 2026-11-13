@@ -166,8 +166,9 @@ own ID/Command/Flags table.
 
 - **`CH06` · `check chars --trailing-whitespace`** — no trailing ASCII spaces or
   tabs in `en/` or `ru/` pages/partials, including whitespace-only lines, comments,
-  and literal blocks. Findings show the whitespace with visible markers. AsciiDoc's
-  intentional space-plus (` +`) hard break is clean. `--target examples` scans every
+  and literal blocks. Each finding is one clickable `file:line:column` line with
+  space/tab counts; whitespace-only lines are labeled directly. AsciiDoc's intentional
+  space-plus (` +`) hard break is clean. `--target examples` scans every
   example file type → `CH07`; that target ignores `--page`, like the other whole-site
   example checks.
   ```bash

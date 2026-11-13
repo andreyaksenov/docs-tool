@@ -2232,13 +2232,6 @@ def check_pages_no_invisible_chars() -> bool:
 _TRAILING_WHITESPACE_RE = re.compile(r'[ \t]+$')
 
 
-def _mark_trailing_whitespace(line: str) -> str:
-    return _TRAILING_WHITESPACE_RE.sub(
-        lambda m: m.group(0).replace(" ", "⟦SPACE⟧").replace("\t", "⟦TAB⟧") + "⟦END⟧",
-        line,
-    )
-
-
 def _check_no_trailing_whitespace(files, target: str) -> bool:
     ok = True
     total_hits = 0
@@ -2250,10 +2243,17 @@ def _check_no_trailing_whitespace(files, target: str) -> bool:
         if hits:
             ok = False
             total_hits += len(hits)
-            print(f"FILE     {f}")
             for i, col, l in hits:
-                print(f"  {f}:{i}:{col}: trailing whitespace")
-                print(f"    {_mark_trailing_whitespace(l)}")
+                if not l.strip(" \t"):
+                    print(f"{f}:{i}:{col}: whitespace-only line")
+                    continue
+                trailing = l[col - 1:]
+                counts = []
+                for char, label in ((" ", "space"), ("\t", "tab")):
+                    count = trailing.count(char)
+                    if count:
+                        counts.append(f"{count} {label}{'' if count == 1 else 's'}")
+                print(f"{f}:{i}:{col}: trailing whitespace: {', '.join(counts)}")
     if ok:
         print(f"OK: no trailing spaces or tabs found in {target}.")
     else:
