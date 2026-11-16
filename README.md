@@ -121,7 +121,8 @@ Every rule has a stable **rule ID**. `list` prints this section as a tree;
 rationale, exceptions, and the false positives it was tuned against, ending with
 runnable examples. `show all` prints every rule with its examples but without the
 rationales — the terminal equivalent of this section. `beta` rules are heuristics
-— treat their output as a review list, not a hard gate.
+— treat their output as a review list, not a hard gate. `opt-in` rules are omitted
+from family/default sweeps and run only when explicitly selected.
 
 Name the families you want to run — there's no "run everything" keyword. `links`
 reaches the network and only runs when named. Each family below opens with its
@@ -135,7 +136,7 @@ own ID/Command/Flags table.
 | `CH03` | `check chars --no-invisible` | zero-width characters |
 | `CH04` | `check chars --dashes` | literal en/em dashes |
 | `CH05` | `check chars --homoglyphs` | Latin letters in RU prose |
-| `CH06` | `check chars --trailing-whitespace` | trailing spaces/tabs |
+| `CH06` | `check chars --trailing-whitespace` | trailing spaces/tabs (opt-in) |
 
 - **`CH01` · `check chars --no-cyrillic`** — no Cyrillic in `en/` files (RU text
   left in an EN file). `--target examples` also scans `examples/` → `CH02`.
@@ -166,9 +167,10 @@ own ID/Command/Flags table.
   ./docs_tool.py check chars --homoglyphs --page resource_groups.adoc
   ```
 
-- **`CH06` · `check chars --trailing-whitespace`** — no trailing ASCII spaces or
+- **`CH06` · `check chars --trailing-whitespace`** · opt-in — no trailing ASCII spaces or
   tabs in `en/` or `ru/` pages/partials, including whitespace-only lines, comments,
-  and literal blocks. Each finding is one clickable `file:line:column` line with
+  and literal blocks. Omitted from bare `check chars` and legacy `--all-checks`;
+  pass the explicit flag to run it. Each finding is one clickable `file:line:column` line with
   space/tab counts; whitespace-only lines are labeled directly. AsciiDoc's intentional
   space-plus (` +`) hard break is clean. `--target examples` scans every
   example file type → `CH07`; that target ignores `--page`, like the other whole-site
@@ -844,8 +846,9 @@ The pre-subcommand interface still works: `--check-<name>`, `--all-checks`,
 upgrading a vendored copy doesn't break an existing hook or CI job. Run
 `./docs_tool.py list` for the current family/rule map, or `./docs_tool.py --list-checks`
 for the legacy flags.
-`--all-checks` runs everything **except `--check-links-external`** (network) — that
-one only runs when named.
+`--all-checks` runs every default check except `--check-links-external` (network)
+and the opt-in trailing-whitespace checks. Those run only through their explicit
+flags; `--list-checks` marks them `(opt-in)`.
 
 Dropped along the way: `sync --since REF`, the `-v` / `-n` short aliases, and
 `--verbose` — every check now prints one complete output (a long per-file diff is

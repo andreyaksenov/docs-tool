@@ -43,6 +43,7 @@ The legacy flag interface -- --check-<name>, --all-checks, --sync,
 
 Heuristic checks (marked "beta" by "list") and sync can misfire on
 legitimate content -- treat their output as a review list, not a hard gate.
+Checks marked "opt-in" run only when explicitly selected.
 """
 import argparse
 import difflib
@@ -6360,6 +6361,13 @@ BETA_CHECKS = {
 _NETWORK_ONLY_CHECKS = {"links-external"}
 _NETWORK_FAMILIES = {"links"}
 
+# Deterministic but noisy cleanup checks omitted from family/default sweeps.
+# Every check remains available through its explicit rule or legacy flag.
+_OPT_IN_CHECKS = {
+    "pages-no-trailing-whitespace",
+    "examples-no-trailing-whitespace",
+}
+
 
 # --------------------------------------------------------------------------
 # CHECK FAMILIES  (the `docs_tool check <family>` surface)
@@ -6374,7 +6382,7 @@ _NETWORK_FAMILIES = {"links"}
 #   FAMILIES[family][rule] = {scan-target: CHECKS-key}
 #
 # Selection rules (see _resolve_family_selection):
-#   check <family>                       -> every rule in the family, all targets
+#   check <family>                       -> every default rule in the family, all targets
 #   check <family> --<rule>              -> that rule's default target(s): usually
 #                                           "pages", or RULE_DEFAULT_TARGETS[rule]
 #   check <family> --<rule> --target X   -> that rule, target X
@@ -6610,7 +6618,7 @@ _TIER_DISPOSITION = {"universal": "block", "house": "warn", "relational": "warn"
 RULE_FLAGS = {
     "pages-no-cyrillic":           "Cyrillic in EN files",
     "pages-no-invisible-chars":    "zero-width characters",
-    "pages-no-trailing-whitespace": "trailing spaces/tabs",
+    "pages-no-trailing-whitespace": "spaces/tabs",
     "pages-no-unicode-dashes":     "literal en/em dashes",
     "pages-ru-latin-homoglyphs":   "Latin letters in RU prose",
     "pages-stray-backticks":       "odd backtick count",
@@ -6666,7 +6674,10 @@ def _rules_table():
             cmd = _check_command(primary)
             if len(targets) > 1:
                 cmd += " [--target ...]"
-            rows.append((rid, cmd, RULE_FLAGS.get(primary, SUMMARIES.get(primary, ""))))
+            what = RULE_FLAGS.get(primary, SUMMARIES.get(primary, ""))
+            if primary in _OPT_IN_CHECKS:
+                what += " [opt-in]"
+            rows.append((rid, cmd, what))
     w_id = max(len(r[0]) for r in rows)
     out = ["Rules:"]
     out += [f"    {rid:<{w_id}}  {cmd}  {what}" for rid, cmd, what in rows]
@@ -6753,6 +6764,8 @@ def _resolve_family_selection(family, picked_rules, target):
     for fam in fams:
         for rule, targets in FAMILIES[fam].items():
             if picked and rule not in picked:
+                continue
+            if not picked and any(key in _OPT_IN_CHECKS for key in targets.values()):
                 continue
             selected_target = target
             if picked and selected_target is None:
@@ -7505,7 +7518,8 @@ def build_parser():
     for name in CHECKS:
         check_group.add_argument(f"--check-{name}", action="store_true", help=argparse.SUPPRESS)
 
-    parser.add_argument("--all-checks", action="store_true", help="Run every check.")
+    parser.add_argument("--all-checks", action="store_true",
+                        help="Run all default checks (excludes network and opt-in rules).")
     parser.add_argument("--list-checks", action="store_true", help="List available --check-* flags and exit.")
     parser.add_argument("--list-modules", action="store_true",
                         help="List every discovered module (under en/modules/ and ru/modules/) and exit.")
@@ -7837,6 +7851,8 @@ def _main_legacy():
     if args.list_checks:
         for name in CHECKS:
             tag = " (beta)" if name in BETA_CHECKS else ""
+            if name in _OPT_IN_CHECKS:
+                tag += " (opt-in)"
             print(f"--check-{name}{tag}")
         if any(name in BETA_CHECKS for name in CHECKS):
             print("\n(beta): heuristic, not a real AsciiDoc parser -- treat findings as a "
@@ -7853,7 +7869,8 @@ def _main_legacy():
         run_sync(args.sync, dry_run=args.dry_run)
         return
 
-    selected = [k for k in CHECKS if k not in _NETWORK_ONLY_CHECKS] if args.all_checks else [
+    default_excluded = _NETWORK_ONLY_CHECKS | _OPT_IN_CHECKS
+    selected = [k for k in CHECKS if k not in default_excluded] if args.all_checks else [
         name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
     ]
 
@@ -8092,9 +8109,10 @@ def _check_command(key):
 def _v2_list(what, args=None):
     if what == "rules":
         rows = sorted((RULE_IDS[k], _check_command(k),
-                       "  [beta]" if k in BETA_CHECKS else "") for k in CHECKS)
-        for rid, cmd, beta in rows:
-            print(f"{rid}  {cmd}{beta}")
+                       ("  [beta]" if k in BETA_CHECKS else "")
+                       + ("  [opt-in]" if k in _OPT_IN_CHECKS else "")) for k in CHECKS)
+        for rid, cmd, tags in rows:
+            print(f"{rid}  {cmd}{tags}")
         return
     if what == "targets":
         print("--target values (for rules that scan more than one place):\n")
@@ -8125,7 +8143,8 @@ def _v2_list(what, args=None):
         for rule, targets in rules.items():
             primary = targets.get("pages") or next(iter(targets.values()))
             beta = "  [beta]" if primary in BETA_CHECKS else ""
-            print(f"  {RULE_IDS[primary]:<5}--{rule:<21}{SUMMARIES[primary]}{beta}")
+            opt_in = "  [opt-in]" if primary in _OPT_IN_CHECKS else ""
+            print(f"  {RULE_IDS[primary]:<5}--{rule:<21}{SUMMARIES[primary]}{beta}{opt_in}")
             if len(targets) > 1:
                 others = [t for t in targets if t != "pages"]
                 oids = sorted({RULE_IDS[targets[t]] for t in others})
@@ -8164,7 +8183,8 @@ def _v2_show_all():
         if i:
             print()
         beta = "  [beta]" if key in BETA_CHECKS else ""
-        print(f"{rid}  {SUMMARIES.get(key, '')}{beta}")
+        opt_in = "  [opt-in]" if key in _OPT_IN_CHECKS else ""
+        print(f"{rid}  {SUMMARIES.get(key, '')}{beta}{opt_in}")
         _print_examples(key, indent="      ")
     print("\nshow <rule|rule-id>  for one rule's full rationale, exceptions, and "
           "known false positives")
@@ -8180,7 +8200,8 @@ def _v2_show(name):
     fam = _family_of(_rule_of(key)) or "?"
     disp = _TIER_DISPOSITION.get(_tier_of(fam), "?")
     beta = "  [beta -- treat findings as a review list, not a hard gate]" if key in BETA_CHECKS else ""
-    print(f"{RULE_IDS[key]}  {_check_command(key)}   (suggest: {disp}){beta}\n")
+    opt_in = "  [opt-in -- omitted from family/default sweeps]" if key in _OPT_IN_CHECKS else ""
+    print(f"{RULE_IDS[key]}  {_check_command(key)}   (suggest: {disp}){beta}{opt_in}\n")
     print(SUMMARIES.get(key, ""))
     doc = (CHECKS[key].__doc__ or "").strip()
     if doc:

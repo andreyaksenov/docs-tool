@@ -5630,6 +5630,12 @@ class FamilySelectionTests(unittest.TestCase):
              "examples-orphaned", "images-orphaned", "tags-orphaned"},
         )
 
+    def test_whole_chars_family_skips_opt_in_trailing_whitespace(self):
+        selected = set(dt._resolve_family_selection("chars", None, None))
+        self.assertIn("pages-no-cyrillic", selected)
+        self.assertNotIn("pages-no-trailing-whitespace", selected)
+        self.assertNotIn("examples-no-trailing-whitespace", selected)
+
     def test_rule_without_target_defaults_to_pages(self):
         self.assertEqual(
             dt._resolve_family_selection("chars", {"no-cyrillic"}, None),
@@ -5664,7 +5670,7 @@ class FamilySelectionTests(unittest.TestCase):
     def test_none_family_spans_every_non_network_family(self):
         self.assertEqual(
             set(dt._resolve_family_selection(None, None, None)),
-            set(dt.CHECKS) - dt._NETWORK_ONLY_CHECKS,
+            set(dt.CHECKS) - dt._NETWORK_ONLY_CHECKS - dt._OPT_IN_CHECKS,
         )
 
     def test_network_family_only_runs_when_named(self):
@@ -5827,6 +5833,41 @@ class CliV2RoutingTests(unittest.TestCase):
         code, out, _ = self._run("check", "l10n", "--structure", "--page", "foo.adoc")
         self.assertEqual(dt._PAGE_FILTER, {"names": {("foo",)}, "dirs": set()})
         self.assertEqual(code, 0)
+
+    def test_chars_default_skips_trailing_whitespace_but_explicit_rule_runs_it(self):
+        page = Path(self._tmp) / "en/modules/ROOT/pages/p.adoc"
+        page.write_text("= T\n\nTrailing space \n", encoding="utf-8")
+
+        code, out, err = self._run("check", "chars")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("CH06", out)
+        self.assertNotIn("trailing whitespace", out)
+
+        code, out, err = self._run("check", "chars", "--trailing-whitespace")
+        self.assertEqual(code, 1, err)
+        self.assertIn("trailing whitespace", out)
+
+    def test_legacy_all_checks_skips_opt_in_but_explicit_flag_runs_it(self):
+        original = dt._run_selected
+        calls = []
+        try:
+            dt._run_selected = lambda selected, *args, **kwargs: calls.append(selected) or True
+            code, _, err = self._run("--all-checks")
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("pages-no-trailing-whitespace", calls[-1])
+            self.assertNotIn("examples-no-trailing-whitespace", calls[-1])
+
+            code, _, err = self._run("--check-pages-no-trailing-whitespace")
+            self.assertEqual(code, 0, err)
+            self.assertEqual(calls[-1], ["pages-no-trailing-whitespace"])
+        finally:
+            dt._run_selected = original
+
+    def test_opt_in_rule_is_labelled_in_listings(self):
+        for args in (("list",), ("list", "rules"), ("show", "CH06"), ("--list-checks",)):
+            code, out, err = self._run(*args)
+            self.assertEqual(code, 0, err)
+            self.assertIn("opt-in", out)
 
     def test_target_flag_is_accepted(self):
         code, _, err = self._run("check", "refs", "--orphaned", "--target", "images")
