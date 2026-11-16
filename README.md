@@ -15,14 +15,15 @@ curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool
 chmod +x docs_tool.py
 ```
 
-Needs Python 3.7+ (no dependencies). `git` is only used by `sync`. On Windows, drop
-the `chmod` and run `python docs_tool.py …`.
+Needs Python 3.7+ (no dependencies). `git` is used by `sync` and the Git-backed
+`--page` selectors. On Windows, drop the `chmod` and run `python docs_tool.py …`.
 
 ## Usage
 
 ```
 ./docs_tool.py check <family> [<family> ...] [--<rule> ...]
                      [--target NAME] [--repo PATH ...] [--page NAME ...]
+                     [--head REV] [--base REV]
                      [--glossary PATH ...] [--external-root NAME=PATH ...]
                      [--auto-external-root [DIR]]
                      [--offline] [--timeout N] [--show-unverified]        # check links
@@ -733,16 +734,29 @@ limits `chars`, `markup`, `style`, `terms`, `l10n`, and `links` to matching file
 ```bash
 ./docs_tool.py check l10n --untranslated --page resource_groups.adoc   # one file (must end .adoc)
 ./docs_tool.py check l10n --untranslated --page reference/sql_commands # a directory, recursively
-./docs_tool.py check chars markup --page UNCOMMITTED                   # whatever git says is uncommitted
+./docs_tool.py check chars markup --page UNCOMMITTED                   # uncommitted files
+./docs_tool.py check chars markup --page BRANCH                        # committed branch changes
+./docs_tool.py check chars markup --page BRANCH --head TWII-3791 --base master
 ```
 
 If a bare filename matches two files, qualify it (`--page gp_toolkit/gp_ao.adoc`) or
-pass the full path. `--page UNCOMMITTED` with nothing uncommitted exits `0`
-immediately — which is what the pre-commit hook relies on.
+pass the full path. `--page UNCOMMITTED` selects staged, unstaged, and untracked
+`.adoc` files. With nothing uncommitted it exits `0` immediately — which is what the
+pre-commit hook relies on.
+
+`--page BRANCH` selects complete pages/partials whose paths differ in the committed
+Git range `base...head`. The merge-base comparison excludes changes made only on the
+base after your branch diverged. `--head` defaults to `HEAD`; an explicit value must
+name the checked-out commit because checks read the working tree. `--base` defaults
+to `origin/HEAD`, then the first available of `main`, `master`, `origin/main`, and
+`origin/master`. Added, modified, and renamed files are selected (a rename uses its
+new path); deleted files and changes outside `pages/`/`partials/` are ignored.
+Uncommitted-only files are not included — combine `--page BRANCH --page UNCOMMITTED`
+when you want both sets. An empty branch diff exits `0` immediately.
 
 A `--page` value that matches no file aborts the run with exit `2` — an empty run
 otherwise looks identical to a clean one, so a typo in a CI invocation would pass
-green. `--page UNCOMMITTED` resolving to nothing is exempt: that's the normal
+green. `UNCOMMITTED` and `BRANCH` resolving to nothing are exempt: that's the normal
 "no `.adoc` changes" case, and still exits `0`.
 
 ## Checking other repos
@@ -756,9 +770,9 @@ running the command by hand, done in one invocation:
 ```
 
 Each repo gets its own `##### /path/to/repo #####` banner, its own
-`*-glossary.psv` auto-discovery, and its own `git status` for `--page
-UNCOMMITTED` — a page with no local changes in one repo doesn't stop the run
-from reaching the next one. `--page NAME` matching is scoped across the whole
+`*-glossary.psv` auto-discovery, and its own Git state for `--page UNCOMMITTED`
+and `--page BRANCH` — a page with no selected changes in one repo doesn't stop
+the run from reaching the next one. `--page NAME` matching is scoped across the whole
 set: a name only has to match in *some* of the given repos, not all of them
 (page names legitimately differ between products) — it's still an error (exit
 `2`, nothing checked) if it matches in none of them. Every `--repo` path is

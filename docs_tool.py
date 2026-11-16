@@ -10,6 +10,7 @@ check scans all discovered modules automatically.
 
 Commands:
     ./docs_tool.py check <family> [<family> ...] [--<rule> ...] [--target NAME] [--page NAME ...]
+                        [--head REV] [--base REV]
                         check terms adds  [--glossary PATH ...];  check refs, [--external-root NAME=PATH ...]
                         check links adds  [--offline] [--timeout N] [--allow-domain HOST ...]
                                           [--show-unverified] [--insecure] [--link-cache PATH]
@@ -33,6 +34,7 @@ Examples:
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure --page resource_groups.adoc
     ./docs_tool.py check chars markup --page UNCOMMITTED
+    ./docs_tool.py check chars markup --page BRANCH --base master
     ./docs_tool.py check links --show-unverified
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
@@ -61,7 +63,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 try:
     import argcomplete
@@ -481,6 +483,82 @@ def _git_uncommitted_adoc_stems():
         if p.suffix == ".adoc":
             stems.add(p.stem)
     return stems
+
+
+def _git_commit(revision, option):
+    if not revision or revision.startswith("-"):
+        _usage_error(f"error: {option} must be a git revision, got: {revision!r}")
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip()
+        _usage_error(f"error: --page BRANCH cannot resolve {option} {revision!r}"
+                     + (f": {detail}" if detail else ""))
+    return result.stdout.strip()
+
+
+def _git_default_base():
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    for candidate in ("main", "master", "origin/main", "origin/master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"],
+            capture_output=True, text=True)
+        if result.returncode == 0:
+            return candidate
+    _usage_error("error: --page BRANCH could not detect a base branch from "
+                 "origin/HEAD, main, or master; pass --base REV")
+
+
+def _branch_page_name(repo_path):
+    parts = PurePosixPath(repo_path).parts
+    if (len(parts) < 5 or parts[0] not in ("en", "ru") or parts[1] != "modules"
+            or parts[3] not in ("pages", "partials") or not parts[-1].endswith(".adoc")):
+        return None
+    return parts[4:-1] + (PurePosixPath(parts[-1]).stem,)
+
+
+def _git_branch_adoc_names(head=None, base=None):
+    """Content-relative page names changed by commits in base...head."""
+    head = head or "HEAD"
+    head_commit = _git_commit(head, "--head")
+    if head_commit != _git_commit("HEAD", "HEAD"):
+        _usage_error("error: --head must name the checked-out commit because checks "
+                     "read pages from the working tree")
+    base = base or _git_default_base()
+    base_commit = _git_commit(base, "--base")
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", "-z",
+         f"{base_commit}...{head_commit}", "--"],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip()
+        _usage_error(f"error: --page BRANCH cannot diff {base}...{head}"
+                     + (f": {detail}" if detail else ""))
+    names = {_branch_page_name(path) for path in result.stdout.split("\0") if path}
+    return names - {None}
+
+
+def _validate_branch_page_options(page_args, head=None, base=None):
+    if (head is not None or base is not None) and "BRANCH" not in (page_args or []):
+        _usage_error("error: --head and --base require --page BRANCH")
+
+
+def _empty_page_scope_message(page_args):
+    branch = "BRANCH" in page_args
+    uncommitted = "UNCOMMITTED" in page_args
+    if branch and uncommitted:
+        return "OK: no uncommitted or branch .adoc changes to check."
+    if branch:
+        return "OK: no branch .adoc changes to check."
+    return "OK: no uncommitted .adoc changes to check."
+
+
+_PAGE_SCOPE_SENTINELS = {"UNCOMMITTED", "BRANCH"}
 
 
 def _format_size(num_bytes: int) -> str:
@@ -6624,7 +6702,7 @@ def _rule_examples(key):
     out = [(f"./docs_tool.py {cmd}", "the whole site")]
     if key not in _RULES_IGNORING_PAGE:
         out.append((f"./docs_tool.py {cmd} --page resource_groups.adoc",
-                    "one page, a directory, or UNCOMMITTED"))
+                    "one page, a directory, UNCOMMITTED, or BRANCH"))
     # One line per sibling target, named outright -- e.g. refs --orphaned's
     # four (partials/examples/images/tags) each get their own row. A vague
     # "another --target" here is exactly what leaves "how do I check
@@ -7451,10 +7529,18 @@ def build_parser():
                              "special value UNCOMMITTED instead of a name to scope to whatever "
                              ".adoc files currently have uncommitted changes (staged, unstaged, "
                              "or untracked) per `git status` -- handy in a pre-commit hook. "
+                             "Pass BRANCH to scope to pages/partials changed by commits in "
+                             "base...head (default HEAD and the detected default base branch). "
                              "Whole-site checks (broken-refs, orphaned, nav/structure parity of "
                              "nav.adoc) are unaffected and always scan everything. Optional -- "
                              "omit to check the whole site as before.")
     page_action.completer = _complete_page_or_dir_name
+    parser.add_argument("--head", metavar="REV",
+                        help="With --page BRANCH: revision to compare (default HEAD). "
+                             "Must name the checked-out commit.")
+    parser.add_argument("--base", metavar="REV",
+                        help="With --page BRANCH: merge-base revision (default: origin/HEAD, "
+                             "then main/master).")
     parser.add_argument("--external-root", action="append", metavar="NAME=PATH",
                         help="With --check-pages-broken-refs: resolve xref:/include:: targets "
                              "against another Antora component's repo checked out locally, e.g. "
@@ -7500,7 +7586,7 @@ def _require_a_docs_tree():
 
 
 def _parse_explicit_page_names(names):
-    """--page values (UNCOMMITTED already filtered out) into ({file-stem
+    """--page values (dynamic selectors already filtered out) into ({file-stem
     tuples}, {directory-prefix tuples}) -- the split both _apply_page_filter
     and _reject_unmatched_page_filters need, factored out so a --repo
     loop's upfront cross-repo match sweep (_run_multi_repo_check) doesn't
@@ -7523,9 +7609,9 @@ def _reject_unmatched_page_filters(page_args, repo_paths=None):
     page that was never read, and exit 0 -- so a typo'd filename in a CI
     invocation would pass as a green run. A usage error (exit 2), like a
     bad --target: nothing was checked, so this is not a finding.
-    UNCOMMITTED is exempt -- resolving to nothing there is the normal "no
-    .adoc changes" case, handled by the caller."""
-    explicit = [n for n in page_args if n != "UNCOMMITTED"]
+    UNCOMMITTED and BRANCH are exempt -- resolving to nothing is the normal
+    "no .adoc changes" case, handled by the caller."""
+    explicit = [n for n in page_args if n not in _PAGE_SCOPE_SENTINELS]
     if not explicit:
         return
     matched_names, matched_dirs = set(), set()
@@ -7570,59 +7656,63 @@ def _reject_unmatched_page_filters(page_args, repo_paths=None):
         sys.exit(2)
 
 
-def _apply_page_filter(page_args):
+def _apply_page_filter(page_args, head=None, base=None):
     """Turn --page NAME values into the _PAGE_FILTER global (shared by both
-    the legacy and the `check` surface). Exits 0 immediately if --page
-    UNCOMMITTED resolved to nothing, same as before."""
+    the legacy and the `check` surface). Exits 0 immediately if dynamic
+    selectors resolve to nothing."""
     global _PAGE_FILTER
+    _validate_branch_page_options(page_args, head, base)
     if not page_args:
         return
-    names, dirs = _parse_explicit_page_names([n for n in page_args if n != "UNCOMMITTED"])
+    names, dirs = _parse_explicit_page_names(
+        [n for n in page_args if n not in _PAGE_SCOPE_SENTINELS])
     if "UNCOMMITTED" in page_args:
         names |= {(s,) for s in _git_uncommitted_adoc_stems()}
+    if "BRANCH" in page_args:
+        names |= _git_branch_adoc_names(head, base)
     if not names and not dirs:
-        print("OK: no uncommitted .adoc changes to check.")
+        print(_empty_page_scope_message(page_args))
         sys.exit(0)
     _PAGE_FILTER = {"names": names, "dirs": dirs}
     _reject_unmatched_page_filters(page_args)
 
 
-def _apply_page_filter_for_repo(page_args):
-    """Per-repo equivalent of _apply_page_filter for a --repo loop: same
-    NAME parsing (UNCOMMITTED recomputed fresh from *this* repo's own git
-    status, since it differs per repo), but never exits the process -- an
-    UNCOMMITTED-only filter resolving to nothing here just means this one
-    repo has nothing to check, not that the whole multi-repo run is done
-    -- and skips the matched-nothing typo guard, since that's already
-    been checked once, across every --repo target, before the loop
-    started (see _run_multi_repo_check). Returns True if this repo should
-    be skipped entirely."""
+def _apply_page_filter_for_repo(page_args, head=None, base=None):
+    """Per-repo equivalent of _apply_page_filter for a --repo loop: dynamic
+    selectors are recomputed from this repo, but an empty scope skips only
+    this repo rather than exiting the whole multi-repo run. Returns True if
+    this repo should be skipped entirely."""
     global _PAGE_FILTER
+    _validate_branch_page_options(page_args, head, base)
     if not page_args:
         _PAGE_FILTER = None
         return False
-    names, dirs = _parse_explicit_page_names([n for n in page_args if n != "UNCOMMITTED"])
+    names, dirs = _parse_explicit_page_names(
+        [n for n in page_args if n not in _PAGE_SCOPE_SENTINELS])
     if "UNCOMMITTED" in page_args:
         names |= {(s,) for s in _git_uncommitted_adoc_stems()}
+    if "BRANCH" in page_args:
+        names |= _git_branch_adoc_names(head, base)
     if not names and not dirs:
-        print("OK: no uncommitted .adoc changes to check.")
+        print(_empty_page_scope_message(page_args))
         _PAGE_FILTER = None
         return True
     _PAGE_FILTER = {"names": names, "dirs": dirs}
     return False
 
 
-def _run_multi_repo_check(repo_args, selected, glossary, page_args):
+def _run_multi_repo_check(repo_args, selected, glossary, page_args, head=None, base=None):
     """Runs `selected` checks against each --repo target in turn, chdir'ing
     into each one -- the same thing you'd do by hand (cd repo &&
     docs_tool check ...) -- so every relative-path convention this file
-    already relies on (EN_MODULES_ROOT/RU_MODULES_ROOT, git status for
-    --page UNCOMMITTED, *-glossary.psv auto-discovery) resolves against
-    the right tree without teaching any of them about a second repo.
+    already relies on (EN_MODULES_ROOT/RU_MODULES_ROOT, Git-backed --page
+    selectors, *-glossary.psv auto-discovery) resolves against the right
+    tree without teaching any of them about a second repo.
     Every --repo path is validated as a real docs tree upfront, before
     anything is checked -- a bad path is a usage error (exit 2), not a
     partial run over the repos that happened to be valid. Returns True
     only if every repo's run was clean."""
+    _validate_branch_page_options(page_args, head, base)
     original_cwd = Path.cwd()
     repos = [Path(r).resolve() for r in repo_args]
 
@@ -7632,9 +7722,10 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args):
         _usage_error("error: --repo " + ", ".join(str(b) for b in bad) +
                      ": no en/modules/ or ru/modules/ found there")
 
-    if page_args and any(n != "UNCOMMITTED" for n in page_args):
+    if page_args and any(n not in _PAGE_SCOPE_SENTINELS for n in page_args):
         global _PAGE_FILTER
-        names, dirs = _parse_explicit_page_names([n for n in page_args if n != "UNCOMMITTED"])
+        names, dirs = _parse_explicit_page_names(
+            [n for n in page_args if n not in _PAGE_SCOPE_SENTINELS])
         _PAGE_FILTER = {"names": names, "dirs": dirs}
         _reject_unmatched_page_filters(page_args, repo_paths=repos)
 
@@ -7658,7 +7749,7 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args):
             # EXTERNAL_COMPONENTS/left-unchecked -- a real false BROKEN
             # report, not just a missed check.
             _OWN_COMPONENT_NAME_CACHE.clear()
-            skip = _apply_page_filter_for_repo(page_args)
+            skip = _apply_page_filter_for_repo(page_args, head, base)
             if skip:
                 continue
             repo_glossary = _repo_glossary_paths(glossary, selected)
@@ -7771,7 +7862,7 @@ def _main_legacy():
         sys.exit(2)
 
     _require_a_docs_tree()
-    _apply_page_filter(args.page)
+    _apply_page_filter(args.page, args.head, args.base)
 
     overall_ok = _run_selected(selected, args.glossary, legacy_headers=True)
     sys.exit(0 if overall_ok else 1)
@@ -7866,9 +7957,16 @@ def _build_v2_parser():
                         "current directory, as before.")
     pa = c.add_argument("--page", action="append", metavar="NAME",
                         help="Limit per-file EN/RU checks to matching page(s)/"
-                             "partial(s); 'UNCOMMITTED' for the current git diff. "
-                             "Repeatable. refs always scans site-wide.")
+                             "partial(s); 'UNCOMMITTED' for uncommitted files or "
+                             "'BRANCH' for files changed in base...head. Repeatable. "
+                             "refs always scans site-wide.")
     pa.completer = _complete_page_or_dir_name
+    c.add_argument("--head", metavar="REV",
+                   help="With --page BRANCH: revision to compare (default HEAD). "
+                        "Must name the checked-out commit.")
+    c.add_argument("--base", metavar="REV",
+                   help="With --page BRANCH: merge-base revision (default: origin/HEAD, "
+                        "then main/master).")
     c.add_argument("--external-root", action="append", metavar="NAME=PATH",
                    help="Resolve cross-repo refs against a local checkout, e.g. "
                         "--external-root ADCM=../docs-adcm. Repeatable. Overrides "
@@ -8110,6 +8208,7 @@ def _main_v2():
         return
 
     # verb == "check"
+    _validate_branch_page_options(args.page, args.head, args.base)
     EXTERNAL_COMPONENTS = _load_external_components(
         _merged_external_root_specs(args.auto_external_root, args.external_root))
     _configure_links_from_args(args)
@@ -8140,10 +8239,10 @@ def _main_v2():
                      f"({' '.join(families)}, --target={args.target}).")
 
     if args.repo:
-        ok = _run_multi_repo_check(args.repo, selected, glossary, args.page)
+        ok = _run_multi_repo_check(args.repo, selected, glossary, args.page, args.head, args.base)
     else:
         _require_a_docs_tree()
-        _apply_page_filter(args.page)
+        _apply_page_filter(args.page, args.head, args.base)
         ok = _run_selected(selected, glossary)
     sys.exit(0 if ok else 1)
 

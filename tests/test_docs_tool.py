@@ -5314,6 +5314,154 @@ class UnmatchedPageRejectionTests(FixtureTestCase):
         self.assertIn("alsonot.adoc", err)
 
 
+class BranchPageFilterTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_branch_page_")
+        self.root = Path(self._tmpdir)
+        self._orig_cwd = os.getcwd()
+        self._orig_argv = sys.argv
+        self._orig_page_filter = dt._PAGE_FILTER
+        os.chdir(self.root)
+        subprocess.run(["git", "init", "-q"], check=True)
+        self._git("symbolic-ref", "HEAD", "refs/heads/master")
+        self.write("en/modules/ROOT/pages/reference/changed.adoc", "= Changed\n")
+        self.write("en/modules/ROOT/pages/other/changed.adoc", "= Other\n")
+        self.write("en/modules/ROOT/pages/unchanged.adoc", "= Unchanged\n")
+        self.write("en/modules/ROOT/pages/deleted.adoc", "= Deleted\n")
+        self.write("en/modules/ROOT/partials/snippet.adoc", "Snippet\n")
+        self.write("en/modules/ROOT/nav.adoc", "* xref:reference/changed.adoc[Changed]\n")
+        self._git("add", "-A")
+        self._git("commit", "-m", "base")
+        self._git("checkout", "-q", "-b", "TWII-3791")
+
+    def tearDown(self):
+        sys.argv = self._orig_argv
+        dt._PAGE_FILTER = self._orig_page_filter
+        os.chdir(self._orig_cwd)
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _git(self, *args):
+        return subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", *args],
+            check=True, capture_output=True, text=True)
+
+    def write(self, rel_path, content):
+        path = self.root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _commit_all(self):
+        self._git("add", "-A")
+        self._git("commit", "-m", "change")
+
+    def _apply(self, *pages, head=None, base=None):
+        out, err = io.StringIO(), io.StringIO()
+        code = None
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt._apply_page_filter(list(pages), head=head, base=base)
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_default_head_and_detected_master_base_select_whole_page_paths(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc", "= Changed\n\nNew text.\n")
+        self.write("en/modules/ROOT/partials/snippet.adoc", "Changed snippet\n")
+        self.write("en/modules/ROOT/nav.adoc", "* changed navigation\n")
+        (self.root / "en/modules/ROOT/pages/deleted.adoc").unlink()
+        self._commit_all()
+        self.write("en/modules/ROOT/pages/uncommitted.adoc", "Not committed\n")
+
+        code, _, err = self._apply("BRANCH")
+
+        self.assertIsNone(code, err)
+        self.assertEqual(dt._PAGE_FILTER, {
+            "names": {("reference", "changed"), ("snippet",)},
+            "dirs": set(),
+        })
+
+    def test_explicit_head_and_base_are_accepted(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc", "= Changed\n\nNew text.\n")
+        self._commit_all()
+
+        code, _, err = self._apply("BRANCH", head="TWII-3791", base="master")
+
+        self.assertIsNone(code, err)
+        self.assertEqual(dt._PAGE_FILTER["names"], {("reference", "changed")})
+
+    def test_merge_base_excludes_changes_made_only_on_master(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc", "= Changed\n\nFeature.\n")
+        self._commit_all()
+        self._git("checkout", "-q", "master")
+        self.write("en/modules/ROOT/pages/unchanged.adoc", "= Unchanged\n\nMaster only.\n")
+        self._commit_all()
+        self._git("checkout", "-q", "TWII-3791")
+
+        code, _, err = self._apply("BRANCH", base="master")
+
+        self.assertIsNone(code, err)
+        self.assertEqual(dt._PAGE_FILTER["names"], {("reference", "changed")})
+
+    def test_rename_selects_new_path_and_delete_selects_nothing(self):
+        self._git("mv", "en/modules/ROOT/pages/reference/changed.adoc",
+                  "en/modules/ROOT/pages/reference/renamed.adoc")
+        (self.root / "en/modules/ROOT/pages/deleted.adoc").unlink()
+        self._commit_all()
+
+        code, _, err = self._apply("BRANCH", base="master")
+
+        self.assertIsNone(code, err)
+        self.assertEqual(dt._PAGE_FILTER["names"], {("reference", "renamed")})
+
+    def test_no_branch_changes_exits_zero(self):
+        code, out, err = self._apply("BRANCH", base="master")
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("no branch .adoc changes", out)
+
+    def test_unknown_base_is_a_usage_error(self):
+        code, _, err = self._apply("BRANCH", base="no-such-base")
+
+        self.assertEqual(code, 2)
+        self.assertIn("--base 'no-such-base'", err)
+
+    def test_head_must_be_the_checked_out_commit(self):
+        self._git("checkout", "-q", "master")
+        self.write("en/modules/ROOT/pages/unchanged.adoc", "= Unchanged\n\nMaster only.\n")
+        self._commit_all()
+        self._git("checkout", "-q", "TWII-3791")
+
+        code, _, err = self._apply("BRANCH", head="master", base="master")
+
+        self.assertEqual(code, 2)
+        self.assertIn("must name the checked-out commit", err)
+
+    def test_branch_options_require_branch_selector(self):
+        sys.argv = ["docs_tool.py", "check", "chars", "--page", "changed.adoc",
+                    "--base", "master"]
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("require --page BRANCH", err.getvalue())
+
+    def test_cli_checks_changed_page_but_not_uncommitted_only_page(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc", "= Changed\n\nTrailing space \n")
+        self._commit_all()
+        self.write("en/modules/ROOT/pages/unchanged.adoc", "= Unchanged\n\nTrailing tab\t\n")
+        sys.argv = ["docs_tool.py", "check", "chars", "--trailing-whitespace",
+                    "--page", "BRANCH", "--head", "TWII-3791", "--base", "master"]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+
+        self.assertEqual(ctx.exception.code, 1, err.getvalue())
+        self.assertIn("reference/changed.adoc", out.getvalue())
+        self.assertNotIn("unchanged.adoc", out.getvalue())
+
+
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
 class CheckRuleCompletionTests(unittest.TestCase):
     """`check <family> <TAB>` should offer that one family's --<rule> flags
@@ -5856,6 +6004,31 @@ class MultiRepoCheckTests(unittest.TestCase):
         self.assertIn(f"##### {self.repo_a}", out)
         self.assertIn(f"##### {self.repo_b}", out)
         self.assertEqual(out.count("no uncommitted .adoc changes"), 2)
+
+    def test_branch_scope_is_recomputed_for_each_repo(self):
+        for repo in (self.repo_a, self.repo_b):
+            self._write(repo, "en/modules/ROOT/pages/p.adoc", "Plain text.\n")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/master"],
+                           cwd=repo, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "-c", "user.email=test@example.com",
+                            "-c", "user.name=Test", "commit", "-m", "base"],
+                           cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=repo, check=True)
+        self._write(self.repo_a, "en/modules/ROOT/pages/p.adoc", "Curly ’ quote.\n")
+        subprocess.run(["git", "add", "-A"], cwd=self.repo_a, check=True)
+        subprocess.run(["git", "-c", "user.email=test@example.com",
+                        "-c", "user.name=Test", "commit", "-m", "change"],
+                       cwd=self.repo_a, check=True, capture_output=True)
+
+        code, out, err = self._run("check", "style", "--no-curly-quotes",
+                                    "--repo", str(self.repo_a), "--repo", str(self.repo_b),
+                                    "--page", "BRANCH", "--base", "master")
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("Curly", out.split(f"##### {self.repo_b}")[0])
+        self.assertIn("no branch .adoc changes", out.split(f"##### {self.repo_b}")[1])
 
     def test_own_component_name_cache_does_not_leak_across_repos(self):
         """Regression test for a real bug found while testing
