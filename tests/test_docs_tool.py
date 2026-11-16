@@ -3858,6 +3858,45 @@ class PagesTableHeaderTests(FixtureTestCase):
         ok, _ = self.run_check(dt.check_pages_table_header)
         self.assertTrue(ok)
 
+    def test_tagged_partial_can_supply_table_start_header_and_rows(self):
+        """docs-adpg's pgp-functions tables span tagged includes and a
+        closing delimiter in the including page."""
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/pgp-functions.adoc",
+            "// tag::part-01[]\n"
+            "[.divided]\n"
+            '[cols="2,4,2,2"]\n'
+            "|===\n"
+            "|Name|Description|Default value|Possible values\n"
+            "\n"
+            "// end::part-01[]\n"
+            "// tag::part-02[]\n"
+            "|cipher-algo\n"
+            "|A cipher algorithm\n"
+            "|aes128\n"
+            "|aes256\n"
+            "// end::part-02[]\n"
+            "|===\n",
+        )
+        table = ("include::partial$pgp-functions.adoc[tag=part-01]\n"
+                 "include::partial$pgp-functions.adoc[tag=part-02]\n"
+                 "|===\n\n")
+        self.write("en/modules/ROOT/pages/encryption.adoc", table * 2)
+
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertTrue(ok, output)
+
+    def test_missing_header_in_included_table_is_reported_at_its_source(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/partials/bad-table.adoc", "|===\n|A |B\n|1 |2\n")
+        page = self.write("en/modules/ROOT/pages/page.adoc", "include::partial$bad-table.adoc[]\n|===\n")
+
+        ok, output = self.run_check(dt.check_pages_table_header)
+        self.assertFalse(ok)
+        self.assertIn("partials/bad-table.adoc:1: table has no header row", output)
+        self.assertIn(f"(included from {page})", output)
+
 
 class PagesShellBlockLangTests(FixtureTestCase):
     def test_console_lang_passes(self):

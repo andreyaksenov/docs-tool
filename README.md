@@ -504,7 +504,9 @@ Heuristic family — treat findings as a review list, not a hard gate.
   A table that explicitly declares a single column (`[cols="1"]`, `cols=1a`,
   ...) is exempt -- there is no second column for a header to label. Only a
   declared `cols=` counts, so a table that just happens to have one column
-  without saying so is still checked.
+  without saying so is still checked. Includes are flattened before checking,
+  so a table's opening delimiter, header, rows, and closing delimiter may span
+  pages and partials. Partials not reached by any page are checked standalone.
   ```bash
   ./docs_tool.py check style --table-header
   ./docs_tool.py check style --table-header --page resource_groups.adoc

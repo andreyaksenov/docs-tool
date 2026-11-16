@@ -4629,69 +4629,97 @@ def _declared_column_count(attrs: str):
     return total or None
 
 
+def _scan_table_headers(line_stream):
+    """Return (source_file, source_lineno) openings of tables without headers."""
+    lines = list(line_stream)
+    n = len(lines)
+    hits = []
+    in_table = False
+    pending_attrs = []
+    table_start = None
+    has_header = False
+    for i, (source_file, source_lineno, line) in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "|===":
+            if not in_table:
+                in_table = True
+                table_start = (source_file, source_lineno)
+                attrs = " ".join(pending_attrs)
+                explicit_header = bool(attrs and _TABLE_HEADER_ATTR_RE.search(attrs))
+                explicit_noheader = bool(attrs and _TABLE_NOHEADER_ATTR_RE.search(attrs))
+                if attrs and _declared_column_count(attrs) == 1:
+                    has_header = True   # one column: nothing for a header to label
+                elif explicit_noheader:
+                    has_header = False
+                elif explicit_header:
+                    has_header = True
+                else:
+                    first = lines[i + 1][2].strip() if i + 1 < n else ""
+                    second = lines[i + 2][2].strip() if i + 2 < n else None
+                    has_header = bool(first) and first != "|===" and second == ""
+            else:
+                in_table = False
+                if not has_header:
+                    hits.append(table_start)
+            pending_attrs = []
+            continue
+        if in_table:
+            continue
+        if _BLOCK_ATTR_LINE_RE.match(line):
+            pending_attrs.append(line)
+            continue
+        if _STRUCT_BLOCKTITLE_RE.match(line):
+            continue
+        pending_attrs = []
+    return hits
+
+
 def check_pages_table_header() -> bool:
     """Require table headers using Asciidoctor's header rules. Explicit
     header/noheader options take precedence; otherwise the first row is an
     implicit header only when it occupies one line followed by a blank line.
     Consecutive attribute lines apply to the table, with an optional title
     between them and `|===`; a blank line breaks that association. Tables
-    explicitly declared with one column are exempt. This deliberately simple
-    parser does not track source blocks or model spans and column mismatches."""
+    explicitly declared with one column are exempt. Includes are flattened so
+    tables may span file boundaries. Unreached partials are checked standalone.
+    This deliberately simple parser does not track source blocks or model spans
+    and column mismatches."""
     ok = True
     total_hits = 0
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-                if not _page_allowed(f):
+    modules = list(module_roots())
+    en_module_roots = {name: en_root for name, en_root, _ in modules}
+    ru_module_roots = {name: ru_root for name, _, ru_root in modules}
+
+    for lang, lang_module_roots in (("en", en_module_roots), ("ru", ru_module_roots)):
+        own_name = _own_component_name(lang)
+        visited = set()
+        for root in lang_module_roots.values():
+            for page in _iter_files(root / "pages", ".adoc"):
+                if not _page_allowed(page):
                     continue
-                lines = _read_lines(f)
-                if lines is None:
-                    continue
-                n = len(lines)
-                hits = []
-                in_table = False
-                pending_attrs = []
-                table_start = None
-                has_header = False
-                for i, line in enumerate(lines):
-                    stripped = line.strip()
-                    if stripped == "|===":
-                        if not in_table:
-                            in_table = True
-                            table_start = i + 1
-                            attrs = " ".join(pending_attrs)
-                            explicit_header = bool(attrs and _TABLE_HEADER_ATTR_RE.search(attrs))
-                            explicit_noheader = bool(attrs and _TABLE_NOHEADER_ATTR_RE.search(attrs))
-                            if attrs and _declared_column_count(attrs) == 1:
-                                has_header = True   # one column: nothing for a header to label
-                            elif explicit_noheader:
-                                has_header = False
-                            elif explicit_header:
-                                has_header = True
-                            else:
-                                first = lines[i + 1].strip() if i + 1 < n else ""
-                                second = lines[i + 2].strip() if i + 2 < n else None
-                                has_header = bool(first) and first != "|===" and second == ""
-                        else:
-                            in_table = False
-                            if not has_header:
-                                hits.append(table_start)
-                        pending_attrs = []
-                        continue
-                    if in_table:
-                        continue
-                    if _BLOCK_ATTR_LINE_RE.match(line):
-                        pending_attrs.append(line)
-                        continue
-                    if _STRUCT_BLOCKTITLE_RE.match(line):
-                        continue
-                    pending_attrs = []
+                stream = _flatten_delimiter_lines(page, root, lang_module_roots, lang, own_name, [], visited)
+                hits = _scan_table_headers(stream)
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
-                    for lineno in hits:
-                        print(f"  {f}:{lineno}: table has no header row")
+                    print(f"FILE     {page}")
+                    for source_file, source_lineno in hits:
+                        included = "" if source_file == page else f"  (included from {page})"
+                        print(f"  {source_file}:{source_lineno}: table has no header row{included}")
+
+        for root in lang_module_roots.values():
+            for partial in _iter_files(root / "partials", ".adoc"):
+                if partial in visited or not _page_allowed(partial):
+                    continue
+                stream = _flatten_delimiter_lines(partial, root, lang_module_roots, lang, own_name, [], visited)
+                hits = _scan_table_headers(stream)
+                if hits:
+                    ok = False
+                    total_hits += len(hits)
+                    print(f"FILE     {partial}  (not reached by any page's includes -- checked standalone)")
+                    for source_file, source_lineno in hits:
+                        included = "" if source_file == partial else f"  (included from {partial})"
+                        print(f"  {source_file}:{source_lineno}: table has no header row{included}")
     if ok:
         print("OK: every table declares a header row.")
     else:
@@ -6571,7 +6599,7 @@ SUMMARIES = {
     "pages-heading-no-period":     "a heading's title text shouldn't end with a period",
     "pages-heading-no-markup":     "a heading's title text carries no font styles or links",
     "pages-table-empty-cells":     "a table cell with no meaningful value should hold -- instead of nothing",
-    "pages-table-header":          "every table needs a header row (options=\"header\" / %header)",
+    "pages-table-header":          "every table needs a header row once includes are flattened",
     "pages-shell-block-lang":      "a $-prompted block needs [source,console] and vice versa",
     "pages-link-new-tab":          "every external link opens in a new tab with opts=nofollow",
     "pages-xref-own-product":      "internal xref: must not name this product's own component",
@@ -6694,6 +6722,7 @@ _RULES_IGNORING_PAGE = {
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",
     "partials-orphaned", "examples-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
+    "pages-table-header",
 }
 
 
