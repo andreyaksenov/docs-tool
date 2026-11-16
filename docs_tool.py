@@ -50,6 +50,7 @@ import os
 import re
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import threading
@@ -826,6 +827,143 @@ def check_images_orphaned() -> bool:
     else:
         print(f"\nTotal: {orphaned_count} orphaned image(s), {_format_size(orphaned_bytes)}")
     _report_skipped_components()
+    return ok
+
+
+_RASTER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif"}
+_IMAGE_LANG_TAG_RE = re.compile(r"([_-])(en|ru)(\.[A-Za-z0-9]+)$")
+_JPEG_SOF_MARKERS = {
+    0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+    0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+}
+
+
+def _raster_image_dimensions(path: Path):
+    """Return (width, height) for a PNG, JPEG, or GIF, or None if its
+    dimensions cannot be read. Only image headers are parsed; no imaging
+    library is required."""
+    try:
+        with path.open("rb") as f:
+            header = f.read(32)
+            if (len(header) >= 24 and header.startswith(b"\x89PNG\r\n\x1a\n")
+                    and header[12:16] == b"IHDR"):
+                width, height = struct.unpack(">II", header[16:24])
+                return (width, height) if width and height else None
+            if len(header) >= 10 and header[:6] in (b"GIF87a", b"GIF89a"):
+                width, height = struct.unpack("<HH", header[6:10])
+                return (width, height) if width and height else None
+            if not header.startswith(b"\xff\xd8"):
+                return None
+
+            f.seek(2)
+            while True:
+                prefix = f.read(1)
+                if not prefix:
+                    return None
+                if prefix != b"\xff":
+                    return None
+                marker_byte = f.read(1)
+                while marker_byte == b"\xff":
+                    marker_byte = f.read(1)
+                if not marker_byte:
+                    return None
+                marker = marker_byte[0]
+                if marker in (0xD8, 0xD9, 0xDA):
+                    return None
+                if marker == 0x01 or 0xD0 <= marker <= 0xD7:
+                    continue
+                size_bytes = f.read(2)
+                if len(size_bytes) != 2:
+                    return None
+                segment_size = struct.unpack(">H", size_bytes)[0]
+                if segment_size < 2:
+                    return None
+                if marker in _JPEG_SOF_MARKERS:
+                    payload = f.read(5)
+                    if len(payload) != 5:
+                        return None
+                    height, width = struct.unpack(">HH", payload[1:5])
+                    return (width, height) if width and height else None
+                f.seek(segment_size - 2, 1)
+    except (OSError, struct.error):
+        return None
+
+
+def _localized_image_counterpart(path: Path, lang: str) -> Path:
+    """Counterpart name for a language-suffixed image, e.g. screen_en.png ->
+    screen_ru.png. Untagged paths and tags for the other language are unchanged."""
+    other_lang = "ru" if lang == "en" else "en"
+
+    def replace(match):
+        if match.group(2) != lang:
+            return match.group(0)
+        return f"{match.group(1)}{other_lang}{match.group(3)}"
+
+    return path.with_name(_IMAGE_LANG_TAG_RE.sub(replace, path.name))
+
+
+def check_images_dimension_parity() -> bool:
+    """EN and RU raster images at the same module-relative path must both
+    exist and have exactly the same pixel dimensions. An _en/-en filename may
+    pair with its _ru/-ru counterpart. PNG, JPEG, and GIF are read directly
+    from their headers; SVG and other formats are skipped. Small crop/capture
+    differences can be legitimate, so findings are a beta review list.
+    Whole-site check: ignores --page."""
+    ok = True
+    finding_count = 0
+    for _, en_root, ru_root in module_roots():
+        en_images = en_root / "images"
+        ru_images = ru_root / "images"
+        en_files = {
+            f.relative_to(en_images): f
+            for f in _iter_files(en_images)
+            if f.suffix.lower() in _RASTER_IMAGE_SUFFIXES
+        }
+        ru_files = {
+            f.relative_to(ru_images): f
+            for f in _iter_files(ru_images)
+            if f.suffix.lower() in _RASTER_IMAGE_SUFFIXES
+        }
+
+        used_ru = set()
+        for en_rel in sorted(en_files):
+            en_file = en_files[en_rel]
+            ru_rel = en_rel if en_rel in ru_files else _localized_image_counterpart(en_rel, "en")
+            if ru_rel not in ru_files or ru_rel in used_ru:
+                print(f"MISSING  {en_file}  (no ru counterpart)")
+                ok = False
+                finding_count += 1
+                continue
+            used_ru.add(ru_rel)
+            ru_file = ru_files[ru_rel]
+
+            en_dimensions = _raster_image_dimensions(en_file)
+            ru_dimensions = _raster_image_dimensions(ru_file)
+            if en_dimensions is None or ru_dimensions is None:
+                if en_dimensions is None:
+                    print(f"INVALID  {en_file}  (cannot read raster image dimensions)")
+                if ru_dimensions is None:
+                    print(f"INVALID  {ru_file}  (cannot read raster image dimensions)")
+                ok = False
+                finding_count += 1
+                continue
+            if en_dimensions != ru_dimensions:
+                print(_diff_pair_header(en_file, ru_file))
+                print(f"  EN  {en_file}: {en_dimensions[0]}x{en_dimensions[1]}")
+                print(f"  RU  {ru_file}: {ru_dimensions[0]}x{ru_dimensions[1]}")
+                print()
+                ok = False
+                finding_count += 1
+
+        for ru_rel in sorted(ru_files.keys() - used_ru):
+            print(f"MISSING  {ru_files[ru_rel]}  (no en counterpart)")
+            ok = False
+            finding_count += 1
+
+    if ok:
+        print("OK: EN/RU raster image files and dimensions match.")
+    else:
+        print(f"\nTotal: {finding_count} image pair(s) with missing/unreadable files or different dimensions.")
     return ok
 
 
@@ -6074,6 +6212,7 @@ CHECKS = {
     "examples-no-trailing-whitespace": check_examples_no_trailing_whitespace,
     "examples-orphaned": check_examples_orphaned,
     "examples-parity": check_examples_parity,
+    "images-dimension-parity": check_images_dimension_parity,
     "images-orphaned": check_images_orphaned,
     "nav-structure-parity": check_nav_structure_parity,
     "pages-broken-refs": check_pages_broken_refs,
@@ -6121,6 +6260,7 @@ CHECKS = {
 # therefore misfire on legitimate content -- flagged so --list-checks and the
 # README can warn people to treat their output as a review list, not a gate.
 BETA_CHECKS = {
+    "images-dimension-parity",
     "pages-file-path-italics",
     "pages-link-parity",
     "pages-literal-parity",
@@ -6226,6 +6366,7 @@ FAMILIES = {
         "nav":          {"nav": "nav-structure-parity"},
         "links":        {"pages": "pages-link-parity"},
         "literals":     {"pages": "pages-literal-parity"},
+        "image-dimensions": {"images": "images-dimension-parity"},
     },
     "links": {                        # L6 -- the open web (network; runs only when named)
         "external": {"pages": "links-external"},
@@ -6308,6 +6449,7 @@ RULE_IDS = {
     "nav-structure-parity":       "LN05",
     "pages-link-parity":          "LN06",
     "pages-literal-parity":       "LN07",
+    "images-dimension-parity":    "LN08",
     "links-external":             "LK01",
 }
 _ID_TO_KEY = {v: k for k, v in RULE_IDS.items()}
@@ -6359,6 +6501,7 @@ SUMMARIES = {
     "pages-translation":           "RU line still identical to EN, or carrying English stopwords",
     "examples-parity":             "EN and RU examples/ must match (byte / comment-stripped)",
     "nav-structure-parity":        "EN and RU nav.adoc structure must match",
+    "images-dimension-parity":     "EN and RU raster image files and pixel dimensions must match",
     "links-external":              "external http(s) links: 404 fails, redirects and unreachable flagged",
 }
 
@@ -6425,6 +6568,7 @@ RULE_FLAGS = {
     "pages-translation":           "RU line still English",
     "examples-parity":             "EN/RU examples differ",
     "nav-structure-parity":        "EN/RU nav differs",
+    "images-dimension-parity":     "EN/RU image dimensions differ",
     "links-external":              "dead / redirected / unreachable",
 }
 
@@ -6453,7 +6597,7 @@ def _rules_table():
 
 _RULES_IGNORING_PAGE = {
     "examples-no-cyrillic", "examples-no-trailing-whitespace", "examples-parity",
-    "nav-structure-parity", "pages-broken-refs", "pages-orphaned",
+    "images-dimension-parity", "nav-structure-parity", "pages-broken-refs", "pages-orphaned",
     "examples-orphaned", "images-orphaned",
 }
 _RULES_WITH_EXTERNAL_ROOT = {

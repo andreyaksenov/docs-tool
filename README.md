@@ -51,7 +51,7 @@ Rules are grouped into seven **families**:
 | `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
 | `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup, empty table cells |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
-| `l10n`   | line-count / structure / nav parity, link & literal parity, untranslated lines, `examples/` parity |
+| `l10n`   | line-count / structure / nav parity, link & literal parity, untranslated lines, `examples/` and image-dimension parity |
 | `links`  | external `http(s)` links — `404`, permanent redirect, dead host (network; opt-in)        |
 
 ```bash
@@ -93,7 +93,8 @@ by kind:
 | `BROKEN` | a reference (or, in `check links`, an external URL) that doesn't resolve |
 | `ORPHANED` | a file nothing points at — no line, the whole file is the finding |
 | `MISSING` | an EN or RU counterpart that doesn't exist |
-| `DIFF` | an EN/RU pair that diverged — a one-line banner, then each differing line as a clickable `path:line` (`-` EN, `+` RU) |
+| `INVALID` | a raster image whose dimensions cannot be read |
+| `DIFF` | an EN/RU pair that diverged — a one-line banner, then differing lines or other pair details |
 | `REDIRECT` `UNREACHABLE` `VPN?` | `check links` only — see the `links` family below |
 
 Where a specific line is meaningful it's `path:line` or `path:line:col`, which most
@@ -587,6 +588,7 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 | `LN05` | `check l10n --nav` | EN/RU nav differs |
 | `LN06` | `check l10n --links` | EN/RU reference different xref / image / URL targets |
 | `LN07` | `check l10n --literals` | EN/RU carry different back-ticked literals |
+| `LN08` | `check l10n --image-dimensions` | EN/RU image dimensions differ |
 
 - **`LN01` · `check l10n --lines`** — every EN `.adoc` has a RU counterpart with
   the same line count, and vice versa.
@@ -652,6 +654,16 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```bash
   ./docs_tool.py check l10n --literals
   ./docs_tool.py check l10n --literals --page resource_groups.adoc
+  ```
+
+- **`LN08` · `check l10n --image-dimensions`** · beta — EN and RU must have the
+  same PNG/JPEG/GIF files at the same module-relative `images/` paths, with exactly
+  the same pixel dimensions. `_en`/`-en` and `_ru`/`-ru` filename variants are paired
+  as localized counterparts. Missing counterparts and unreadable images are reported.
+  SVG and other formats are skipped. Small cropping or capture differences can be
+  legitimate, so treat findings as a review list. Whole-site — ignores `--page`.
+  ```bash
+  ./docs_tool.py check l10n --image-dimensions
   ```
 
 ### `links` — external URL health

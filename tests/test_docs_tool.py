@@ -16,6 +16,7 @@ import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1789,6 +1790,111 @@ class ImagesOrphanedTests(FixtureTestCase):
         ok, output = self.run_check(dt.check_images_orphaned)
 
         self.assertTrue(ok, output)
+
+
+class ImagesDimensionParityTests(FixtureTestCase):
+    @staticmethod
+    def _image_bytes(image_format, width, height):
+        if image_format == "png":
+            return (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+                    + struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0) + b"\0" * 4)
+        if image_format == "gif":
+            return b"GIF89a" + struct.pack("<HH", width, height) + b"\0" * 3
+        if image_format == "jpeg":
+            return (b"\xff\xd8" + b"\xff\xe0\x00\x04\x00\x00"
+                    + b"\xff\xc0\x00\x0b\x08" + struct.pack(">HH", height, width)
+                    + b"\x01\x01\x11\x00" + b"\xff\xd9")
+        raise ValueError(image_format)
+
+    def write_image(self, lang, name, width, height, image_format="png"):
+        path = self.root / lang / "modules/ROOT/images" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self._image_bytes(image_format, width, height))
+        return path
+
+    def test_matching_png_jpeg_and_gif_dimensions_pass(self):
+        for name, image_format in (("screen.png", "png"), ("screen.jpg", "jpeg"), ("screen.gif", "gif")):
+            for lang in ("en", "ru"):
+                self.write_image(lang, name, 860, 823, image_format)
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertTrue(ok, output)
+        self.assertIn("OK: EN/RU raster image files and dimensions match.", output)
+
+    def test_different_dimensions_are_reported(self):
+        en_file = self.write_image("en", "screen.png", 860, 823)
+        ru_file = self.write_image("ru", "screen.png", 1861, 963)
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("DIFF", output)
+        self.assertIn(f"EN  {en_file}: 860x823", output)
+        self.assertIn(f"RU  {ru_file}: 1861x963", output)
+        self.assertIn("Total: 1 image pair(s)", output)
+
+    def test_missing_counterparts_are_reported_in_both_directions(self):
+        en_file = self.write_image("en", "en-only.png", 100, 100)
+        ru_file = self.write_image("ru", "ru-only.png", 100, 100)
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertFalse(ok)
+        self.assertIn(f"MISSING  {en_file}  (no ru counterpart)", output)
+        self.assertIn(f"MISSING  {ru_file}  (no en counterpart)", output)
+        self.assertIn("Total: 2 image pair(s)", output)
+
+    def test_unreadable_image_is_reported(self):
+        self.write_image("en", "broken.png", 100, 100)
+        ru_file = self.root / "ru/modules/ROOT/images/broken.png"
+        ru_file.parent.mkdir(parents=True, exist_ok=True)
+        ru_file.write_bytes(b"not a png")
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertFalse(ok)
+        self.assertIn(f"INVALID  {ru_file}  (cannot read raster image dimensions)", output)
+
+    def test_language_suffixed_counterparts_are_paired(self):
+        self.write_image("en", "downloads_en.png", 100, 100)
+        self.write_image("ru", "downloads_ru.png", 100, 100)
+        self.write_image("en", "screen-en.png", 200, 100)
+        self.write_image("ru", "screen-ru.png", 200, 100)
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertTrue(ok, output)
+
+    def test_language_suffixed_counterparts_still_compare_dimensions(self):
+        self.write_image("en", "downloads_en.png", 100, 100)
+        self.write_image("ru", "downloads_ru.png", 200, 100)
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("100x100", output)
+        self.assertIn("200x100", output)
+        self.assertNotIn("MISSING", output)
+
+    def test_svg_is_out_of_scope(self):
+        for lang in ("en", "ru"):
+            self.write(f"{lang}/modules/ROOT/images/icon.svg", '<svg viewBox="0 0 10 20"></svg>')
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertTrue(ok, output)
+
+    def test_page_filter_does_not_hide_mismatches(self):
+        self.write_image("en", "screen.png", 100, 100)
+        self.write_image("ru", "screen.png", 200, 100)
+        dt._PAGE_FILTER = {"names": {("unrelated",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("100x100", output)
+        self.assertIn("200x100", output)
 
 
 class TagsOrphanedTests(FixtureTestCase):
