@@ -2254,6 +2254,49 @@ class PartialsOrphanedTests(FixtureTestCase):
 
 
 class PagesBrokenRefsTests(FixtureTestCase):
+    def test_page_filter_reports_only_selected_source_files(self):
+        self.antora_yml("en", "TEST")
+        selected = self.write("en/modules/ROOT/pages/selected.adoc",
+                              "xref:missing-selected.adoc[Selected]\n")
+        other = self.write("en/modules/ROOT/pages/other.adoc",
+                           "xref:missing-other.adoc[Other]\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertFalse(ok)
+        self.assertIn(str(selected), output)
+        self.assertNotIn(str(other), output)
+        self.assertIn("Total: 1 broken reference(s).", output)
+
+    def test_page_filter_can_pass_while_unselected_file_is_broken(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/target.adoc", "= Target\n")
+        self.write("en/modules/ROOT/pages/selected.adoc", "xref:target.adoc[Target]\n")
+        other = self.write("en/modules/ROOT/pages/other.adoc", "xref:missing.adoc[Missing]\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(ok, output)
+        self.assertNotIn(str(other), output)
+        self.assertIn("OK: no broken", output)
+
+    def test_page_filter_uses_the_partial_as_the_source_file(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/selected.adoc", "include::partial$snippet.adoc[]\n")
+        partial = self.write("en/modules/ROOT/partials/snippet.adoc", "xref:missing.adoc[Missing]\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertTrue(ok, output)
+        self.assertNotIn(str(partial), output)
+
+        dt._PAGE_FILTER = {"names": {("snippet",)}, "dirs": set()}
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+        self.assertFalse(ok)
+        self.assertIn(str(partial), output)
+
     def test_xref_without_brackets_is_broken_even_when_target_exists(self):
         self.antora_yml("en", "TEST")
         self.write("en/modules/ROOT/pages/target.adoc", "= Target\n")
@@ -5080,9 +5123,10 @@ class RuleExampleTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()):
                     parser.parse_args(argv)     # SystemExit here = a bad example
 
-    def test_page_example_omitted_for_whole_site_rules(self):
-        self.assertFalse(any("--page" in c for c, _ in self._examples("RF01")))
+    def test_page_examples_follow_source_filter_support(self):
+        self.assertTrue(any("--page" in c for c, _ in self._examples("RF01")))
         self.assertTrue(any("--page" in c for c, _ in self._examples("ST01")))
+        self.assertFalse(any("--page" in c for c, _ in self._examples("RF02")))
 
     def test_no_example_mentions_verbose(self):
         for key in dt.CHECKS:
@@ -5460,6 +5504,25 @@ class BranchPageFilterTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 1, err.getvalue())
         self.assertIn("reference/changed.adoc", out.getvalue())
         self.assertNotIn("unchanged.adoc", out.getvalue())
+
+    def test_broken_refs_reports_only_branch_selected_source_files(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc",
+                   "= Changed\n\nxref:missing-selected.adoc[Selected]\n")
+        self._commit_all()
+        self.write("en/modules/ROOT/pages/unchanged.adoc",
+                   "= Unchanged\n\nxref:missing-unselected.adoc[Unselected]\n")
+        sys.argv = ["docs_tool.py", "check", "refs", "--broken",
+                    "--page", "BRANCH", "--base", "master"]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+
+        self.assertEqual(ctx.exception.code, 1, err.getvalue())
+        self.assertIn("reference/changed.adoc", out.getvalue())
+        self.assertIn("missing-selected.adoc", out.getvalue())
+        self.assertNotIn("unchanged.adoc", out.getvalue())
+        self.assertNotIn("missing-unselected.adoc", out.getvalue())
 
 
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")

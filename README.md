@@ -237,12 +237,15 @@ own ID/Command/Flags table.
 | `RF01` | `check refs --broken` | dead xref / include / image |
 | `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
 
-Always scans the whole site. `--page` only narrows *which files are reported* for
-`--orphaned --target tags|partials`; everything else in `refs` ignores it. Bare
-`check refs` runs `--broken` plus every orphan target.
+Reference resolution always scans the whole site. `--page` narrows which source files
+produce findings for `--broken`, and which files are reported for `--orphaned --target
+tags|partials`; the other orphan targets ignore it. Bare `check refs` runs `--broken`
+plus every orphan target.
 
 - **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
-  `link:` reference resolves to a real file or anchor. An `xref:` target not
+  `link:` reference resolves to a real file or anchor. Resolution context is built
+  site-wide; `--page` limits findings to references written in selected source files.
+  An `xref:` target not
   immediately followed by `[...]` is reported as `(missing [])` even when the
   target exists, because Asciidoctor does not render it as a link. Nested
   includes retain the included file's own component/module context, even when
@@ -254,6 +257,7 @@ Always scans the whole site. `--page` only narrows *which files are reported* fo
   flagged by `--orphaned --target tags`).
   ```bash
   ./docs_tool.py check refs --broken
+  ./docs_tool.py check refs --broken --page resource_groups.adoc
   ./docs_tool.py check refs --broken --external-root ADCM=../docs-adcm
   ```
   A reference into a component with no `--external-root` can't be resolved either
@@ -731,7 +735,9 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 ## Scoping with `--page`
 
 By default, every per-file rule scans the whole site. `--page NAME` (repeatable)
-limits `chars`, `markup`, `style`, `terms`, `l10n`, and `links` to matching files:
+limits `chars`, `markup`, `style`, `terms`, `l10n`, and `links` to matching files.
+`refs --broken` uses the same filter for source-file findings while keeping its
+reference-resolution context site-wide:
 
 ```bash
 ./docs_tool.py check l10n --untranslated --page resource_groups.adoc   # one file (must end .adoc)
@@ -835,9 +841,11 @@ python3 docs_tool.py check style terms l10n --page UNCOMMITTED || true
 
 Move a family from the second line to the first once it runs clean in practice.
 
-**Don't put `refs` in the hook.** It ignores `--page` and always scans the whole
-site (see above), so every commit touching one `.adoc` would print every orphan and
-broken reference in the repo. Run `check refs` in CI, or by hand before a release.
+**Don't put bare `refs` in the hook.** Its orphan targets still scan and report
+site-wide, so every commit touching one `.adoc` would print old orphan findings.
+Use `check refs --broken --page UNCOMMITTED` if you want commit-scoped broken-reference
+findings (resolution still scans the whole site). Run the full orphan checks in CI,
+or by hand before a release.
 
 ## Legacy `--check-*` flags
 

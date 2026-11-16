@@ -409,11 +409,10 @@ def _iter_files(root: Path, suffix: str = None):
 # is just the 1-element case, matching by stem alone regardless of
 # directory, same as before qualified names were supported). "dirs"
 # matches every file under that content-relative directory, recursively
-# (from a NAME not ending in .adoc -- see main()). Only applied at the
-# per-file "report" loops of checks that compare an en/ru file pair
-# directly -- corpus-building loops (broken-refs' partial-includer map,
-# orphaned pages/examples/images) scan the whole site regardless, since
-# narrowing those would just make them wrong rather than faster.
+# (from a NAME not ending in .adoc -- see main()). Applied at per-file report
+# loops. Corpus-building loops (broken-refs' resolution context, orphaned
+# pages/examples/images) scan the whole site regardless, since narrowing those
+# would make resolution/usage analysis wrong rather than faster.
 _PAGE_FILTER = None
 
 
@@ -1936,7 +1935,8 @@ def _warn_if_no_external_root():
 def check_pages_broken_refs() -> bool:
     """Port of check_pages_broken_refs.sh, extended to resolve
     component-prefixed xrefs against sibling modules of the same language
-    when the component name matches a discovered module."""
+    when the component name matches a discovered module. Resolution context
+    remains site-wide; --page limits which source files produce findings."""
     ok = True
     broken_count = 0
     _SKIPPED_COMPONENTS.clear()   # report only what this scan itself skipped
@@ -1944,6 +1944,8 @@ def check_pages_broken_refs() -> bool:
 
     def report(file, lineno, msg):
         nonlocal ok, broken_count
+        if not _page_allowed(file):
+            return
         ok = False
         broken_count += 1
         print(f"BROKEN   {file}:{lineno}  {msg}")
@@ -6686,7 +6688,7 @@ def _rules_table():
 
 _RULES_IGNORING_PAGE = {
     "examples-no-cyrillic", "examples-no-trailing-whitespace", "examples-parity",
-    "images-dimension-parity", "nav-structure-parity", "pages-broken-refs", "pages-orphaned",
+    "images-dimension-parity", "nav-structure-parity", "pages-orphaned",
     "examples-orphaned", "images-orphaned",
 }
 _RULES_WITH_EXTERNAL_ROOT = {
@@ -7545,8 +7547,9 @@ def build_parser():
                              "or untracked) per `git status` -- handy in a pre-commit hook. "
                              "Pass BRANCH to scope to pages/partials changed by commits in "
                              "base...head (default HEAD and the detected default base branch). "
-                             "Whole-site checks (broken-refs, orphaned, nav/structure parity of "
-                             "nav.adoc) are unaffected and always scan everything. Optional -- "
+                             "Whole-site orphan checks and nav/structure parity of nav.adoc "
+                             "are unaffected. Broken-refs resolution remains site-wide, but "
+                             "only selected source files produce findings. Optional -- "
                              "omit to check the whole site as before.")
     page_action.completer = _complete_page_or_dir_name
     parser.add_argument("--head", metavar="REV",
@@ -7976,7 +7979,7 @@ def _build_v2_parser():
                         help="Limit per-file EN/RU checks to matching page(s)/"
                              "partial(s); 'UNCOMMITTED' for uncommitted files or "
                              "'BRANCH' for files changed in base...head. Repeatable. "
-                             "refs always scans site-wide.")
+                             "refs keeps its site-wide resolution context.")
     pa.completer = _complete_page_or_dir_name
     c.add_argument("--head", metavar="REV",
                    help="With --page BRANCH: revision to compare (default HEAD). "
