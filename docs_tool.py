@@ -403,7 +403,7 @@ def _iter_files(root: Path, suffix: str = None):
 
 # Optional --page filter, or None when not requested:
 # {"names": {file-path-parts tuple, ...}, "dirs": {dir-parts tuple, ...},
-#  "nav": True}  # "nav" is present only when --page BRANCH changed a nav.adoc.
+#  "nav": True}  # "nav" is present only when BRANCH changed nav.adoc or a nav partial.
 # "names" matches a file whose content-relative path (with its own .adoc
 # stripped, see _content_relparts_stem) ENDS WITH the given parts tuple --
 # from a NAME ending in .adoc, split on "/" (a bare "resource_groups.adoc"
@@ -525,6 +525,20 @@ def _branch_page_name(repo_path):
     return parts[4:-1] + (PurePosixPath(parts[-1]).stem,)
 
 
+def _nav_dependency_repo_paths():
+    """Repository-relative nav.adoc and included nav-partial paths."""
+    paths = set()
+    repo = Path.cwd().resolve()
+    for _, en_root, ru_root in module_roots():
+        for root in (en_root, ru_root):
+            for file in _nav_files_and_partials(root):
+                try:
+                    paths.add(file.resolve().relative_to(repo).as_posix())
+                except ValueError:
+                    continue
+    return paths
+
+
 def _git_branch_page_scope(head=None, base=None):
     """Content-relative page names and whether navigation changed in base...head."""
     head = head or "HEAD"
@@ -544,13 +558,28 @@ def _git_branch_page_scope(head=None, base=None):
                      + (f": {detail}" if detail else ""))
     paths = [path for path in result.stdout.split("\0") if path]
     names = {_branch_page_name(path) for path in paths} - {None}
+
+    # Renames are treated as delete+add here so renaming a nav away from its
+    # special filename still triggers parity for the removed navigation file.
+    deleted = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=D", "--no-renames", "-z",
+         f"{base_commit}...{head_commit}", "--"],
+        capture_output=True, text=True)
+    if deleted.returncode != 0:
+        detail = deleted.stderr.strip()
+        _usage_error(f"error: --page BRANCH cannot diff {base}...{head}"
+                     + (f": {detail}" if detail else ""))
+    nav_paths = paths + [path for path in deleted.stdout.split("\0") if path]
     nav_changed = any(
         len(PurePosixPath(path).parts) == 4
         and PurePosixPath(path).parts[0] in ("en", "ru")
         and PurePosixPath(path).parts[1] == "modules"
         and PurePosixPath(path).parts[3] == "nav.adoc"
-        for path in paths
+        for path in nav_paths
     )
+    if not nav_changed:
+        nav_dependencies = _nav_dependency_repo_paths()
+        nav_changed = any(path in nav_dependencies for path in nav_paths)
     return names, nav_changed
 
 
@@ -1112,6 +1141,30 @@ _NAV_INCLUDE_RE = re.compile(r'^include::(.*)$')
 _INCLUDE_PARTIAL_RE = re.compile(r'include::partial\$([^\[]+\.adoc)')
 
 
+def _nav_files_and_partials(root: Path):
+    """Return nav.adoc and its recursively included same-module partials.
+
+    Missing include targets remain in the result so a one-sided deletion can
+    be reported by nav parity and selected by BRANCH scoping."""
+    nav = root / "nav.adoc"
+    if not nav.is_file():
+        return []
+    files = []
+    seen = set()
+
+    def collect_nav_file(file):
+        if file in seen:
+            return
+        seen.add(file)
+        files.append(file)
+        text = _read_text(file) or ""
+        for partial_name in _INCLUDE_PARTIAL_RE.findall(text):
+            collect_nav_file(root / "partials" / partial_name)
+
+    collect_nav_file(nav)
+    return files
+
+
 def _nav_skeleton(path: Path):
     """Structural skeleton of a nav file: list depth + xref/include target,
     or an <svg:...>/<text> placeholder. Numbered lines (1-based) for the
@@ -1193,29 +1246,52 @@ def check_nav_structure_parity() -> bool:
     """Port of check_nav_structure_parity.sh. A module only has a nav.adoc
     of its own on some multi-module Antora sites (e.g. a top-level ROOT nav
     plus a second one for a "how-to" module); modules without one are
-    silently skipped. With --page BRANCH, the runner executes this check when
-    the branch changed a nav.adoc; other page scopes skip it."""
+    silently skipped. A nav or included nav partial present in only one
+    language is a missing counterpart. With --page BRANCH, the runner executes
+    this check when the branch changed one of those files; other page scopes
+    skip it."""
     ok = True
     any_nav = False
     mismatch_count = 0
     for _, en_root, ru_root in module_roots():
         en_nav = en_root / "nav.adoc"
         ru_nav = ru_root / "nav.adoc"
-        if not (en_nav.is_file() and ru_nav.is_file()):
+        if not en_nav.is_file() and not ru_nav.is_file():
             continue
         any_nav = True
+        if not en_nav.is_file() or not ru_nav.is_file():
+            existing = en_nav if en_nav.is_file() else ru_nav
+            missing_lang = "ru" if en_nav.is_file() else "en"
+            print(f"MISSING  {existing}  (no {missing_lang} counterpart)")
+            ok = False
+            mismatch_count += 1
+            continue
         if not _compare_skeleton_pair(en_nav, ru_nav, _nav_skeleton):
             ok = False
             mismatch_count += 1
 
-        en_text = _read_text(en_nav) or ""
-        for partial_name in _INCLUDE_PARTIAL_RE.findall(en_text):
-            en_partial = en_root / "partials" / partial_name
-            ru_partial = ru_root / "partials" / partial_name
-            if en_partial.is_file() and ru_partial.is_file():
-                if not _compare_skeleton_pair(en_partial, ru_partial, _nav_skeleton):
-                    ok = False
-                    mismatch_count += 1
+        en_partials = {
+            f.relative_to(en_root)
+            for f in _nav_files_and_partials(en_root)
+            if f != en_nav
+        }
+        ru_partials = {
+            f.relative_to(ru_root)
+            for f in _nav_files_and_partials(ru_root)
+            if f != ru_nav
+        }
+        for rel in sorted(en_partials | ru_partials):
+            en_partial = en_root / rel
+            ru_partial = ru_root / rel
+            if not en_partial.is_file() or not ru_partial.is_file():
+                existing = en_partial if en_partial.is_file() else ru_partial
+                missing_lang = "ru" if en_partial.is_file() else "en"
+                print(f"MISSING  {existing}  (no {missing_lang} counterpart)")
+                ok = False
+                mismatch_count += 1
+            elif not _compare_skeleton_pair(en_partial, ru_partial, _nav_skeleton):
+                ok = False
+                mismatch_count += 1
 
     if not any_nav:
         print("OK: no nav.adoc found to compare.")
@@ -1894,7 +1970,8 @@ def _is_under(path: Path, base: Path) -> bool:
         return False
 
 
-def _propagate_attrs_to_partials(file, root, lang_module_roots, lang, own_name, attrs, contexts, seen, depth=0):
+def _propagate_attrs_to_partials(file, root, lang_module_roots, lang, own_name, attrs, contexts, seen,
+                                 depth=0, own_lang_module_roots=None):
     """One top-level page's own traversal for _build_partial_attrs_
     contexts -- `seen` is local to that single page's call (a fresh set
     passed in by the caller for each top-level page), not shared across
@@ -1910,9 +1987,13 @@ def _propagate_attrs_to_partials(file, root, lang_module_roots, lang, own_name, 
     if text is None:
         return
     directory = file.parent
+    if own_lang_module_roots is None:
+        own_lang_module_roots = lang_module_roots
     for m in _INCLUDE_MACRO_RE.finditer(text):
         t = m.group(1)
-        resolved = _resolve_include_target(t, directory, root, lang_module_roots, lang, own_name, with_root=True)
+        resolved = _resolve_include_target(
+            t, directory, root, lang_module_roots, lang, own_name, with_root=True,
+            own_lang_module_roots=own_lang_module_roots)
         if resolved is None:
             continue
         target_file, target_root = resolved
@@ -1924,24 +2005,35 @@ def _propagate_attrs_to_partials(file, root, lang_module_roots, lang, own_name, 
         if _is_under(target_file, target_root / "partials"):
             contexts.setdefault(target_file, []).append(attrs)
         child_attrs = {**attrs, **_collect_doc_attrs(target_lines)}
-        _propagate_attrs_to_partials(target_file, target_root, lang_module_roots, lang, own_name,
-                                      child_attrs, contexts, seen, depth + 1)
+        m_component = _COMPONENT_PREFIX_RE.match(t)
+        next_roots = (_component_context(m_component.group(0)[:-1], lang, lang_module_roots)
+                      if m_component else lang_module_roots)
+        _propagate_attrs_to_partials(target_file, target_root, next_roots, lang, own_name,
+                                     child_attrs, contexts, seen, depth + 1, own_lang_module_roots)
 
 
 def _build_partial_attrs_contexts(module_list, lang_module_roots, lang):
     """Map each partial to the document-attribute contexts of pages that
     include it, directly or transitively. The same partial may see different
     values on different pages. Reference checking tries these contexts only
-    for attributes not defined in the partial itself."""
+    for attributes not defined in the partial itself. The built-in docname
+    comes from the top-level page, including when traversal enters a
+    registered external component."""
     own_name = _own_component_name(lang)
     contexts = {}
-    for _, module_root in module_list:
+    sources = [(root, lang_module_roots) for _, root in module_list]
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    for module_root, this_lang_module_roots in sources:
         for f in _iter_files(module_root / "pages", ".adoc"):
             lines = _read_lines(f)
             if lines is None:
                 continue
-            _propagate_attrs_to_partials(f, module_root, lang_module_roots, lang, own_name,
-                                          _collect_doc_attrs(lines), contexts, set())
+            attrs = {"docname": f.stem, **_collect_doc_attrs(lines)}
+            _propagate_attrs_to_partials(
+                f, module_root, this_lang_module_roots, lang, own_name, attrs, contexts, set(),
+                own_lang_module_roots=lang_module_roots)
     return contexts
 
 
@@ -2188,18 +2280,31 @@ _INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')
 def _selected_page_dependencies(lang_module_roots, lang):
     """Examples and images reachable from --page-selected content, or None
     when no page filter is active. Includes are followed recursively with
-    their tag filters and component contexts intact. A reference in either
-    language later selects both sides of the corresponding EN/RU pair."""
+    their tag filters, including documents' attributes, and component contexts
+    intact. A reference in either language later selects both sides of the
+    corresponding EN/RU pair."""
     if _PAGE_FILTER is None:
         return None
     dependencies = {"examples": set(), "images": set()}
     own_name = _own_component_name(lang)
     own_lang_module_roots = lang_module_roots
+    includer_roots = _build_included_content_roots(lang_module_roots, lang)
+    module_list = [(name, root) for name, root in lang_module_roots.items()]
+    attrs_contexts = _build_partial_attrs_contexts(module_list, lang_module_roots, lang)
     seen = set()
+    unresolved = set()
 
-    def walk(file, root, current_roots, only_lines, fallback_roots, depth=0):
+    def substitute(target, file, lineno, current_attrs):
+        resolved = _substitute_attrs(target, current_attrs)
+        if _ATTR_REF_RE.search(resolved):
+            unresolved.add((file, lineno, target))
+            return None
+        return resolved
+
+    def walk(file, root, current_roots, only_lines, fallback_roots, current_attrs, depth=0):
         key = (file, root, None if only_lines is None else frozenset(only_lines),
-               frozenset(fallback_roots), tuple(sorted(current_roots)))
+               frozenset(fallback_roots), tuple(sorted(current_roots)),
+               frozenset(current_attrs.items()))
         if depth > 25 or key in seen:
             return
         seen.add(key)
@@ -2212,8 +2317,9 @@ def _selected_page_dependencies(lang_module_roots, lang):
             if only_lines is not None and lineno not in only_lines:
                 continue
             if lineno not in ref_excluded:
-                for macro, target in _IMAGE_REF_RE.findall(line):
-                    if target.startswith(("http://", "https://")):
+                for macro, raw_target in _IMAGE_REF_RE.findall(line):
+                    target = substitute(raw_target, file, lineno, current_attrs)
+                    if target is None or target.startswith(("http://", "https://")):
                         continue
                     if macro.startswith(("injectSvg", "inlineSVG")):
                         dependencies["images"].add(root / "images" / _strip_root_slash(target))
@@ -2236,7 +2342,15 @@ def _selected_page_dependencies(lang_module_roots, lang):
             if lineno in comment_excluded:
                 continue
             for match in _INCLUDE_MACRO_RE.finditer(line):
-                target, attrs = match.group(1), match.group(2)
+                raw_target, attrs = match.group(1), match.group(2)
+                target = substitute(raw_target, file, lineno, current_attrs)
+                if target is None:
+                    continue
+                if not _COMPONENT_PREFIX_RE.match(target) and target.startswith("example$"):
+                    name = _strip_root_slash(target[len("example$"):])
+                    for candidate in fallback_roots:
+                        dependencies["examples"].add(candidate / "examples" / name)
+                    continue
                 resolved = _resolve_include_target(
                     target, file.parent, root, current_roots, lang, own_name,
                     with_root=True, own_lang_module_roots=own_lang_module_roots)
@@ -2253,17 +2367,36 @@ def _selected_page_dependencies(lang_module_roots, lang):
                     continue
                 tags, negated, whole_file = _parse_include_attrs(attrs)
                 child_lines = _tag_filtered_line_numbers(target_lines, tags, negated, whole_file)
+                child_attrs = {**current_attrs, **_collect_doc_attrs(target_lines)}
                 m_component = _COMPONENT_PREFIX_RE.match(target)
                 next_roots = (_component_context(
                     m_component.group(0)[:-1], lang, current_roots)
                     if m_component else current_roots)
-                walk(target_file, target_root, next_roots, child_lines, {root}, depth + 1)
+                walk(target_file, target_root, next_roots, child_lines, {root}, child_attrs, depth + 1)
 
     for root in lang_module_roots.values():
         sources = list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc"))
         for file in sources:
-            if _page_allowed(file):
-                walk(file, root, lang_module_roots, None, {root})
+            if not _page_allowed(file):
+                continue
+            lines = _read_lines(file)
+            if lines is None:
+                continue
+            own_attrs = _collect_doc_attrs(lines)
+            fallback_roots = includer_roots.get(file) or {root}
+            contexts = attrs_contexts.get(file) if _is_under(file, root / "partials") else None
+            if _is_under(file, root / "pages"):
+                fallback_roots = fallback_roots | {root}
+            if contexts:
+                for context in contexts:
+                    walk(file, root, lang_module_roots, None, fallback_roots,
+                         {**context, **own_attrs})
+            else:
+                walk(file, root, lang_module_roots, None, fallback_roots,
+                     {"docname": file.stem, **own_attrs})
+    for file, lineno, target in sorted(unresolved):
+        print(f"UNRESOLVED  {file}:{lineno}  {target} "
+              "(unknown attribute; dependency left unchecked)", file=sys.stderr)
     return dependencies
 
 
@@ -7741,7 +7874,7 @@ def build_parser():
                              "Pass BRANCH to scope to pages/partials changed by commits in "
                              "base...head (default HEAD and the detected default base branch). "
                              "Repository-global orphan checks are skipped with SKIP. "
-                             "Nav parity runs only when BRANCH changed nav.adoc. "
+                             "Nav parity runs only when BRANCH changed nav.adoc or a nav partial. "
                              "Example/image checks are limited to dependencies of selected "
                              "content. Broken-refs resolution remains site-wide, "
                              "but only selected source files produce findings. Optional -- "
@@ -8190,7 +8323,8 @@ def _build_v2_parser():
                              "partial(s); 'UNCOMMITTED' for uncommitted files or "
                              "'BRANCH' for files changed in base...head. Repeatable. "
                              "Repository-global checks are skipped, except nav parity "
-                             "when BRANCH changed nav.adoc; broken-refs keeps its "
+                             "when BRANCH changed nav.adoc or an included nav partial; "
+                             "broken-refs keeps its "
                              "site-wide resolution context.")
     pa.completer = _complete_page_or_dir_name
     c.add_argument("--head", metavar="REV",

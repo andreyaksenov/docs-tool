@@ -69,11 +69,13 @@ and only runs when you ask for it by name.
 
 `--page` scopes per-file checks to matching pages/partials. Orphan checks print
 `SKIP: repository-global check; not applicable with --page.` instead of running. Nav parity
-(LN05) does the same except with `--page BRANCH` when the branch changes a `nav.adoc`; in that
-case it runs, including for a nav-only branch. Example character/parity checks (CH02, CH07, LN04)
-and image-dimension parity (LN08) follow nested includes from selected content in either language
-and check only the referenced EN/RU dependencies. Broken-reference resolution still scans the
-whole site, but only selected source files produce findings.
+(LN05) does the same except with `--page BRANCH` when the branch changes a `nav.adoc` or one of
+its included nav partials; in that case it runs, including for nav-only changes and deletions.
+Example character/parity checks (CH02, CH07, LN04) and image-dimension parity (LN08) follow nested
+includes from selected content in either language, resolve references in each including document's
+module and attribute context, and check only the referenced EN/RU dependencies. An attribute that
+remains unknown prints `UNRESOLVED` rather than being silently treated as checked. Broken-reference
+resolution still scans the whole site, but only selected source files produce findings.
 
 `--target NAME` picks a scan target other than the default `pages` (`pages/` +
 `partials/`) — see `list targets`.
@@ -639,8 +641,10 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```
 
 - **`LN05` · `check l10n --nav`** — EN and RU `nav.adoc` structure (list depth,
-  `xref:`/`include::` targets) must match; translated labels ignored. Other page selectors
-  skip it, but `--page BRANCH` runs it whenever the branch changes either language's `nav.adoc`.
+  `xref:`/`include::` targets) must match; translated labels ignored. Included nav partials are
+  compared recursively, and a nav or nav partial present in only one language is reported missing.
+  Other page selectors skip it, but `--page BRANCH` runs it whenever the branch changes any of
+  those navigation files, including deletions and renames away from `nav.adoc`.
   ```bash
   ./docs_tool.py check l10n --nav
   ./docs_tool.py check l10n --nav --page BRANCH

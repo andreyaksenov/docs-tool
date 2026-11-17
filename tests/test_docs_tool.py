@@ -1866,6 +1866,67 @@ class ExamplesParityTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("mod-b/examples/query.sql", out)
 
+    def test_nested_cross_module_example_uses_including_pages_context(self):
+        self.write("en/modules/mod-a/pages/selected.adoc",
+                   "include::mod-b:partial$snippet.adoc[]\n")
+        self.write("en/modules/mod-b/partials/snippet.adoc",
+                   "include::example$query.sql[]\n")
+        self.write("en/modules/mod-a/examples/query.sql", "SELECT 1;\n")
+        self.write("ru/modules/mod-a/examples/query.sql", "SELECT 2;\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("mod-a/examples/query.sql", out)
+
+    def test_selected_partial_resolves_docname_in_every_including_page(self):
+        for page in ("first", "second"):
+            self.write(f"en/modules/ROOT/pages/{page}.adoc",
+                       "include::partial$snippet.adoc[]\n")
+            self._pair(f"{page}/script.sql", "SELECT 1;\n", "SELECT 2;\n")
+        self._pair("unrelated/script.sql")
+        self.write("en/modules/ROOT/partials/snippet.adoc",
+                   "include::example${docname}/script.sql[]\n")
+        dt._PAGE_FILTER = {"names": {("snippet",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("first/script.sql", out)
+        self.assertIn("second/script.sql", out)
+        self.assertNotIn("unrelated/script.sql", out)
+        self.assertNotIn("UNRESOLVED", out)
+
+    def test_unknown_dependency_attribute_is_reported_as_unchecked(self):
+        self.write("en/modules/ROOT/pages/selected.adoc",
+                   "include::example${unknown}/script.sql[]\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertTrue(ok)
+        self.assertIn("UNRESOLVED", out)
+        self.assertIn("unknown attribute; dependency left unchecked", out)
+
+    def test_external_included_page_example_uses_local_includer_context(self):
+        for lang in ("en", "ru"):
+            self.antora_yml(lang, "LOCAL")
+            self.write(f"external/{lang}/antora.yml", "name: EXT\nversion: '1.0'\n")
+        self.write("en/modules/ROOT/pages/selected.adoc",
+                   "include::EXT:how-to:metrics.adoc[tag=live]\n")
+        self.write("external/en/modules/how-to/pages/metrics.adoc",
+                   "// tag::live[]\ninclude::example$query.sql[]\n// end::live[]\n")
+        self._pair("query.sql")
+        dt.EXTERNAL_COMPONENTS = dt._load_external_components(
+            [f"EXT={self.root / 'external'}"])
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("ROOT/examples/query.sql", out)
+
     def test_ru_only_reference_still_selects_the_en_ru_pair(self):
         self.write("ru/modules/ROOT/pages/selected.adoc", "include::example$query.sql[]\n")
         self._pair("query.sql")
@@ -1920,8 +1981,8 @@ class ImagesDimensionParityTests(FixtureTestCase):
                     + b"\x01\x01\x11\x00" + b"\xff\xd9")
         raise ValueError(image_format)
 
-    def write_image(self, lang, name, width, height, image_format="png"):
-        path = self.root / lang / "modules/ROOT/images" / name
+    def write_image(self, lang, name, width, height, image_format="png", module="ROOT"):
+        path = self.root / lang / "modules" / module / "images" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(self._image_bytes(image_format, width, height))
         return path
@@ -2023,6 +2084,23 @@ class ImagesDimensionParityTests(FixtureTestCase):
         self.assertIn("100x100", output)
         self.assertIn("200x100", output)
         self.assertNotIn("other.png", output)
+
+    def test_selected_partial_uses_its_including_modules_for_images(self):
+        self.write("en/modules/mod-a/pages/index.adoc",
+                   "include::mod-b:partial$snippet.adoc[]\n")
+        self.write("en/modules/mod-b/partials/snippet.adoc", "image::screen.png[]\n")
+        self.write_image("en", "screen.png", 100, 100, module="mod-a")
+        self.write_image("ru", "screen.png", 200, 100, module="mod-a")
+        self.write_image("en", "unrelated.png", 300, 300, module="mod-b")
+        self.write_image("ru", "unrelated.png", 400, 400, module="mod-b")
+        dt._PAGE_FILTER = {"names": {("snippet",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("mod-a/images/screen.png", output)
+        self.assertIn("100x100", output)
+        self.assertNotIn("unrelated.png", output)
 
 
 class TagsOrphanedTests(FixtureTestCase):
@@ -5567,6 +5645,26 @@ class BranchPageFilterTests(unittest.TestCase):
         self._git("add", "-A")
         self._git("commit", "-m", "change")
 
+    def _use_nested_nav_partial_base(self):
+        self._git("checkout", "-q", "master")
+        for lang in ("en", "ru"):
+            self.write(f"{lang}/modules/ROOT/nav.adoc", "include::partial$menu.adoc[]\n")
+            self.write(f"{lang}/modules/ROOT/partials/menu.adoc",
+                       "include::partial$nested.adoc[]\n")
+            self.write(f"{lang}/modules/ROOT/partials/nested.adoc",
+                       "* xref:reference/changed.adoc[Changed]\n")
+        self._commit_all()
+        self._git("checkout", "-q", "-B", "TWII-3791")
+
+    def _run_nav_branch(self):
+        sys.argv = ["docs_tool.py", "check", "l10n", "--nav",
+                    "--page", "BRANCH", "--base", "master"]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+        return ctx.exception.code, out.getvalue(), err.getvalue()
+
     def _apply(self, *pages, head=None, base=None):
         out, err = io.StringIO(), io.StringIO()
         code = None
@@ -5661,6 +5759,68 @@ class BranchPageFilterTests(unittest.TestCase):
         self.assertIn("SKIP: repository-global check", out.getvalue())
         self.assertNotIn("OK: nav structure matches", out.getvalue())
         self.assertNotIn("nav", dt._PAGE_FILTER)
+
+    def test_nav_partial_only_branch_runs_nav_parity(self):
+        self._use_nested_nav_partial_base()
+        self.write("en/modules/ROOT/partials/menu.adoc",
+                   "include::partial$nested.adoc[]\n* xref:unchanged.adoc[Extra]\n")
+        self._commit_all()
+
+        code, out, err = self._run_nav_branch()
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("DIFF", out)
+        self.assertIn("partials/menu.adoc", out)
+        self.assertNotIn("SKIP:", out)
+
+    def test_nested_nav_partial_only_branch_runs_nav_parity(self):
+        self._use_nested_nav_partial_base()
+        self.write("en/modules/ROOT/partials/nested.adoc",
+                   "* xref:reference/changed.adoc[Changed]\n* xref:unchanged.adoc[Extra]\n")
+        self._commit_all()
+
+        code, out, err = self._run_nav_branch()
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("DIFF", out)
+        self.assertIn("partials/nested.adoc", out)
+        self.assertNotIn("SKIP:", out)
+
+    def test_nav_only_deletion_runs_nav_parity_and_reports_missing_counterpart(self):
+        self._use_nested_nav_partial_base()
+        (self.root / "en/modules/ROOT/nav.adoc").unlink()
+        self._commit_all()
+
+        code, out, err = self._run_nav_branch()
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("MISSING", out)
+        self.assertIn("no en counterpart", out)
+        self.assertNotIn("SKIP:", out)
+
+    def test_nav_partial_deletion_reports_missing_counterpart(self):
+        self._use_nested_nav_partial_base()
+        (self.root / "en/modules/ROOT/partials/menu.adoc").unlink()
+        self._commit_all()
+
+        code, out, err = self._run_nav_branch()
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("MISSING", out)
+        self.assertIn("partials/menu.adoc", out)
+        self.assertNotIn("SKIP:", out)
+
+    def test_renaming_nav_away_from_nav_filename_still_runs_nav_parity(self):
+        self._use_nested_nav_partial_base()
+        self._git("mv", "en/modules/ROOT/nav.adoc", "en/modules/ROOT/old-nav.adoc")
+        self._commit_all()
+
+        code, out, err = self._run_nav_branch()
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("MISSING", out)
+        self.assertIn("no en counterpart", out)
+        self.assertNotIn("SKIP:", out)
 
     def test_no_branch_changes_exits_zero(self):
         code, out, err = self._apply("BRANCH", base="master")
@@ -6408,6 +6568,40 @@ class MultiRepoCheckTests(unittest.TestCase):
         self.assertEqual(code, 1, err)
         self.assertIn("Curly", out.split(f"##### {self.repo_b}")[0])
         self.assertIn("no branch .adoc changes", out.split(f"##### {self.repo_b}")[1])
+
+    def test_branch_nav_scope_is_recomputed_for_each_repo(self):
+        for repo in (self.repo_a, self.repo_b):
+            self._write(repo, "en/modules/ROOT/pages/index.adoc", "= Index\n")
+            self._write(repo, "ru/modules/ROOT/pages/index.adoc", "= Index\n")
+            self._write(repo, "en/modules/ROOT/nav.adoc", "* xref:index.adoc[Index]\n")
+            self._write(repo, "ru/modules/ROOT/nav.adoc", "* xref:index.adoc[Index]\n")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/master"],
+                           cwd=repo, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "-c", "user.email=test@example.com",
+                            "-c", "user.name=Test", "commit", "-m", "base"],
+                           cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=repo, check=True)
+        self._write(self.repo_a, "en/modules/ROOT/nav.adoc",
+                    "* xref:index.adoc[Index]\n* xref:extra.adoc[Extra]\n")
+        self._write(self.repo_b, "en/modules/ROOT/pages/index.adoc", "= Changed\n")
+        for repo in (self.repo_a, self.repo_b):
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            subprocess.run(["git", "-c", "user.email=test@example.com",
+                            "-c", "user.name=Test", "commit", "-m", "change"],
+                           cwd=repo, check=True, capture_output=True)
+
+        code, out, err = self._run("check", "l10n", "--nav",
+                                   "--repo", str(self.repo_a), "--repo", str(self.repo_b),
+                                   "--page", "BRANCH", "--base", "master")
+
+        self.assertEqual(code, 1, err)
+        repo_a_section = out.split(f"##### {self.repo_b}")[0]
+        repo_b_section = out.split(f"##### {self.repo_b}")[1]
+        self.assertIn("DIFF", repo_a_section)
+        self.assertIn("SKIP: repository-global check", repo_b_section)
+        self.assertNotIn("DIFF", repo_b_section)
 
     def test_own_component_name_cache_does_not_leak_across_repos(self):
         """Regression test for a real bug found while testing
