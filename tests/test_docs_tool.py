@@ -23,6 +23,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import docs_tool as dt
@@ -94,6 +95,25 @@ class FixtureTestCase(unittest.TestCase):
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             ok = check_fn(*args, **kwargs)
         return ok, buf.getvalue()
+
+
+class PathFormattingTests(unittest.TestCase):
+    def test_default_output_preserves_relative_locations(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            location = dt._format_location(Path("ru/modules/ROOT/pages/page.adoc"), 43, 7)
+        self.assertEqual(location, "ru/modules/ROOT/pages/page.adoc:43:7")
+
+    def test_jetbrains_python_run_uses_absolute_file_urls(self):
+        path = Path("ru/modules/ROOT/pages/page.adoc")
+        with mock.patch.dict(os.environ, {"PYCHARM_HOSTED": "1"}, clear=True):
+            location = dt._format_location(path, 43, 7)
+        self.assertEqual(location, f"{path.resolve().as_uri()}:43:7")
+
+    def test_explicit_override_enables_file_urls(self):
+        path = Path("ru/modules/ROOT/pages/page.adoc")
+        with mock.patch.dict(os.environ, {"DOCS_TOOL_IDE_LINKS": "1"}, clear=True):
+            location = dt._format_location(path, 43)
+        self.assertEqual(location, f"{path.resolve().as_uri()}:43")
 
 
 class ResolveModuleRefTests(unittest.TestCase):
@@ -1253,6 +1273,15 @@ class TrailingWhitespaceTests(FixtureTestCase):
             "",
             "Total: 2 line(s) with trailing whitespace.",
         ], out.splitlines())
+
+    def test_jetbrains_run_outputs_clickable_file_urls(self):
+        page = self.write("en/modules/ROOT/pages/p.adoc", "text \n")
+
+        with mock.patch.dict(os.environ, {"PYCHARM_HOSTED": "1"}, clear=True):
+            ok, out = self.run_check(dt.check_pages_no_trailing_whitespace)
+
+        self.assertFalse(ok)
+        self.assertIn(f"{page.resolve().as_uri()}:1:5: trailing whitespace", out)
 
     def test_clean_lines_and_asciidoc_hard_break_pass(self):
         self.write("en/modules/ROOT/pages/p.adoc", "clean\nfirst line +\nsecond line\n")

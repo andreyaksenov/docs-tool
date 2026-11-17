@@ -350,12 +350,12 @@ def _load_glossary(paths):
         for lineno, line in enumerate(data_lines[1:], 2):  # [0] is the en|ru|ru_pattern|note header
             fields = line.split("|")
             if len(fields) != 4:
-                print(f"warning: --glossary {path_str}:{lineno}: expected 4 '|'-separated fields, "
+                print(f"warning: --glossary {_format_location(path_str, lineno)}: expected 4 '|'-separated fields, "
                       f"got {len(fields)}, skipping: {line!r}", file=sys.stderr)
                 continue
             en_part, ru, ru_pattern, _note = (f.strip() for f in fields)
             if not en_part or not ru_pattern:
-                print(f"warning: --glossary {path_str}:{lineno}: skipping row with missing en/ru_pattern: {line!r}",
+                print(f"warning: --glossary {_format_location(path_str, lineno)}: skipping row with missing en/ru_pattern: {line!r}",
                       file=sys.stderr)
                 continue
             key = en_part.lower()
@@ -368,6 +368,22 @@ def _load_glossary(paths):
 # --------------------------------------------------------------------------
 # Shared helpers
 # --------------------------------------------------------------------------
+
+def _ide_links_enabled():
+    return (os.environ.get("PYCHARM_HOSTED") == "1"
+            or os.environ.get("DOCS_TOOL_IDE_LINKS") == "1")
+
+
+def _format_path(path):
+    if _ide_links_enabled():
+        return Path(path).resolve().as_uri()
+    return str(path)
+
+
+def _format_location(path, lineno, col=None):
+    location = f"{_format_path(path)}:{lineno}"
+    return f"{location}:{col}" if col is not None else location
+
 
 def _read_lines(path: Path):
     """Read a text file as a list of lines (no trailing newlines), tolerating
@@ -643,10 +659,10 @@ def _unified_diff_lines(en_lines, ru_lines, en_file, ru_file, n=1):
         if not started:
             continue
         if line.startswith("-"):
-            out.append(f"    - {en_file}:{en_no}: {line[1:]}")
+            out.append(f"    - {_format_location(en_file, en_no)}: {line[1:]}")
             en_no += 1
         elif line.startswith("+"):
-            out.append(f"    + {ru_file}:{ru_no}: {line[1:]}")
+            out.append(f"    + {_format_location(ru_file, ru_no)}: {line[1:]}")
             ru_no += 1
         else:
             out.append(f"      {line[1:] if line.startswith(' ') else line}")
@@ -683,9 +699,9 @@ def check_examples_no_cyrillic() -> bool:
             if hits:
                 ok = False
                 total_hits += len(hits)
-                print(f"FILE     {f}")
+                print(f"FILE     {_format_path(f)}")
                 for i, col, l in hits:
-                    print(f"  {f}:{i}:{col}: {l}")
+                    print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
         print("OK: no Cyrillic characters found in en/ examples.")
     else:
@@ -759,7 +775,7 @@ def check_examples_orphaned() -> bool:
                 if f not in used:
                     ok = False
                     orphaned_count += 1
-                    print(f"ORPHANED  {f}  (not included in any pages/partials)")
+                    print(f"ORPHANED  {_format_path(f)}  (not included in any pages/partials)")
     if ok:
         print("OK: all examples are included somewhere.")
     else:
@@ -826,7 +842,7 @@ def check_examples_parity() -> bool:
                     en_file, (ru_file,), en_dependencies, ru_dependencies, "examples"):
                 continue
             if not ru_file.is_file():
-                print(f"MISSING  {en_file}  (no ru counterpart)")
+                print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
                 ok = False
                 mismatch_count += 1
                 continue
@@ -866,7 +882,7 @@ def check_examples_parity() -> bool:
                     ru_file, (en_file,), ru_dependencies, en_dependencies, "examples"):
                 continue
             if not en_file.is_file():
-                print(f"MISSING  {ru_file}  (no en counterpart)")
+                print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
                 ok = False
                 mismatch_count += 1
 
@@ -967,7 +983,7 @@ def check_images_orphaned() -> bool:
                     ok = False
                     orphaned_count += 1
                     orphaned_bytes += f.stat().st_size
-                    print(f"ORPHANED  {f}  (not referenced in any pages/partials)")
+                    print(f"ORPHANED  {_format_path(f)}  (not referenced in any pages/partials)")
     if ok:
         print("OK: all images are referenced somewhere.")
     else:
@@ -1087,7 +1103,7 @@ def check_images_dimension_parity() -> bool:
                 continue
             ru_rel = en_rel if en_rel in ru_files else _localized_image_counterpart(en_rel, "en")
             if ru_rel not in ru_files or ru_rel in used_ru:
-                print(f"MISSING  {en_file}  (no ru counterpart)")
+                print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
                 ok = False
                 finding_count += 1
                 continue
@@ -1098,16 +1114,16 @@ def check_images_dimension_parity() -> bool:
             ru_dimensions = _raster_image_dimensions(ru_file)
             if en_dimensions is None or ru_dimensions is None:
                 if en_dimensions is None:
-                    print(f"INVALID  {en_file}  (cannot read raster image dimensions)")
+                    print(f"INVALID  {_format_path(en_file)}  (cannot read raster image dimensions)")
                 if ru_dimensions is None:
-                    print(f"INVALID  {ru_file}  (cannot read raster image dimensions)")
+                    print(f"INVALID  {_format_path(ru_file)}  (cannot read raster image dimensions)")
                 ok = False
                 finding_count += 1
                 continue
             if en_dimensions != ru_dimensions:
                 print(_diff_pair_header(en_file, ru_file))
-                print(f"  EN  {en_file}: {en_dimensions[0]}x{en_dimensions[1]}")
-                print(f"  RU  {ru_file}: {ru_dimensions[0]}x{ru_dimensions[1]}")
+                print(f"  EN  {_format_path(en_file)}: {en_dimensions[0]}x{en_dimensions[1]}")
+                print(f"  RU  {_format_path(ru_file)}: {ru_dimensions[0]}x{ru_dimensions[1]}")
                 print()
                 ok = False
                 finding_count += 1
@@ -1119,7 +1135,7 @@ def check_images_dimension_parity() -> bool:
             if not _dependency_pair_selected(
                     ru_file, (en_file, en_localized), ru_dependencies, en_dependencies, "images"):
                 continue
-            print(f"MISSING  {ru_file}  (no en counterpart)")
+            print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
             ok = False
             finding_count += 1
 
@@ -1222,9 +1238,9 @@ def _skeleton_diff_lines(en_skel, ru_skel, en_file, ru_file):
         if tag == "equal":
             continue
         for i in range(i1, i2):
-            out.append(f"    - {en_file}:{en_skel[i][0]}: {en_skel[i][1]}")
+            out.append(f"    - {_format_location(en_file, en_skel[i][0])}: {en_skel[i][1]}")
         for j in range(j1, j2):
-            out.append(f"    + {ru_file}:{ru_skel[j][0]}: {ru_skel[j][1]}")
+            out.append(f"    + {_format_location(ru_file, ru_skel[j][0])}: {ru_skel[j][1]}")
     return out
 
 
@@ -1262,7 +1278,7 @@ def check_nav_structure_parity() -> bool:
         if not en_nav.is_file() or not ru_nav.is_file():
             existing = en_nav if en_nav.is_file() else ru_nav
             missing_lang = "ru" if en_nav.is_file() else "en"
-            print(f"MISSING  {existing}  (no {missing_lang} counterpart)")
+            print(f"MISSING  {_format_path(existing)}  (no {missing_lang} counterpart)")
             ok = False
             mismatch_count += 1
             continue
@@ -1286,7 +1302,7 @@ def check_nav_structure_parity() -> bool:
             if not en_partial.is_file() or not ru_partial.is_file():
                 existing = en_partial if en_partial.is_file() else ru_partial
                 missing_lang = "ru" if en_partial.is_file() else "en"
-                print(f"MISSING  {existing}  (no {missing_lang} counterpart)")
+                print(f"MISSING  {_format_path(existing)}  (no {missing_lang} counterpart)")
                 ok = False
                 mismatch_count += 1
             elif not _compare_skeleton_pair(en_partial, ru_partial, _nav_skeleton):
@@ -1843,7 +1859,7 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                         if target_lines is not None:
                             defined_tags = {name for name, _, _ in _parse_tag_regions(target_lines)}
                             for missing in sorted(wanted_tags - defined_tags):
-                                report(file, lineno, f"{target}  (tag '{missing}' not found in {target_file})")
+                                report(file, lineno, f"{target}  (tag '{missing}' not found in {_format_path(target_file)})")
 
             elif target.startswith("image::") or target.startswith("image:"):
                 prefix = "image::" if target.startswith("image::") else "image:"
@@ -2097,7 +2113,7 @@ def check_pages_broken_refs() -> bool:
             return
         ok = False
         broken_count += 1
-        print(f"BROKEN   {file}:{lineno}  {msg}")
+        print(f"BROKEN   {_format_location(file, lineno)}  {msg}")
 
     modules = list(module_roots())
     en_module_roots = {name: en_root for name, en_root, _ in modules}
@@ -2395,7 +2411,7 @@ def _selected_page_dependencies(lang_module_roots, lang):
                 walk(file, root, lang_module_roots, None, fallback_roots,
                      {"docname": file.stem, **own_attrs})
     for file, lineno, target in sorted(unresolved):
-        print(f"UNRESOLVED  {file}:{lineno}  {target} "
+        print(f"UNRESOLVED  {_format_location(file, lineno)}  {target} "
               "(unknown attribute; dependency left unchecked)", file=sys.stderr)
     return dependencies
 
@@ -2535,7 +2551,7 @@ def check_tags_orphaned() -> bool:
                             continue
                         ok = False
                         orphaned_count += 1
-                        print(f"ORPHANED  {f}:{start}  tag::{name}[]  (never pulled in via tag=/tags=)")
+                        print(f"ORPHANED  {_format_location(f, start)}  tag::{name}[]  (never pulled in via tag=/tags=)")
 
     if ok:
         print("OK: all tagged regions are included somewhere.")
@@ -2576,7 +2592,7 @@ def check_partials_orphaned() -> bool:
                     continue
                 ok = False
                 orphaned_count += 1
-                print(f"ORPHANED  {f}  (whole-file partial, never pulled in via include::...[])")
+                print(f"ORPHANED  {_format_path(f)}  (whole-file partial, never pulled in via include::...[])")
 
     if ok:
         print("OK: all whole-file partials are included somewhere.")
@@ -2603,15 +2619,15 @@ def check_pages_line_parity() -> bool:
                 rel = en_file.relative_to(en_root)
                 ru_file = ru_root / rel
                 if not ru_file.is_file():
-                    print(f"MISSING  {en_file}  (no ru counterpart)")
+                    print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
                     ok = False
                     mismatch_count += 1
                     continue
                 en_n = (_read_text(en_file) or "").count("\n")
                 ru_n = (_read_text(ru_file) or "").count("\n")
                 if en_n != ru_n:
-                    print(f"DIFF     {en_file}  ({en_n} lines)")
-                    print(f"         {ru_file}  ({ru_n} lines)")
+                    print(f"DIFF     {_format_path(en_file)}  ({en_n} lines)")
+                    print(f"         {_format_path(ru_file)}  ({ru_n} lines)")
                     ok = False
                     mismatch_count += 1
 
@@ -2620,7 +2636,7 @@ def check_pages_line_parity() -> bool:
                     continue
                 rel = ru_file.relative_to(ru_root)
                 if not (en_root / rel).is_file():
-                    print(f"MISSING  {ru_file}  (no en counterpart)")
+                    print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
                     ok = False
                     mismatch_count += 1
 
@@ -2664,9 +2680,9 @@ def check_pages_no_cyrillic() -> bool:
             if hits:
                 ok = False
                 total_hits += len(hits)
-                print(f"FILE     {f}")
+                print(f"FILE     {_format_path(f)}")
                 for i, col, l in hits:
-                    print(f"  {f}:{i}:{col}: {l}")
+                    print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
         print("OK: no Cyrillic characters found in en/ pages.")
     else:
@@ -2715,10 +2731,10 @@ def check_pages_no_invisible_chars() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, col, l in hits:
                         labels = ", ".join(sorted({_invisible_char_label(ch) for ch in _INVISIBLE_RE.findall(l)}))
-                        print(f"  {f}:{i}:{col}: {labels}")
+                        print(f"  {_format_location(f, i, col)}: {labels}")
                         print(f"    {_mark_invisible_chars(l)}")
     if ok:
         print("OK: no invisible/zero-width characters found in pages.")
@@ -2743,7 +2759,7 @@ def _check_no_trailing_whitespace(files, target: str) -> bool:
             total_hits += len(hits)
             for i, col, l in hits:
                 if not l.strip(" \t"):
-                    print(f"{f}:{i}:{col}: whitespace-only line")
+                    print(f"{_format_location(f, i, col)}: whitespace-only line")
                     continue
                 trailing = l[col - 1:]
                 counts = []
@@ -2751,7 +2767,7 @@ def _check_no_trailing_whitespace(files, target: str) -> bool:
                     count = trailing.count(char)
                     if count:
                         counts.append(f"{count} {label}{'' if count == 1 else 's'}")
-                print(f"{f}:{i}:{col}: trailing whitespace: {', '.join(counts)}")
+                print(f"{_format_location(f, i, col)}: trailing whitespace: {', '.join(counts)}")
     if ok:
         print(f"OK: no trailing spaces or tabs found in {target}.")
     else:
@@ -2814,9 +2830,9 @@ def check_pages_no_unicode_dashes() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, col, l in hits:
-                        print(f"  {f}:{i}:{col}: {l}")
+                        print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
         print("OK: no en dash (–) or em dash (—) characters found in pages.")
     else:
@@ -2849,9 +2865,9 @@ def check_pages_no_yo() -> bool:
             if hits:
                 ok = False
                 total_hits += len(hits)
-                print(f"FILE     {f}")
+                print(f"FILE     {_format_path(f)}")
                 for i, col, l in hits:
-                    print(f"  {f}:{i}:{col}: {l}")
+                    print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
         print("OK: no ё/Ё characters found in ru/ pages.")
     else:
@@ -2894,9 +2910,9 @@ def check_pages_stray_backticks() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l.strip()}")
+                        print(f"  {_format_location(f, i)}: {l.strip()}")
     if ok:
         print("OK: no stray/unbalanced backticks found in pages.")
     else:
@@ -2953,9 +2969,9 @@ def check_pages_link_text_comma() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l}")
+                        print(f"  {_format_location(f, i)}: {l}")
     if ok:
         print("OK: no comma-corrupted link text found in pages.")
     else:
@@ -3147,12 +3163,12 @@ def check_pages_unbalanced_delimiters() -> bool:
                 if stack:
                     ok = False
                     total_hits += len(stack)
-                    print(f"FILE     {page}")
+                    print(f"FILE     {_format_path(page)}")
                     for text, sfile, slineno in stack:
                         if sfile == page:
-                            print(f"  {sfile}:{slineno}: unclosed {_delimiter_kind(text)}: {text!r}")
+                            print(f"  {_format_location(sfile, slineno)}: unclosed {_delimiter_kind(text)}: {text!r}")
                         else:
-                            print(f"  {sfile}:{slineno}: unclosed {_delimiter_kind(text)}: {text!r}  (included from {page})")
+                            print(f"  {_format_location(sfile, slineno)}: unclosed {_delimiter_kind(text)}: {text!r}  (included from {_format_path(page)})")
 
         for root in lang_module_roots.values():
             for partial in _iter_files(root / "partials", ".adoc"):
@@ -3165,9 +3181,9 @@ def check_pages_unbalanced_delimiters() -> bool:
                 if stack:
                     ok = False
                     total_hits += len(stack)
-                    print(f"FILE     {partial}  (not reached by any page's includes -- checked standalone)")
+                    print(f"FILE     {_format_path(partial)}  (not reached by any page's includes -- checked standalone)")
                     for text, sfile, slineno in stack:
-                        print(f"  {sfile}:{slineno}: unclosed {_delimiter_kind(text)}: {text!r}")
+                        print(f"  {_format_location(sfile, slineno)}: unclosed {_delimiter_kind(text)}: {text!r}")
     if ok:
         print("OK: no unbalanced block delimiters found in pages.")
     else:
@@ -3266,13 +3282,13 @@ def check_pages_unbalanced_divs() -> bool:
                     continue
                 ok = False
                 total_hits += len(problems)
-                print(f"FILE     {page}")
+                print(f"FILE     {_format_path(page)}")
                 for kind, text, sfile, slineno in problems:
                     label = "unclosed <div>" if kind == "unclosed" else "unmatched </div>"
                     if sfile == page:
-                        print(f"  {sfile}:{slineno}: {label}: {text!r}")
+                        print(f"  {_format_location(sfile, slineno)}: {label}: {text!r}")
                     else:
-                        print(f"  {sfile}:{slineno}: {label}: {text!r}  (included from {page})")
+                        print(f"  {_format_location(sfile, slineno)}: {label}: {text!r}  (included from {_format_path(page)})")
 
         for root in lang_module_roots.values():
             for partial in _iter_files(root / "partials", ".adoc"):
@@ -3286,10 +3302,10 @@ def check_pages_unbalanced_divs() -> bool:
                     continue
                 ok = False
                 total_hits += len(problems)
-                print(f"FILE     {partial}  (not reached by any page's includes -- checked standalone)")
+                print(f"FILE     {_format_path(partial)}  (not reached by any page's includes -- checked standalone)")
                 for kind, text, sfile, slineno in problems:
                     label = "unclosed <div>" if kind == "unclosed" else "unmatched </div>"
-                    print(f"  {sfile}:{slineno}: {label}: {text!r}")
+                    print(f"  {_format_location(sfile, slineno)}: {label}: {text!r}")
     if ok:
         print("OK: no unbalanced <div> tags found in pages.")
     else:
@@ -3397,7 +3413,7 @@ def check_pages_orphaned() -> bool:
                     continue
                 ok = False
                 orphaned_count += 1
-                print(f"ORPHANED  {f}  (not referenced in any nav.adoc)")
+                print(f"ORPHANED  {_format_path(f)}  (not referenced in any nav.adoc)")
 
     if ok:
         print("OK: all pages are referenced in nav.adoc.")
@@ -3573,7 +3589,7 @@ def check_pages_structure_parity() -> bool:
                 rel = en_file.relative_to(en_root)
                 ru_file = ru_root / rel
                 if not ru_file.is_file():
-                    print(f"MISSING  {en_file}  (no ru counterpart)")
+                    print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
                     ok = False
                     mismatch_count += 1
                     continue
@@ -3586,7 +3602,7 @@ def check_pages_structure_parity() -> bool:
                     continue
                 rel = ru_file.relative_to(ru_root)
                 if not (en_root / rel).is_file():
-                    print(f"MISSING  {ru_file}  (no en counterpart)")
+                    print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
                     ok = False
                     mismatch_count += 1
 
@@ -3696,8 +3712,8 @@ def _parity_refs(en_file, en_lines, ru_file, ru_lines):
     token's own row, any further occurrences get an indented sub-line
     each."""
     sides = [(en_file, sorted(set(en_lines))), (ru_file, sorted(set(ru_lines)))]
-    suffix = "   " + "  ".join(f"{f}:{ns[0]}" for f, ns in sides if ns)
-    extra = [f"        {f}:{n}" for f, ns in sides for n in ns[1:]]
+    suffix = "   " + "  ".join(f"{_format_location(f, ns[0])}" for f, ns in sides if ns)
+    extra = [f"        {_format_location(f, n)}" for f, ns in sides for n in ns[1:]]
     return (suffix if suffix.strip() else ""), extra
 
 
@@ -3712,12 +3728,12 @@ def check_pages_link_parity() -> bool:
     mismatch_count = 0
     for en_file, ru_file in _en_ru_page_pairs():
         if en_file is None:
-            print(f"MISSING  {ru_file}  (no en counterpart)")
+            print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
             ok = False
             mismatch_count += 1
             continue
         if not ru_file.is_file():
-            print(f"MISSING  {en_file}  (no ru counterpart)")
+            print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
             ok = False
             mismatch_count += 1
             continue
@@ -3825,12 +3841,12 @@ def check_pages_literal_parity() -> bool:
     mismatch_count = 0
     for en_file, ru_file in _en_ru_page_pairs():
         if en_file is None:
-            print(f"MISSING  {ru_file}  (no en counterpart)")
+            print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
             ok = False
             mismatch_count += 1
             continue
         if not ru_file.is_file():
-            print(f"MISSING  {en_file}  (no ru counterpart)")
+            print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
             ok = False
             mismatch_count += 1
             continue
@@ -4039,7 +4055,7 @@ def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
         if en_text == ru_text:
             ensure_header()
             finding_count += 1
-            print(f"  UNTRANSLATED  {ru_file}:{lineno}: {en_text}")
+            print(f"  UNTRANSLATED  {_format_location(ru_file, lineno)}: {en_text}")
         elif not _HEADING_RE.match(en_text):
             candidate = _strip_noise(ru_text).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
@@ -4048,7 +4064,7 @@ def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
                 ensure_header()
                 finding_count += 1
                 marker = f" [{', '.join(sorted(set(hits)))}]"
-                print(f"  SUSPECT       {ru_file}:{lineno}: {ru_text}{marker}")
+                print(f"  SUSPECT       {_format_location(ru_file, lineno)}: {ru_text}{marker}")
 
     return finding_count
 
@@ -4063,7 +4079,7 @@ def check_pages_translation() -> bool:
     def report_header(ru_file):
         nonlocal ok
         ok = False
-        print(f"FILE     {ru_file}")
+        print(f"FILE     {_format_path(ru_file)}")
 
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
@@ -4436,9 +4452,9 @@ def check_pages_file_path_italics() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, line, matches in hits:
-                        print(f"  {f}:{i}: {', '.join(matches)}")
+                        print(f"  {_format_location(f, i)}: {', '.join(matches)}")
                         print(f"    {line}")
     if ok:
         print("OK: no un-italicized file/directory names found in pages.")
@@ -4622,11 +4638,11 @@ def check_pages_table_cell_periods() -> bool:
                     ok = False
                     total_period += sum(1 for h in hits if h[2] == "period")
                     total_no_period += sum(1 for h in hits if h[2] == "no-period")
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for lineno, text, kind, label in sorted(hits, key=lambda h: (h[0], str(h[1]))):
                         text = text.strip() if isinstance(text, str) else text
                         prefix = f"NO PERIOD before a trailing {label} -- " if kind == "no-period" else ""
-                        print(f"  {f}:{lineno}: {prefix}{text}")
+                        print(f"  {_format_location(f, lineno)}: {prefix}{text}")
 
     if ok:
         print("OK: table cell punctuation is consistent.")
@@ -4664,9 +4680,9 @@ def check_pages_no_curly_quotes() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, col, l in hits:
-                        print(f"  {f}:{i}:{col}: {l}")
+                        print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
         print("OK: no curly quote characters (‘ ’ “ ”) found in pages.")
     else:
@@ -4696,9 +4712,9 @@ def check_pages_no_copyright_symbols() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, col, l in hits:
-                        print(f"  {f}:{i}:{col}: {l}")
+                        print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
         print("OK: no ©/®/™ characters found in pages.")
     else:
@@ -4735,7 +4751,7 @@ def check_pages_required_attrs() -> bool:
                 if missing:
                     ok = False
                     total_hits += 1
-                    print(f"MISSING  {f}  ({', '.join(missing)})")
+                    print(f"MISSING  {_format_path(f)}  ({', '.join(missing)})")
     if ok:
         print("OK: every page defines :page-productlogo:, "
               ":page-htmltitle:, and :description:.")
@@ -4769,9 +4785,9 @@ def check_pages_heading_no_period() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l}")
+                        print(f"  {_format_location(f, i)}: {l}")
     if ok:
         print("OK: no heading ends with a period.")
     else:
@@ -4810,9 +4826,9 @@ def check_pages_heading_no_markup() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l}")
+                        print(f"  {_format_location(f, i)}: {l}")
     if ok:
         print("OK: no heading carries font styles or links.")
     else:
@@ -4887,9 +4903,9 @@ def check_pages_table_empty_cells() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for lineno in sorted(hits):
-                        print(f"  {f}:{lineno}: {lines[lineno - 1].rstrip()}")
+                        print(f"  {_format_location(f, lineno)}: {lines[lineno - 1].rstrip()}")
     if ok:
         print("OK: no empty table cells found.")
     else:
@@ -4995,10 +5011,10 @@ def check_pages_table_header() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {page}")
+                    print(f"FILE     {_format_path(page)}")
                     for source_file, source_lineno in hits:
-                        included = "" if source_file == page else f"  (included from {page})"
-                        print(f"  {source_file}:{source_lineno}: table has no header row{included}")
+                        included = "" if source_file == page else f"  (included from {_format_path(page)})"
+                        print(f"  {_format_location(source_file, source_lineno)}: table has no header row{included}")
 
         for root in lang_module_roots.values():
             for partial in _iter_files(root / "partials", ".adoc"):
@@ -5009,10 +5025,10 @@ def check_pages_table_header() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {partial}  (not reached by any page's includes -- checked standalone)")
+                    print(f"FILE     {_format_path(partial)}  (not reached by any page's includes -- checked standalone)")
                     for source_file, source_lineno in hits:
-                        included = "" if source_file == partial else f"  (included from {partial})"
-                        print(f"  {source_file}:{source_lineno}: table has no header row{included}")
+                        included = "" if source_file == partial else f"  (included from {_format_path(partial)})"
+                        print(f"  {_format_location(source_file, source_lineno)}: table has no header row{included}")
     if ok:
         print("OK: every table declares a header row.")
     else:
@@ -5088,9 +5104,9 @@ def check_pages_shell_block_lang() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for lineno, msg in hits:
-                        print(f"  {f}:{lineno}: {msg}")
+                        print(f"  {_format_location(f, lineno)}: {msg}")
     if ok:
         print("OK: every shell-prompt source block uses [source,console].")
     else:
@@ -5223,9 +5239,9 @@ def _check_terminology_pair(en_file: Path, ru_file: Path, term_re, glossary, rep
             finding_count += 1
             forms = ", ".join(f"'{f}'" for f in sorted(entry["ru_display"]))
             if ru_count == 0:
-                print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- expected one of [{forms}], not found")
+                print(f"  MISMATCH  {_format_location(ru_file, lineno)}: term '{key}' -- expected one of [{forms}], not found")
             else:
-                print(f"  MISMATCH  {ru_file}:{lineno}: term '{key}' -- appears {en_count}x on the EN line "
+                print(f"  MISMATCH  {_format_location(ru_file, lineno)}: term '{key}' -- appears {en_count}x on the EN line "
                       f"but a translation from [{forms}] is present only {ru_count}x")
             print(f"    EN: {en_text}")
             print(f"    RU: {ru_text}")
@@ -5252,7 +5268,7 @@ def check_pages_terminology() -> bool:
     def report_header(ru_file):
         nonlocal ok
         ok = False
-        print(f"FILE     {ru_file}")
+        print(f"FILE     {_format_path(ru_file)}")
 
     for _, en_root, ru_root in module_roots():
         for subdir in ("pages", "partials"):
@@ -5384,9 +5400,9 @@ def check_pages_ru_latin_homoglyphs() -> bool:
             if hits:
                 ok = False
                 total_hits += len(hits)
-                print(f"FILE     {f}")
+                print(f"FILE     {_format_path(f)}")
                 for i, col, tok, line in hits:
-                    print(f"  {f}:{i}:{col}: {tok!r}")
+                    print(f"  {_format_location(f, i, col)}: {tok!r}")
                     print(f"    {line}")
     if ok:
         print("OK: no Latin/Cyrillic homoglyph mix-ups found in ru/ pages.")
@@ -5886,7 +5902,7 @@ def check_links_external() -> bool:
         for url in sorted(sites):
             print(f"  {url}")
             for f, ln in sites[url]:
-                print(f"        {f}:{ln}")
+                print(f"        {_format_location(f, ln)}")
         return True
 
     cache = _load_link_cache()
@@ -5943,7 +5959,7 @@ def check_links_external() -> bool:
     def _print_hit(label, detail, url):
         print(f"{label:<11} {url}  ({detail})")
         for f, ln in sites[url]:
-            print(f"        {f}:{ln}")
+            print(f"        {_format_location(f, ln)}")
 
     prev = None
     for label, detail, url in shown:
@@ -6133,9 +6149,9 @@ def check_pages_link_new_tab() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, url, reason in hits:
-                        print(f"  {f}:{i}: {url}  ({reason})")
+                        print(f"  {_format_location(f, i)}: {url}  ({reason})")
     if ok:
         print("OK: every external link opens in a new tab with opts=nofollow.")
     else:
@@ -6179,9 +6195,9 @@ def check_pages_xref_own_product() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, target in hits:
-                        print(f"  {f}:{i}: {target}[]  "
+                        print(f"  {_format_location(f, i)}: {target}[]  "
                               f"('{own_name}:' is this product's own name -- drop it)")
     if ok:
         print("OK: no internal xref: names this product's own component.")
@@ -6232,9 +6248,9 @@ def check_pages_image_alt() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, matched in hits:
-                        print(f"  {f}:{i}: {matched}  (no alt text)")
+                        print(f"  {_format_location(f, i)}: {matched}  (no alt text)")
     if ok:
         print("OK: every image:: has alt text.")
     else:
@@ -6277,9 +6293,9 @@ def check_pages_icon_svg() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, target in hits:
-                        print(f"  {f}:{i}: image:{target}[]  (inline icon is not .svg)")
+                        print(f"  {_format_location(f, i)}: image:{target}[]  (inline icon is not .svg)")
     if ok:
         print("OK: every inline icon (image:) is .svg.")
     else:
@@ -6473,9 +6489,9 @@ def check_pages_xref_title() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for lineno, target, text, title in hits:
-                        print(f"  {f}:{lineno}: {target}[{text}]  (section is titled \"{title}\")")
+                        print(f"  {_format_location(f, lineno)}: {target}[{text}]  (section is titled \"{title}\")")
     if ok:
         print("OK: every xref's capitalized link text matches its target section title.")
     else:
@@ -6526,9 +6542,9 @@ def check_pages_admonition_caption() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l}  (no caption above)")
+                        print(f"  {_format_location(f, i)}: {l}  (no caption above)")
     if ok:
         print("OK: every admonition has a caption.")
     else:
@@ -6559,9 +6575,9 @@ def check_pages_heading_article() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l}")
+                        print(f"  {_format_location(f, i)}: {l}")
     if ok:
         print("OK: no heading starts with an article (a/an/the).")
     else:
@@ -6595,9 +6611,9 @@ def check_pages_heading_gerund() -> bool:
                 if hits:
                     ok = False
                     total_hits += len(hits)
-                    print(f"FILE     {f}")
+                    print(f"FILE     {_format_path(f)}")
                     for i, l in hits:
-                        print(f"  {f}:{i}: {l}  (use infinitive, e.g. 'Creating a table' -> 'Create a table')")
+                        print(f"  {_format_location(f, i)}: {l}  (use infinitive, e.g. 'Creating a table' -> 'Create a table')")
     if ok:
         print("OK: no heading starts with a gerund + object.")
     else:
@@ -7626,7 +7642,7 @@ def run_sync(en_file: str, dry_run: bool):
     if ru_existed:
         ru_lines = (_read_text(ru_path) or "").splitlines()
     else:
-        print(f"NOTE: {ru_path} does not exist yet -- creating it as a full (untranslated) copy of EN.")
+        print(f"NOTE: {_format_path(ru_path)} does not exist yet -- creating it as a full (untranslated) copy of EN.")
         ru_lines = []
 
     ref = None
@@ -7665,7 +7681,7 @@ def run_sync(en_file: str, dry_run: bool):
     structurally_synced = merged == ru_lines
 
     if structurally_synced:
-        print(f"OK: {ru_path} already matches the EN structure/content; nothing to do structurally.")
+        print(f"OK: {_format_path(ru_path)} already matches the EN structure/content; nothing to do structurally.")
     elif dry_run:
         diff = difflib.unified_diff(
             ru_lines, merged,
@@ -7676,7 +7692,7 @@ def run_sync(en_file: str, dry_run: bool):
     else:
         ru_path.parent.mkdir(parents=True, exist_ok=True)
         ru_path.write_text("\n".join(merged) + "\n", encoding="utf-8")
-        print(f"Updated {ru_path}")
+        print(f"Updated {_format_path(ru_path)}")
 
     real_inserted = []
     for block in inserted:
@@ -7709,7 +7725,7 @@ def run_sync(en_file: str, dry_run: bool):
             print(f"    // STALE VERSION: {f['ru']}")
 
     if ru_existed and ref is None:
-        print(f"\nNOTE: no git history found for {ru_path}; skipped the reworded-line check.")
+        print(f"\nNOTE: no git history found for {_format_path(ru_path)}; skipped the reworded-line check.")
 
     real_orphaned = []
     for _, block in orphaned:
@@ -8086,7 +8102,7 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args, head=None, b
     for i, repo in enumerate(repos):
         if i:
             print()
-        print(f"##### {repo} #####")
+        print(f"##### {_format_path(repo)} #####")
         os.chdir(repo)
         try:
             # _own_component_name caches by lang only, assuming one repo per

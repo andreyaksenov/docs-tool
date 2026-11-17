@@ -109,7 +109,11 @@ by kind:
 | `REDIRECT` `UNREACHABLE` `VPN?` | `check links` only — see the `links` family below |
 
 Where a specific line is meaningful it's `path:line` or `path:line:col`, which most
-editors and terminals turn into a clickable link. Running more than one rule puts a
+editors and terminals turn into a clickable link. In a JetBrains Python run
+configuration (`PYCHARM_HOSTED=1`), finding paths are printed as absolute
+`file:///...` URLs instead (`file:///path/to/page.adoc:43`), which the Run console
+turns into clickable links. Set `DOCS_TOOL_IDE_LINKS=1` to force that format in
+another environment. Running more than one rule puts a
 header before each, naming the command that re-runs just that rule on its own:
 
 ```
