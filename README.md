@@ -67,6 +67,14 @@ Rules are grouped into seven **families**:
 There is no `check all` — name the families you want. `links` reaches the network
 and only runs when you ask for it by name.
 
+`--page` scopes per-file checks to matching pages/partials. Orphan checks print
+`SKIP: repository-global check; not applicable with --page.` instead of running. Nav parity
+(LN05) does the same except with `--page BRANCH` when the branch changes a `nav.adoc`; in that
+case it runs, including for a nav-only branch. Example character/parity checks (CH02, CH07, LN04)
+and image-dimension parity (LN08) follow nested includes from selected content in either language
+and check only the referenced EN/RU dependencies. Broken-reference resolution still scans the
+whole site, but only selected source files produce findings.
+
 `--target NAME` picks a scan target other than the default `pages` (`pages/` +
 `partials/`) — see `list targets`.
 
@@ -173,8 +181,8 @@ own ID/Command/Flags table.
   pass the explicit flag to run it. Each finding is one clickable `file:line:column` line with
   space/tab counts; whitespace-only lines are labeled directly. AsciiDoc's intentional
   space-plus (` +`) hard break is clean. `--target examples` scans every
-  example file type → `CH07`; that target ignores `--page`, like the other whole-site
-  example checks.
+  example file type → `CH07`; under `--page`, example targets check only files
+  referenced by the selected content in either language.
   ```bash
   ./docs_tool.py check chars --trailing-whitespace
   ./docs_tool.py check chars --trailing-whitespace --page resource_groups.adoc
@@ -238,9 +246,9 @@ own ID/Command/Flags table.
 | `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
 
 Reference resolution always scans the whole site. `--page` narrows which source files
-produce findings for `--broken`, and which files are reported for `--orphaned --target
-tags|partials`; the other orphan targets ignore it. Bare `check refs` runs `--broken`
-plus every orphan target.
+produce findings for `--broken`; every `--orphaned` target is repository-global and prints
+`SKIP` instead of running. Bare `check refs` without `--page` runs `--broken` plus every
+orphan target.
 
 - **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
   `link:` reference resolves to a real file or anchor. Resolution context is built
@@ -624,15 +632,18 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   ```
 
 - **`LN04` · `check l10n --examples`** — EN and RU `examples/` must hold the same
-  files (byte-for-byte; `.sql` comments may differ). Whole-site — ignores `--page`.
+  files (byte-for-byte; `.sql` comments may differ). Under `--page`, only example
+  pairs referenced by selected content in either language are compared.
   ```bash
   ./docs_tool.py check l10n --examples
   ```
 
 - **`LN05` · `check l10n --nav`** — EN and RU `nav.adoc` structure (list depth,
-  `xref:`/`include::` targets) must match; translated labels ignored. Ignores `--page`.
+  `xref:`/`include::` targets) must match; translated labels ignored. Other page selectors
+  skip it, but `--page BRANCH` runs it whenever the branch changes either language's `nav.adoc`.
   ```bash
   ./docs_tool.py check l10n --nav
+  ./docs_tool.py check l10n --nav --page BRANCH
   ```
 
 - **`LN06` · `check l10n --links`** · beta — EN and RU must reference the same
@@ -670,7 +681,8 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   the same pixel dimensions. `_en`/`-en` and `_ru`/`-ru` filename variants are paired
   as localized counterparts. Missing counterparts and unreadable images are reported.
   SVG and other formats are skipped. Small cropping or capture differences can be
-  legitimate, so treat findings as a review list. Whole-site — ignores `--page`.
+  legitimate, so treat findings as a review list. Under `--page`, only image pairs
+  referenced by selected content in either language are compared.
   ```bash
   ./docs_tool.py check l10n --image-dimensions
   ```

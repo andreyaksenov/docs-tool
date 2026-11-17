@@ -402,7 +402,8 @@ def _iter_files(root: Path, suffix: str = None):
 
 
 # Optional --page filter, or None when not requested:
-# {"names": {file-path-parts tuple, ...}, "dirs": {dir-parts tuple, ...}}
+# {"names": {file-path-parts tuple, ...}, "dirs": {dir-parts tuple, ...},
+#  "nav": True}  # "nav" is present only when --page BRANCH changed a nav.adoc.
 # "names" matches a file whose content-relative path (with its own .adoc
 # stripped, see _content_relparts_stem) ENDS WITH the given parts tuple --
 # from a NAME ending in .adoc, split on "/" (a bare "resource_groups.adoc"
@@ -412,7 +413,9 @@ def _iter_files(root: Path, suffix: str = None):
 # (from a NAME not ending in .adoc -- see main()). Applied at per-file report
 # loops. Corpus-building loops (broken-refs' resolution context, orphaned
 # pages/examples/images) scan the whole site regardless, since narrowing those
-# would make resolution/usage analysis wrong rather than faster.
+# would make resolution/usage analysis wrong rather than faster. The check
+# runner skips repository-global rules whenever this filter is set, except for
+# nav parity when a BRANCH filter has "nav" set.
 _PAGE_FILTER = None
 
 
@@ -522,8 +525,8 @@ def _branch_page_name(repo_path):
     return parts[4:-1] + (PurePosixPath(parts[-1]).stem,)
 
 
-def _git_branch_adoc_names(head=None, base=None):
-    """Content-relative page names changed by commits in base...head."""
+def _git_branch_page_scope(head=None, base=None):
+    """Content-relative page names and whether navigation changed in base...head."""
     head = head or "HEAD"
     head_commit = _git_commit(head, "--head")
     if head_commit != _git_commit("HEAD", "HEAD"):
@@ -539,8 +542,21 @@ def _git_branch_adoc_names(head=None, base=None):
         detail = result.stderr.strip()
         _usage_error(f"error: --page BRANCH cannot diff {base}...{head}"
                      + (f": {detail}" if detail else ""))
-    names = {_branch_page_name(path) for path in result.stdout.split("\0") if path}
-    return names - {None}
+    paths = [path for path in result.stdout.split("\0") if path]
+    names = {_branch_page_name(path) for path in paths} - {None}
+    nav_changed = any(
+        len(PurePosixPath(path).parts) == 4
+        and PurePosixPath(path).parts[0] in ("en", "ru")
+        and PurePosixPath(path).parts[1] == "modules"
+        and PurePosixPath(path).parts[3] == "nav.adoc"
+        for path in paths
+    )
+    return names, nav_changed
+
+
+def _git_branch_adoc_names(head=None, base=None):
+    """Content-relative page names changed by commits in base...head."""
+    return _git_branch_page_scope(head, base)[0]
 
 
 def _validate_branch_page_options(page_args, head=None, base=None):
@@ -616,11 +632,21 @@ def _unified_diff_lines(en_lines, ru_lines, en_file, ru_file, n=1):
 
 def check_examples_no_cyrillic() -> bool:
     """Port of check_examples_no_cyrillic.sh: no Cyrillic in en/ examples
-    (checked across every module)."""
+    (checked across every module). With --page, only examples referenced by
+    selected content in either language are checked."""
     ok = True
     total_hits = 0
-    for _, en_root, _ in module_roots():
+    modules = list(module_roots())
+    en_dependencies = _selected_page_dependencies(
+        {name: root for name, root, _ in modules}, "en")
+    ru_dependencies = _selected_page_dependencies(
+        {name: root for name, _, root in modules}, "ru")
+    for _, en_root, ru_root in modules:
         for f in _iter_files(en_root / "examples"):
+            ru_file = ru_root / "examples" / f.relative_to(en_root / "examples")
+            if not _dependency_pair_selected(
+                    f, (ru_file,), en_dependencies, ru_dependencies, "examples"):
+                continue
             lines = _read_lines(f)
             if lines is None:
                 continue
@@ -745,14 +771,20 @@ def _blank_sql_comments(text: str):
 def check_examples_parity() -> bool:
     """Port of check_examples_parity.sh: en/ru examples must have the same
     files (per module); non-.sql files must match byte-for-byte, .sql files
-    only need to match once comment-only lines are blanked out."""
+    only need to match once comment-only lines are blanked out. With --page,
+    only pairs referenced by selected content in either language are checked."""
     ok = True
     mismatch_count = 0
+    modules = list(module_roots())
+    en_dependencies = _selected_page_dependencies(
+        {name: root for name, root, _ in modules}, "en")
+    ru_dependencies = _selected_page_dependencies(
+        {name: root for name, _, root in modules}, "ru")
 
     def skip(f: Path, base: Path):
         return "_demo_cluster" in f.relative_to(base).parts
 
-    for _, en_root, ru_root in module_roots():
+    for _, en_root, ru_root in modules:
         en_examples = en_root / "examples"
         ru_examples = ru_root / "examples"
 
@@ -761,6 +793,9 @@ def check_examples_parity() -> bool:
                 continue
             rel = en_file.relative_to(en_examples)
             ru_file = ru_examples / rel
+            if not _dependency_pair_selected(
+                    en_file, (ru_file,), en_dependencies, ru_dependencies, "examples"):
+                continue
             if not ru_file.is_file():
                 print(f"MISSING  {en_file}  (no ru counterpart)")
                 ok = False
@@ -797,7 +832,11 @@ def check_examples_parity() -> bool:
             if skip(ru_file, ru_examples):
                 continue
             rel = ru_file.relative_to(ru_examples)
-            if not (en_examples / rel).is_file():
+            en_file = en_examples / rel
+            if not _dependency_pair_selected(
+                    ru_file, (en_file,), ru_dependencies, en_dependencies, "examples"):
+                continue
+            if not en_file.is_file():
                 print(f"MISSING  {ru_file}  (no en counterpart)")
                 ok = False
                 mismatch_count += 1
@@ -986,10 +1025,16 @@ def check_images_dimension_parity() -> bool:
     pair with its _ru/-ru counterpart. PNG, JPEG, and GIF are read directly
     from their headers; SVG and other formats are skipped. Small crop/capture
     differences can be legitimate, so findings are a beta review list.
-    Whole-site check: ignores --page."""
+    With --page, only images referenced by selected content in either language
+    are checked."""
     ok = True
     finding_count = 0
-    for _, en_root, ru_root in module_roots():
+    modules = list(module_roots())
+    en_dependencies = _selected_page_dependencies(
+        {name: root for name, root, _ in modules}, "en")
+    ru_dependencies = _selected_page_dependencies(
+        {name: root for name, _, root in modules}, "ru")
+    for _, en_root, ru_root in modules:
         en_images = en_root / "images"
         ru_images = ru_root / "images"
         en_files = {
@@ -1006,6 +1051,11 @@ def check_images_dimension_parity() -> bool:
         used_ru = set()
         for en_rel in sorted(en_files):
             en_file = en_files[en_rel]
+            ru_file = ru_images / en_rel
+            ru_localized = _localized_image_counterpart(ru_file, "en")
+            if not _dependency_pair_selected(
+                    en_file, (ru_file, ru_localized), en_dependencies, ru_dependencies, "images"):
+                continue
             ru_rel = en_rel if en_rel in ru_files else _localized_image_counterpart(en_rel, "en")
             if ru_rel not in ru_files or ru_rel in used_ru:
                 print(f"MISSING  {en_file}  (no ru counterpart)")
@@ -1034,7 +1084,13 @@ def check_images_dimension_parity() -> bool:
                 finding_count += 1
 
         for ru_rel in sorted(ru_files.keys() - used_ru):
-            print(f"MISSING  {ru_files[ru_rel]}  (no en counterpart)")
+            ru_file = ru_files[ru_rel]
+            en_file = en_images / ru_rel
+            en_localized = _localized_image_counterpart(en_file, "ru")
+            if not _dependency_pair_selected(
+                    ru_file, (en_file, en_localized), ru_dependencies, en_dependencies, "images"):
+                continue
+            print(f"MISSING  {ru_file}  (no en counterpart)")
             ok = False
             finding_count += 1
 
@@ -1137,7 +1193,8 @@ def check_nav_structure_parity() -> bool:
     """Port of check_nav_structure_parity.sh. A module only has a nav.adoc
     of its own on some multi-module Antora sites (e.g. a top-level ROOT nav
     plus a second one for a "how-to" module); modules without one are
-    silently skipped."""
+    silently skipped. With --page BRANCH, the runner executes this check when
+    the branch changed a nav.adoc; other page scopes skip it."""
     ok = True
     any_nav = False
     mismatch_count = 0
@@ -2128,6 +2185,95 @@ def _resolve_include_target(t, directory, root, lang_module_roots, lang, own_nam
 _INCLUDE_MACRO_RE = re.compile(r'include::([^\[\s]+)\[([^\]]*)\]')
 
 
+def _selected_page_dependencies(lang_module_roots, lang):
+    """Examples and images reachable from --page-selected content, or None
+    when no page filter is active. Includes are followed recursively with
+    their tag filters and component contexts intact. A reference in either
+    language later selects both sides of the corresponding EN/RU pair."""
+    if _PAGE_FILTER is None:
+        return None
+    dependencies = {"examples": set(), "images": set()}
+    own_name = _own_component_name(lang)
+    own_lang_module_roots = lang_module_roots
+    seen = set()
+
+    def walk(file, root, current_roots, only_lines, fallback_roots, depth=0):
+        key = (file, root, None if only_lines is None else frozenset(only_lines),
+               frozenset(fallback_roots), tuple(sorted(current_roots)))
+        if depth > 25 or key in seen:
+            return
+        seen.add(key)
+        lines = _read_lines(file)
+        if lines is None:
+            return
+        comment_excluded = _excluded_comment_lines(file)
+        ref_excluded = _excluded_ref_lines(file)
+        for lineno, line in enumerate(lines, 1):
+            if only_lines is not None and lineno not in only_lines:
+                continue
+            if lineno not in ref_excluded:
+                for macro, target in _IMAGE_REF_RE.findall(line):
+                    if target.startswith(("http://", "https://")):
+                        continue
+                    if macro.startswith(("injectSvg", "inlineSVG")):
+                        dependencies["images"].add(root / "images" / _strip_root_slash(target))
+                        continue
+                    if _VERSION_PIN_RE.match(target):
+                        continue
+                    candidate_roots = fallback_roots
+                    m_component = _COMPONENT_PREFIX_RE.match(target)
+                    if m_component:
+                        component = m_component.group(0)[:-1]
+                        resolved = _resolve_module_ref(
+                            component, target[len(m_component.group(0)):], current_roots,
+                            lang, own_name, own_lang_module_roots)
+                        if resolved is None:
+                            continue
+                        candidate_roots = {resolved[0]}
+                        target = resolved[1]
+                    for candidate in candidate_roots:
+                        dependencies["images"].add(candidate / "images" / _strip_root_slash(target))
+            if lineno in comment_excluded:
+                continue
+            for match in _INCLUDE_MACRO_RE.finditer(line):
+                target, attrs = match.group(1), match.group(2)
+                resolved = _resolve_include_target(
+                    target, file.parent, root, current_roots, lang, own_name,
+                    with_root=True, own_lang_module_roots=own_lang_module_roots)
+                if resolved is None:
+                    continue
+                target_file, target_root = resolved
+                if _is_under(target_file, target_root / "examples"):
+                    dependencies["examples"].add(target_file)
+                    continue
+                if target_file.suffix != ".adoc" or not target_file.is_file():
+                    continue
+                target_lines = _read_lines(target_file)
+                if target_lines is None:
+                    continue
+                tags, negated, whole_file = _parse_include_attrs(attrs)
+                child_lines = _tag_filtered_line_numbers(target_lines, tags, negated, whole_file)
+                m_component = _COMPONENT_PREFIX_RE.match(target)
+                next_roots = (_component_context(
+                    m_component.group(0)[:-1], lang, current_roots)
+                    if m_component else current_roots)
+                walk(target_file, target_root, next_roots, child_lines, {root}, depth + 1)
+
+    for root in lang_module_roots.values():
+        sources = list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc"))
+        for file in sources:
+            if _page_allowed(file):
+                walk(file, root, lang_module_roots, None, {root})
+    return dependencies
+
+
+def _dependency_pair_selected(file, counterparts, own_dependencies, other_dependencies, kind):
+    if own_dependencies is None:
+        return True
+    return file in own_dependencies[kind] or any(
+        counterpart in other_dependencies[kind] for counterpart in counterparts)
+
+
 def _collect_tag_usage(lang_module_roots, lang):
     """Map include targets to per-call-site (tags, negated, whole_file)
     events. Call sites stay separate because one include may select a nested
@@ -2198,7 +2344,7 @@ def check_tags_orphaned() -> bool:
     """Report tag regions never selected directly, through a used parent,
     or by a whole-file/wildcard include. Usage includes registered external
     components. Tag-less partials are covered by check_partials_orphaned.
-    --page filters reported files only; the usage scan remains site-wide."""
+    Repository-global: the CLI skips it with SKIP when --page is set."""
     ok = True
     orphaned_count = 0
     _SKIPPED_COMPONENTS.clear()
@@ -2497,11 +2643,25 @@ def check_pages_no_trailing_whitespace() -> bool:
 
 def check_examples_no_trailing_whitespace() -> bool:
     """Same trailing-space/tab rule over every examples/ file type in en/ru,
-    including comments and verbatim content. Whole-site: ignores --page."""
+    including comments and verbatim content. With --page, only example pairs
+    referenced by selected content in either language are checked."""
     files = []
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            files.extend(_iter_files(root / "examples"))
+    modules = list(module_roots())
+    en_dependencies = _selected_page_dependencies(
+        {name: root for name, root, _ in modules}, "en")
+    ru_dependencies = _selected_page_dependencies(
+        {name: root for name, _, root in modules}, "ru")
+    for _, en_root, ru_root in modules:
+        for _, root, other_root, own_dependencies, other_dependencies in (
+                ("en", en_root, ru_root, en_dependencies, ru_dependencies),
+                ("ru", ru_root, en_root, ru_dependencies, en_dependencies),
+        ):
+            examples = root / "examples"
+            for file in _iter_files(examples):
+                counterpart = other_root / "examples" / file.relative_to(examples)
+                if _dependency_pair_selected(
+                        file, (counterpart,), own_dependencies, other_dependencies, "examples"):
+                    files.append(file)
     return _check_no_trailing_whitespace(files, "examples")
 
 
@@ -6715,14 +6875,18 @@ def _rules_table():
 
 
 _RULES_IGNORING_PAGE = {
-    "examples-no-cyrillic", "examples-no-trailing-whitespace", "examples-parity",
-    "images-dimension-parity", "nav-structure-parity", "pages-orphaned",
-    "examples-orphaned", "images-orphaned",
+    "nav-structure-parity", "pages-orphaned", "examples-orphaned", "images-orphaned",
 }
+# Repository-wide questions cannot be narrowed to selected pages. This also
+# covers partial/tag orphan checks, whose functions still support direct
+# filtered reporting but whose CLI invocations are global like every orphan
+# target. Broken refs is not global: only its resolution context is site-wide.
+_GLOBAL_CHECKS = _RULES_IGNORING_PAGE | {"partials-orphaned", "tags-orphaned"}
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",
     "partials-orphaned", "examples-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
-    "pages-table-header",
+    "pages-table-header", "examples-no-cyrillic", "examples-no-trailing-whitespace",
+    "examples-parity", "images-dimension-parity",
 }
 
 
@@ -6742,7 +6906,7 @@ def _rule_examples(key):
     from _check_command so an example can't drift from the real syntax."""
     cmd = _check_command(key)
     out = [(f"./docs_tool.py {cmd}", "the whole site")]
-    if key not in _RULES_IGNORING_PAGE:
+    if key not in _GLOBAL_CHECKS:
         out.append((f"./docs_tool.py {cmd} --page resource_groups.adoc",
                     "one page, a directory, UNCOMMITTED, or BRANCH"))
     # One line per sibling target, named outright -- e.g. refs --orphaned's
@@ -7576,9 +7740,11 @@ def build_parser():
                              "or untracked) per `git status` -- handy in a pre-commit hook. "
                              "Pass BRANCH to scope to pages/partials changed by commits in "
                              "base...head (default HEAD and the detected default base branch). "
-                             "Whole-site orphan checks and nav/structure parity of nav.adoc "
-                             "are unaffected. Broken-refs resolution remains site-wide, but "
-                             "only selected source files produce findings. Optional -- "
+                             "Repository-global orphan checks are skipped with SKIP. "
+                             "Nav parity runs only when BRANCH changed nav.adoc. "
+                             "Example/image checks are limited to dependencies of selected "
+                             "content. Broken-refs resolution remains site-wide, "
+                             "but only selected source files produce findings. Optional -- "
                              "omit to check the whole site as before.")
     page_action.completer = _complete_page_or_dir_name
     parser.add_argument("--head", metavar="REV",
@@ -7705,7 +7871,7 @@ def _reject_unmatched_page_filters(page_args, repo_paths=None):
 def _apply_page_filter(page_args, head=None, base=None):
     """Turn --page NAME values into the _PAGE_FILTER global (shared by both
     the legacy and the `check` surface). Exits 0 immediately if dynamic
-    selectors resolve to nothing."""
+    selectors resolve to no pages and no branch navigation change."""
     global _PAGE_FILTER
     _validate_branch_page_options(page_args, head, base)
     if not page_args:
@@ -7714,12 +7880,16 @@ def _apply_page_filter(page_args, head=None, base=None):
         [n for n in page_args if n not in _PAGE_SCOPE_SENTINELS])
     if "UNCOMMITTED" in page_args:
         names |= {(s,) for s in _git_uncommitted_adoc_stems()}
+    nav_changed = False
     if "BRANCH" in page_args:
-        names |= _git_branch_adoc_names(head, base)
-    if not names and not dirs:
+        branch_names, nav_changed = _git_branch_page_scope(head, base)
+        names |= branch_names
+    if not names and not dirs and not nav_changed:
         print(_empty_page_scope_message(page_args))
         sys.exit(0)
     _PAGE_FILTER = {"names": names, "dirs": dirs}
+    if nav_changed:
+        _PAGE_FILTER["nav"] = True
     _reject_unmatched_page_filters(page_args)
 
 
@@ -7737,13 +7907,17 @@ def _apply_page_filter_for_repo(page_args, head=None, base=None):
         [n for n in page_args if n not in _PAGE_SCOPE_SENTINELS])
     if "UNCOMMITTED" in page_args:
         names |= {(s,) for s in _git_uncommitted_adoc_stems()}
+    nav_changed = False
     if "BRANCH" in page_args:
-        names |= _git_branch_adoc_names(head, base)
-    if not names and not dirs:
+        branch_names, nav_changed = _git_branch_page_scope(head, base)
+        names |= branch_names
+    if not names and not dirs and not nav_changed:
         print(_empty_page_scope_message(page_args))
         _PAGE_FILTER = None
         return True
     _PAGE_FILTER = {"names": names, "dirs": dirs}
+    if nav_changed:
+        _PAGE_FILTER["nav"] = True
     return False
 
 
@@ -7825,8 +7999,10 @@ def _repo_glossary_paths(base_glossary, selected):
 
 def _run_selected(selected, glossary_paths, legacy_headers=False):
     """Run an ordered list of CHECKS keys, printing a header between them
-    when more than one is selected. Loads the glossary lazily if a
-    terminology check is in the set. Returns True if every check passed."""
+    when more than one is selected. With --page, repository-global checks
+    report SKIP instead of running, except nav parity for a BRANCH that changed
+    navigation. Loads the glossary lazily if a terminology check is in the set.
+    Returns True if every executed check passed."""
     global GLOSSARY
     selected = list(selected)
     if "pages-terminology" in selected:
@@ -7855,6 +8031,11 @@ def _run_selected(selected, glossary_paths, legacy_headers=False):
             header = f"--check-{name}" if legacy_headers else \
                 f"{RULE_IDS[name]}  {_check_command(name)}"
             print(f"=== {header} ===")
+        if _PAGE_FILTER is not None and name in _GLOBAL_CHECKS:
+            nav_in_scope = name == "nav-structure-parity" and _PAGE_FILTER.get("nav", False)
+            if not nav_in_scope:
+                print("SKIP: repository-global check; not applicable with --page.")
+                continue
         if not CHECKS[name]():
             overall_ok = False
     return overall_ok
@@ -8008,7 +8189,9 @@ def _build_v2_parser():
                         help="Limit per-file EN/RU checks to matching page(s)/"
                              "partial(s); 'UNCOMMITTED' for uncommitted files or "
                              "'BRANCH' for files changed in base...head. Repeatable. "
-                             "refs keeps its site-wide resolution context.")
+                             "Repository-global checks are skipped, except nav parity "
+                             "when BRANCH changed nav.adoc; broken-refs keeps its "
+                             "site-wide resolution context.")
     pa.completer = _complete_page_or_dir_name
     c.add_argument("--head", metavar="REV",
                    help="With --page BRANCH: revision to compare (default HEAD). "

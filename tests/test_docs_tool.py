@@ -1301,14 +1301,26 @@ class TrailingWhitespaceTests(FixtureTestCase):
         self.assertTrue(ok, out)
         self.assertIn("OK: no trailing spaces or tabs found in examples.", out)
 
-    def test_examples_ignore_page_filter(self):
+    def test_page_filter_ignores_unreferenced_examples(self):
         example = self.write("en/modules/ROOT/examples/query.sql", "SELECT 1; \n")
         dt._PAGE_FILTER = {"names": {("unrelated",)}, "dirs": set()}
 
         ok, out = self.run_check(dt.check_examples_no_trailing_whitespace)
 
+        self.assertTrue(ok, out)
+        self.assertNotIn(str(example), out)
+
+    def test_page_filter_checks_referenced_example_and_ignores_others(self):
+        self.write("en/modules/ROOT/pages/selected.adoc", "include::example$query.sql[]\n")
+        wanted = self.write("en/modules/ROOT/examples/query.sql", "SELECT 1; \n")
+        other = self.write("en/modules/ROOT/examples/other.sql", "SELECT 2;\t\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_no_trailing_whitespace)
+
         self.assertFalse(ok)
-        self.assertIn(str(example), out)
+        self.assertIn(str(wanted), out)
+        self.assertNotIn(str(other), out)
 
     def test_family_selection_supports_pages_examples_and_all(self):
         self.assertEqual(
@@ -1792,6 +1804,108 @@ class ImagesOrphanedTests(FixtureTestCase):
         self.assertTrue(ok, output)
 
 
+class ExamplesParityTests(FixtureTestCase):
+    def _pair(self, rel_path, en_text="SELECT 1;\n", ru_text="SELECT 2;\n"):
+        en_file = self.write(f"en/modules/ROOT/examples/{rel_path}", en_text)
+        ru_file = self.write(f"ru/modules/ROOT/examples/{rel_path}", ru_text)
+        return en_file, ru_file
+
+    def test_whole_site_still_reports_every_mismatch(self):
+        self._pair("one.sql")
+        self._pair("two.sql")
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("one.sql", out)
+        self.assertIn("two.sql", out)
+        self.assertIn("Total: 2 mismatch(es).", out)
+
+    def test_page_scope_checks_source_block_include_and_ignores_unrelated_files(self):
+        self.write(
+            "en/modules/ROOT/pages/selected.adoc",
+            "[source,sql]\n----\ninclude::example$wanted.sql[]\n----\n",
+        )
+        self._pair("wanted.sql")
+        self._pair("unrelated.sql")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("wanted.sql", out)
+        self.assertNotIn("unrelated.sql", out)
+
+    def test_page_scope_follows_nested_includes_with_tag_filters(self):
+        self.write("en/modules/ROOT/pages/selected.adoc",
+                   "include::partial$snippets.adoc[tag=live]\n")
+        self.write(
+            "en/modules/ROOT/partials/snippets.adoc",
+            "// tag::live[]\ninclude::example$live.sql[]\n// end::live[]\n"
+            "// tag::dead[]\ninclude::example$dead.sql[]\n// end::dead[]\n",
+        )
+        self._pair("live.sql")
+        self._pair("dead.sql")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("live.sql", out)
+        self.assertNotIn("dead.sql", out)
+
+    def test_page_scope_resolves_cross_module_example_includes(self):
+        self.write("en/modules/mod-a/pages/selected.adoc",
+                   "include::mod-b:example$query.sql[]\n")
+        self.write("en/modules/mod-b/examples/query.sql", "SELECT 1;\n")
+        self.write("ru/modules/mod-b/examples/query.sql", "SELECT 2;\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("mod-b/examples/query.sql", out)
+
+    def test_ru_only_reference_still_selects_the_en_ru_pair(self):
+        self.write("ru/modules/ROOT/pages/selected.adoc", "include::example$query.sql[]\n")
+        self._pair("query.sql")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("query.sql", out)
+
+    def test_page_scope_applies_to_example_character_checks(self):
+        self.write("en/modules/ROOT/pages/selected.adoc", "include::example$wanted.sql[]\n")
+        wanted = self.write("en/modules/ROOT/examples/wanted.sql", "-- русский\nSELECT 1;\n")
+        other = self.write("en/modules/ROOT/examples/other.sql", "-- другой\nSELECT 2;\n")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_no_cyrillic)
+
+        self.assertFalse(ok)
+        self.assertIn(str(wanted), out)
+        self.assertNotIn(str(other), out)
+
+    def test_external_partial_can_reference_an_example_back_in_this_repo(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/selected.adoc",
+                   "include::EXT:ROOT:partial$snippet.adoc[]\n")
+        self.write("external/en/modules/ROOT/partials/snippet.adoc",
+                   "include::TEST:ROOT:example$query.sql[]\n")
+        external_en = self.root / "external/en/modules/ROOT"
+        external_ru = self.root / "external/ru/modules/ROOT"
+        dt.EXTERNAL_COMPONENTS = {"EXT": {"en": {"ROOT": external_en}, "ru": {"ROOT": external_ru}}}
+        self._pair("query.sql")
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, out = self.run_check(dt.check_examples_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("query.sql", out)
+
+
 class ImagesDimensionParityTests(FixtureTestCase):
     @staticmethod
     def _image_bytes(image_format, width, height):
@@ -1885,16 +1999,30 @@ class ImagesDimensionParityTests(FixtureTestCase):
 
         self.assertTrue(ok, output)
 
-    def test_page_filter_does_not_hide_mismatches(self):
+    def test_page_filter_ignores_unreferenced_image_mismatches(self):
         self.write_image("en", "screen.png", 100, 100)
         self.write_image("ru", "screen.png", 200, 100)
         dt._PAGE_FILTER = {"names": {("unrelated",)}, "dirs": set()}
 
         ok, output = self.run_check(dt.check_images_dimension_parity)
 
+        self.assertTrue(ok, output)
+        self.assertNotIn("100x100", output)
+
+    def test_page_filter_checks_referenced_image_and_ignores_others(self):
+        self.write("en/modules/ROOT/pages/selected.adoc", "image::screen.png[Screen]\n")
+        self.write_image("en", "screen.png", 100, 100)
+        self.write_image("ru", "screen.png", 200, 100)
+        self.write_image("en", "other.png", 300, 300)
+        self.write_image("ru", "other.png", 400, 400)
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_images_dimension_parity)
+
         self.assertFalse(ok)
         self.assertIn("100x100", output)
         self.assertIn("200x100", output)
+        self.assertNotIn("other.png", output)
 
 
 class TagsOrphanedTests(FixtureTestCase):
@@ -5163,9 +5291,10 @@ class RuleExampleTests(unittest.TestCase):
                     parser.parse_args(argv)     # SystemExit here = a bad example
 
     def test_page_examples_follow_source_filter_support(self):
-        self.assertTrue(any("--page" in c for c, _ in self._examples("RF01")))
-        self.assertTrue(any("--page" in c for c, _ in self._examples("ST01")))
-        self.assertFalse(any("--page" in c for c, _ in self._examples("RF02")))
+        for rid in ("RF01", "ST01", "CH02", "CH07", "LN04", "LN08"):
+            self.assertTrue(any("--page" in c for c, _ in self._examples(rid)), rid)
+        for rid in ("RF02", "RF03", "RF04", "RF05", "RF06", "LN05"):
+            self.assertFalse(any("--page" in c for c, _ in self._examples(rid)), rid)
 
     def test_no_example_mentions_verbose(self):
         for key in dt.CHECKS:
@@ -5462,6 +5591,7 @@ class BranchPageFilterTests(unittest.TestCase):
         self.assertEqual(dt._PAGE_FILTER, {
             "names": {("reference", "changed"), ("snippet",)},
             "dirs": set(),
+            "nav": True,
         })
 
     def test_explicit_head_and_base_are_accepted(self):
@@ -5496,6 +5626,41 @@ class BranchPageFilterTests(unittest.TestCase):
 
         self.assertIsNone(code, err)
         self.assertEqual(dt._PAGE_FILTER["names"], {("reference", "renamed")})
+
+    def test_nav_only_branch_change_runs_nav_parity(self):
+        nav = "* xref:reference/changed.adoc[Changed]\n"
+        self.write("en/modules/ROOT/nav.adoc", nav)
+        self.write("ru/modules/ROOT/nav.adoc", nav)
+        self._commit_all()
+        sys.argv = ["docs_tool.py", "check", "l10n", "--nav",
+                    "--page", "BRANCH", "--base", "master"]
+        out, err = io.StringIO(), io.StringIO()
+
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+
+        self.assertEqual(ctx.exception.code, 0, err.getvalue())
+        self.assertIn("OK: nav structure matches for en/ru.", out.getvalue())
+        self.assertNotIn("SKIP:", out.getvalue())
+        self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": set(), "nav": True})
+
+    def test_branch_without_nav_change_still_skips_nav_parity(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc",
+                   "= Changed\n\nNew text.\n")
+        self._commit_all()
+        sys.argv = ["docs_tool.py", "check", "l10n", "--nav",
+                    "--page", "BRANCH", "--base", "master"]
+        out, err = io.StringIO(), io.StringIO()
+
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+
+        self.assertEqual(ctx.exception.code, 0, err.getvalue())
+        self.assertIn("SKIP: repository-global check", out.getvalue())
+        self.assertNotIn("OK: nav structure matches", out.getvalue())
+        self.assertNotIn("nav", dt._PAGE_FILTER)
 
     def test_no_branch_changes_exits_zero(self):
         code, out, err = self._apply("BRANCH", base="master")
@@ -5563,6 +5728,25 @@ class BranchPageFilterTests(unittest.TestCase):
         self.assertNotIn("unchanged.adoc", out.getvalue())
         self.assertNotIn("missing-unselected.adoc", out.getvalue())
 
+    def test_branch_scope_skips_orphaned_checks(self):
+        self.write("en/modules/ROOT/pages/reference/changed.adoc",
+                   "= Changed\n\nNew text.\n")
+        self._commit_all()
+        sys.argv = ["docs_tool.py", "check", "refs", "--page", "BRANCH",
+                    "--base", "master"]
+        out, err = io.StringIO(), io.StringIO()
+
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                dt.main()
+
+        self.assertEqual(ctx.exception.code, 0, err.getvalue())
+        self.assertIn("=== RF01  check refs --broken ===\nOK:", out.getvalue())
+        for rid in ("RF02", "RF03", "RF04", "RF05", "RF06"):
+            self.assertIn(f"=== {rid}  check refs --orphaned", out.getvalue())
+        self.assertEqual(out.getvalue().count("SKIP: repository-global check"), 5)
+        self.assertNotIn("ORPHANED", out.getvalue())
+
 
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
 class CheckRuleCompletionTests(unittest.TestCase):
@@ -5606,9 +5790,9 @@ class CheckRuleCompletionTests(unittest.TestCase):
 
     def test_family_hides_other_families_flags(self):
         comps = self._complete("docs_tool.py check l10n ")
-        for f in ("--show-unverified", "--offline", "--timeout", "--insecure",
-                  "--glossary", "--external-root"):
+        for f in ("--show-unverified", "--offline", "--timeout", "--insecure", "--glossary"):
             self.assertNotIn(f, comps, f)
+        self.assertIn("--external-root", comps)  # dependency traversal can enter external content
         self.assertIn("--page", comps)       # generic flags stay
         self.assertIn("--target", comps)
 
@@ -5980,6 +6164,58 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         for rid in ("RF02", "RF03", "RF04", "RF05", "RF06"):
             self.assertIn(f"=== {rid}  check refs --orphaned", out)
+
+    def test_page_scope_skips_orphaned_checks_but_runs_broken_refs(self):
+        (Path(self._tmp) / "en/modules/ROOT/pages/foo.adoc").write_text("= Foo\n")
+
+        code, out, err = self._run("check", "refs", "--page", "foo.adoc")
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("=== RF01  check refs --broken ===\nOK:", out)
+        for rid in ("RF02", "RF03", "RF04", "RF05", "RF06"):
+            self.assertRegex(
+                out,
+                rf"=== {rid}  check refs --orphaned[^\n]* ===\n"
+                r"SKIP: repository-global check; not applicable with --page\.",
+            )
+        self.assertNotIn("ORPHANED", out)
+
+    def test_page_scope_skips_each_repository_global_check(self):
+        (Path(self._tmp) / "en/modules/ROOT/pages/foo.adoc").write_text("= Foo\n")
+
+        for key in sorted(dt._GLOBAL_CHECKS):
+            with self.subTest(check=key):
+                code, out, err = self._run(
+                    *dt._check_command(key).split(), "--page", "foo.adoc")
+                self.assertEqual(code, 0, err)
+                self.assertIn(
+                    "SKIP: repository-global check; not applicable with --page.", out)
+                self.assertNotIn("OK:", out)
+
+    def test_page_scope_runs_dependency_checks_instead_of_skipping_them(self):
+        for lang in ("en", "ru"):
+            path = Path(self._tmp) / lang / "modules/ROOT/pages/foo.adoc"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("= Foo\n")
+
+        for key in ("examples-no-cyrillic", "examples-no-trailing-whitespace",
+                    "examples-parity", "images-dimension-parity"):
+            with self.subTest(check=key):
+                code, out, err = self._run(
+                    *dt._check_command(key).split(), "--page", "foo.adoc")
+                self.assertEqual(code, 0, err)
+                self.assertIn("OK:", out)
+                self.assertNotIn("SKIP:", out)
+
+    def test_legacy_page_scope_also_skips_global_checks(self):
+        (Path(self._tmp) / "en/modules/ROOT/pages/foo.adoc").write_text("= Foo\n")
+
+        code, out, err = self._run(
+            "--check-pages-orphaned", "--page", "foo.adoc")
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("SKIP: repository-global check", out)
+        self.assertNotIn("OK:", out)
 
     def test_multi_check_run_shows_external_root_warning_once(self):
         code, _, err = self._run("check", "refs", "--orphaned")
