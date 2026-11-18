@@ -1326,6 +1326,10 @@ _REF_SCAN_RE = re.compile(r'(?:xref:|include::|injectSvg:{1,2}|inlineSVG:{1,2}|i
 # A separate candidate scan catches an xref whose required bracketed attribute
 # list is missing; _REF_SCAN_RE deliberately only matches resolvable macros.
 _XREF_CANDIDATE_RE = re.compile(r'(?<!\\)\bxref:([^\[\]\s]+)(\[)?')
+# Both <<anchor>> and an explicitly empty <<anchor,>> ask Asciidoctor for
+# automatic link text. A non-empty second field is explicit text and is not
+# RF07's concern. A leading backslash makes the whole construct literal.
+_SHORTHAND_XREF_RE = re.compile(r'(?<!\\)<<([^<>\n]+?)(?:,([^<>\n]*))?>>')
 # Three AsciiDoc forms create an anchor, all handled here:
 # 1. `[#id]`, the inline block-attribute form -- it attaches to whatever
 #    touches it immediately after, with no space, wherever it appears in
@@ -1615,6 +1619,128 @@ def _anchor_heading_title(target_file: Path, anchor_id: str, root: Path, lang_mo
     return None
 
 
+_BLOCK_TITLE_TEXT_RE = re.compile(r'^\.([^.\s].*)\s*$')
+_DOCUMENT_TITLE_RE = re.compile(r'^=\s+(.*\S)\s*$')
+_DESCRIPTION_LIST_TERM_RE = re.compile(r'^(.*?)::(?:\s+.*)?$')
+
+
+def _following_block_reference_text(lines, idx, only_lines):
+    """Title of the block to which an anchor on lines[idx] is attached."""
+    j = idx + 1
+    while j < len(lines) and _BLOCK_ATTR_LINE_RE.match(lines[j]):
+        j += 1
+    if j >= len(lines) or (only_lines is not None and (j + 1) not in only_lines):
+        return None
+    m = _HEADING_ID_RE.match(lines[j])
+    if m:
+        return _HEADING_INLINE_ANCHOR_RE.sub("", m.group(1)).strip()
+    m = _BLOCK_TITLE_TEXT_RE.match(lines[j])
+    return m.group(1).strip() if m else None
+
+
+def _anchor_reference_text(target_file: Path, anchor_id: str, root: Path, lang_module_roots=None, lang="en", own_name=None, own_lang_module_roots=None):
+    """Return (anchor_found, automatic_reference_text) for an anchor.
+
+    Explicit reftext takes precedence. Sections and titled blocks supply
+    their titles. An anchor written inline in a description-list term uses
+    that term; an anchor on the preceding line leaves an untitled term or
+    paragraph with no automatic text, rendering an empty-label xref as
+    [anchor]."""
+    double_anchor = re.compile(r'\[\[' + re.escape(anchor_id) + r'(?:,([^\]]*))?\]\]')
+    single_anchor = re.compile(r'\[#' + re.escape(anchor_id) + r'(?:\.[\w-]+)*\](?!\s)')
+    inline_anchor = re.compile(r'(?<!\\)\banchor:' + re.escape(anchor_id) + r'\[([^\]]*)\]')
+    found = False
+    for f, only_lines in _collect_include_partials(
+            target_file, root, lang_module_roots, lang, own_name=own_name,
+            own_lang_module_roots=own_lang_module_roots):
+        lines = _read_lines(f)
+        if lines is None:
+            continue
+        excluded = _excluded_ref_lines(f)
+        for idx, line in enumerate(lines):
+            if idx + 1 in excluded or (only_lines is not None and (idx + 1) not in only_lines):
+                continue
+
+            m = double_anchor.search(line)
+            if m:
+                found = True
+                if m.group(1) and m.group(1).strip():
+                    return True, m.group(1).strip()
+                if line.strip() == m.group(0):
+                    text = _following_block_reference_text(lines, idx, only_lines)
+                    if text:
+                        return True, text
+                elif not line[:m.start()].strip():
+                    term = _DESCRIPTION_LIST_TERM_RE.match(line[m.end():])
+                    if term and term.group(1).strip():
+                        return True, term.group(1).strip()
+
+            m = single_anchor.search(line)
+            if m:
+                found = True
+                if line.strip() == m.group(0):
+                    text = _following_block_reference_text(lines, idx, only_lines)
+                    if text:
+                        return True, text
+
+            m = inline_anchor.search(line)
+            if m:
+                found = True
+                if m.group(1).strip():
+                    return True, m.group(1).strip()
+
+            m = _HEADING_ID_RE.match(line)
+            if not m:
+                continue
+            title = m.group(1)
+            ids = set()
+            m_inline = _HEADING_INLINE_ANCHOR_ID_RE.match(title)
+            if m_inline:
+                ids.add(m_inline.group(1))
+                title = title[m_inline.end():]
+            explicit = set()
+            j = idx - 1
+            while j >= 0 and _BLOCK_ATTR_LINE_RE.match(lines[j]):
+                m_id = _BLOCK_ID_CAPTURE_RE.match(lines[j])
+                if m_id:
+                    explicit.add(m_id.group(1) or m_id.group(2))
+                j -= 1
+            ids |= explicit
+            if not explicit:
+                ids |= _heading_autoids(title)
+            if anchor_id in ids:
+                return True, title.strip()
+    return found, None
+
+
+def _document_reference_text(target_file: Path):
+    lines = _read_lines(target_file)
+    if lines is None:
+        return None
+    for line in lines:
+        m = _DOCUMENT_TITLE_RE.match(line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def _xref_has_automatic_text(targets, lang, own_name, own_lang_module_roots):
+    """True for usable text, False for a resolved target with none, None for
+    a target that does not resolve and therefore belongs to RF01."""
+    found = False
+    for target_file, fragment, target_root, ref_roots in targets:
+        if fragment:
+            anchor_found, text = _anchor_reference_text(
+                target_file, fragment, target_root, ref_roots, lang, own_name,
+                own_lang_module_roots)
+        else:
+            anchor_found, text = True, _document_reference_text(target_file)
+        found = found or anchor_found
+        if text:
+            return True
+    return False if found else None
+
+
 _CODE_DELIM_LINE_RE = re.compile(r'^(----|\.\.\.\.)\s*$')
 
 
@@ -1683,70 +1809,111 @@ def _substitute_attrs(text, attrs):
     return _ATTR_REF_RE.sub(lambda m: attrs.get(m.group(1), m.group(0)), text)
 
 
-def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots):
-    """The real `xref:` resolution + reporting logic, factored out of
-    _check_refs_in_file so a caller juggling more than one attribute-
-    substitution candidate for the same reference (see
-    partial_attrs_contexts) can try each one with `report=None` --
-    nothing printed, just the verdict -- and only report for real once
-    none of them work. `t` is the xref target with the leading `xref:`
-    already stripped (and already attribute-substituted, by whichever
-    candidate's attrs the caller is trying).
+def _resolve_xref_target(t, file, lang_module_roots, lang, own_name, candidate_roots):
+    """Resolve an xref destination without reporting it.
 
-    Returns True if the target resolves cleanly (nothing was/would be
-    reported), False if it's broken, or None for a version-pinned or
-    unregistered-external-component target -- "can't tell, left
-    unchecked" must not be mistaken for either a pass or a fail by a
-    caller deciding whether ANY candidate works."""
+    Returns (status, display_target, targets). Status is True for a usable
+    destination, False for a missing page, and None for an unchecked or empty
+    target. Each targets entry is (file, fragment, module_root,
+    target_lang_module_roots); same-page xrefs can have several entries when a
+    partial is included from different modules. Anchor existence is checked by
+    the caller so RF01 and RF07 can apply their own diagnostics."""
     if _VERSION_PIN_RE.match(t):
-        return None
+        return None, "", []
     ref_lang_module_roots = lang_module_roots
     m_component = _COMPONENT_PREFIX_RE.match(t)
     if m_component:
-        component = m_component.group(0)[:-1]  # strip trailing ':'
+        component = m_component.group(0)[:-1]
         resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], lang_module_roots, lang, own_name)
         if resolved is None:
-            return None  # external component xref (blog::x, ...)
+            return None, "", []
         candidate_roots = [resolved[0]]
         t = resolved[1]
-        # Any anchor check below now looks inside `component`'s own
-        # content, not this file's -- a further include found while
-        # walking it must resolve against its own modules, not this
-        # repo's (see _component_context). `own_name`/`lang_module_roots`
-        # (this repo's true own) are still passed through unchanged as
-        # the anchor check's own_name/own_lang_module_roots below, so a
-        # self-reference back to this repo found inside that
-        # component's own content still resolves correctly.
         ref_lang_module_roots = _component_context(component, lang, lang_module_roots)
 
     fragment = ""
     if "#" in t:
         t, fragment = t.split("#", 1)
-    # Keep the fragment in diagnostics even when validation fails after splitting.
     disp = f"{t}#{fragment}" if fragment else t
 
     if t.endswith(".adoc"):
         page_t = _strip_root_slash(t)
         found_root = next((cand for cand in candidate_roots if (cand / "pages" / page_t).is_file()), None)
         if found_root is None:
-            if report:
-                report(file, lineno, f"xref:{disp}")
-            return False
-        if fragment and not _anchor_exists(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots, lang, own_name, lang_module_roots):
-            if report:
-                report(file, lineno, f"xref:{disp} (anchor not found)")
-            return False
-        return True
+            return False, disp, []
+        return True, disp, [(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots)]
     if t:
-        if not any(_anchor_exists(file, t, cand, ref_lang_module_roots, lang, own_name, lang_module_roots) for cand in candidate_roots):
+        return True, disp, [
+            (file, t, cand, ref_lang_module_roots) for cand in candidate_roots
+        ]
+    return None, disp, []
+
+
+def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots):
+    """Resolve an xref and report a missing page or anchor.
+
+    `t` has its leading `xref:` stripped and any attributes substituted.
+    Returns True when resolved, False when broken, and None when a version pin
+    or unregistered external component leaves it unchecked. report=None runs
+    the resolution silently so callers can try several attribute contexts."""
+    status, disp, targets = _resolve_xref_target(
+        t, file, lang_module_roots, lang, own_name, candidate_roots)
+    if status is None:
+        return None
+    if status is False:
+        if report:
+            report(file, lineno, f"xref:{disp}")
+        return False
+    if targets and targets[0][1]:
+        if not any(_anchor_exists(target_file, fragment, target_root, ref_roots, lang, own_name, lang_module_roots)
+                   for target_file, fragment, target_root, ref_roots in targets):
             if report:
                 report(file, lineno, f"xref:{disp} (anchor not found)")
             return False
-        return True
-    return None  # empty after stripping the fragment -- nothing to resolve, left unchecked same as before
+    return True
 
 
-def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None):
+def _check_shorthand_xref(source, raw_target, has_explicit_text, file, lineno, report,
+                          missing_text_report, lang_module_roots, lang, own_name,
+                          candidate_roots, doc_attrs, attrs_contexts):
+    t = _substitute_attrs(raw_target, doc_attrs)
+    context_targets = []
+    if "{" in t and attrs_contexts:
+        for ctx in attrs_contexts:
+            candidate = _substitute_attrs(raw_target, {**ctx, **doc_attrs})
+            if "{" not in candidate:
+                context_targets.append(candidate)
+
+    if missing_text_report is not None:
+        if has_explicit_text:
+            return
+        candidates = context_targets or ([] if "{" in t else [t])
+        missing_text = False
+        for candidate in candidates:
+            status, _disp, targets = _resolve_xref_target(
+                candidate, file, lang_module_roots, lang, own_name, candidate_roots)
+            if status is not True:
+                continue
+            verdict = _xref_has_automatic_text(
+                targets, lang, own_name, lang_module_roots)
+            if verdict is True:
+                return
+            missing_text = missing_text or verdict is False
+        if missing_text:
+            missing_text_report(
+                file, lineno, f"{source} (target has no automatic reference text)")
+        return
+
+    if report is None:
+        return
+    for candidate in context_targets:
+        if _resolve_xref(candidate, file, lineno, None, lang_module_roots,
+                         lang, own_name, candidate_roots):
+            return
+    _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots)
+
+
+def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None, check_macros=True, check_shorthand=False, missing_text_report=None):
     """Check references using sibling and registered external module roots.
     Unqualified xrefs, images, and family-attribute links in partials use their
     including modules; nested includes retain the partial's own module context.
@@ -1770,6 +1937,15 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
             continue
         if live_entry is not None and lineno in live_entry[0] and lineno not in live_entry[1]:
             continue  # dead tag region -- no include:: renders this line (see _build_partial_live_lines)
+        if check_shorthand:
+            for m in _SHORTHAND_XREF_RE.finditer(line):
+                label = m.group(2)
+                _check_shorthand_xref(
+                    m.group(0), m.group(1), label is not None and bool(label.strip()),
+                    file, lineno, report, missing_text_report, lang_module_roots,
+                    lang, own_name, list(fallback_roots), doc_attrs, attrs_contexts)
+        if not check_macros:
+            continue
         for m in _XREF_CANDIDATE_RE.finditer(line):
             if m.group(2) is None:
                 target = m.group(1).rstrip(".,;!?)]")
@@ -2097,24 +2273,10 @@ def _warn_if_no_external_root():
     _EXTERNAL_ROOT_WARNING_SHOWN = True
 
 
-def check_pages_broken_refs() -> bool:
-    """Port of check_pages_broken_refs.sh, extended to resolve
-    component-prefixed xrefs against sibling modules of the same language
-    when the component name matches a discovered module. Resolution context
-    remains site-wide; --page limits which source files produce findings."""
-    ok = True
-    broken_count = 0
-    _SKIPPED_COMPONENTS.clear()   # report only what this scan itself skipped
+def _run_reference_scan(report=None, missing_text_report=None):
+    """Scan references with site-wide resolution and page-scoped reporting."""
+    _SKIPPED_COMPONENTS.clear()
     _warn_if_no_external_root()
-
-    def report(file, lineno, msg):
-        nonlocal ok, broken_count
-        if not _page_allowed(file):
-            return
-        ok = False
-        broken_count += 1
-        print(f"BROKEN   {_format_location(file, lineno)}  {msg}")
-
     modules = list(module_roots())
     en_module_roots = {name: en_root for name, en_root, _ in modules}
     ru_module_roots = {name: ru_root for name, _, ru_root in modules}
@@ -2133,12 +2295,63 @@ def check_pages_broken_refs() -> bool:
                 ("ru", ru_root, ru_module_roots, ru_includers, ru_attrs_contexts, ru_live),
         ):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-                _check_refs_in_file(f, root, report, lang_module_roots, lang, includers, attrs_contexts, partial_live)
+                _check_refs_in_file(
+                    f, root, report, lang_module_roots, lang, includers,
+                    attrs_contexts, partial_live, check_macros=report is not None,
+                    check_shorthand=True, missing_text_report=missing_text_report)
 
+
+def check_pages_broken_refs() -> bool:
+    """Every xref:, <<...>>, include::, image:, and link: target resolves.
+    Resolution context remains site-wide; --page limits which source files
+    produce findings. Version pins and unregistered external components are
+    left unchecked and named in the closing note."""
+    ok = True
+    broken_count = 0
+
+    def report(file, lineno, msg):
+        nonlocal ok, broken_count
+        if not _page_allowed(file):
+            return
+        ok = False
+        broken_count += 1
+        print(f"BROKEN   {_format_location(file, lineno)}  {msg}")
+
+    _run_reference_scan(report=report)
     if ok:
         print("OK: no broken xref/include/image references found.")
     else:
         print(f"\nTotal: {broken_count} broken reference(s).")
+    _report_skipped_components()
+    return ok
+
+
+def check_pages_missing_xref_text() -> bool:
+    """No automatic-label <<anchor>> or <<anchor,>> resolves to a target
+    without reference text. Section and titled-block targets supply their
+    titles; [[anchor,reftext]] supplies an explicit label. A description-list
+    term also supplies its text when written on the same line as its anchor
+    ([[anchor]]term::). An anchor on the preceding line of an untitled
+    description-list term or paragraph leaves neither, so Asciidoctor renders
+    [anchor] instead. Fix the link (<<anchor,label>>) or the target
+    ([[anchor,label]]). Missing targets belong to RF01 and are not duplicated
+    here. Comments and literal blocks are skipped; --page limits findings."""
+    ok = True
+    finding_count = 0
+
+    def report(file, lineno, msg):
+        nonlocal ok, finding_count
+        if not _page_allowed(file):
+            return
+        ok = False
+        finding_count += 1
+        print(f"BROKEN   {_format_location(file, lineno)}  {msg}")
+
+    _run_reference_scan(missing_text_report=report)
+    if ok:
+        print("OK: all automatic-label shorthand xrefs have reference text.")
+    else:
+        print(f"\nTotal: {finding_count} shorthand xref(s) without automatic reference text.")
     _report_skipped_components()
     return ok
 
@@ -6634,6 +6847,7 @@ CHECKS = {
     "images-orphaned": check_images_orphaned,
     "nav-structure-parity": check_nav_structure_parity,
     "pages-broken-refs": check_pages_broken_refs,
+    "pages-missing-xref-text": check_pages_missing_xref_text,
     "pages-file-path-italics": check_pages_file_path_italics,
     "pages-heading-no-markup": check_pages_heading_no_markup,
     "pages-heading-no-period": check_pages_heading_no_period,
@@ -6758,6 +6972,7 @@ FAMILIES = {
         "orphaned": {"pages": "pages-orphaned", "partials": "partials-orphaned",
                      "examples": "examples-orphaned", "images": "images-orphaned",
                      "tags": "tags-orphaned"},
+        "missing-xref-text": {"pages": "pages-missing-xref-text"},
     },
     "style": {                        # L3 -- Arenadata style guide
         "no-yo":              {"pages": "pages-no-yo"},
@@ -6847,6 +7062,7 @@ RULE_IDS = {
     "examples-orphaned":          "RF04",
     "images-orphaned":            "RF05",
     "tags-orphaned":              "RF06",
+    "pages-missing-xref-text":    "RF07",
     "pages-no-yo":                "ST01",
     "pages-file-path-italics":    "ST02",
     "pages-table-cell-periods":   "ST03",
@@ -6893,7 +7109,8 @@ SUMMARIES = {
     "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
     "pages-unbalanced-divs":      "every passthrough-embedded <div> gets its </div>, includes flattened",
     "pages-link-text-comma":      "a bare http(s) link's [...] holds 2+ unprotected commas -- always AsciiDoc-broken, never a style choice",
-    "pages-broken-refs":           "every xref: / include:: / image: target resolves",
+    "pages-broken-refs":           "every xref: / <<...>> / include:: / image: target resolves",
+    "pages-missing-xref-text":     "every automatic-label <<...>> target has reference text",
     "pages-orphaned":              "every pages/*.adoc reachable from some nav.adoc",
     "partials-orphaned":           "every tag-less partial pulled in by some include::",
     "examples-orphaned":           "every examples/ file pulled in by include::example$",
@@ -6965,6 +7182,7 @@ RULE_FLAGS = {
     "pages-unbalanced-divs":      "unclosed/unmatched <div>",
     "pages-link-text-comma":      "comma-corrupted link bracket",
     "pages-broken-refs":           "dead xref / include / image",
+    "pages-missing-xref-text":     "automatic xref label unavailable",
     "pages-orphaned":              "defined but never referenced",
     "pages-no-yo":                 "ё in RU files",
     "pages-file-path-italics":     "file path not in italics",
@@ -7033,7 +7251,7 @@ _RULES_IGNORING_PAGE = {
 _GLOBAL_CHECKS = _RULES_IGNORING_PAGE | {"partials-orphaned", "tags-orphaned"}
 _RULES_WITH_EXTERNAL_ROOT = {
     "pages-unbalanced-delimiters", "pages-unbalanced-divs", "pages-broken-refs",
-    "partials-orphaned", "examples-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
+    "pages-missing-xref-text", "partials-orphaned", "examples-orphaned", "images-orphaned", "tags-orphaned", "pages-xref-title",
     "pages-table-header", "examples-no-cyrillic", "examples-no-trailing-whitespace",
     "examples-parity", "images-dimension-parity",
 }
@@ -7892,7 +8110,7 @@ def build_parser():
                              "Repository-global orphan checks are skipped with SKIP. "
                              "Nav parity runs only when BRANCH changed nav.adoc or a nav partial. "
                              "Example/image checks are limited to dependencies of selected "
-                             "content. Broken-refs resolution remains site-wide, "
+                             "content. Reference resolution remains site-wide, "
                              "but only selected source files produce findings. Optional -- "
                              "omit to check the whole site as before.")
     page_action.completer = _complete_page_or_dir_name
@@ -7903,7 +8121,8 @@ def build_parser():
                         help="With --page BRANCH: merge-base revision (default: origin/HEAD, "
                              "then main/master).")
     parser.add_argument("--external-root", action="append", metavar="NAME=PATH",
-                        help="With --check-pages-broken-refs: resolve xref:/include:: targets "
+                        help="With --check-pages-broken-refs and --check-pages-missing-xref-text: "
+                             "resolve xref:/include:: targets "
                              "against another Antora component's repo checked out locally, e.g. "
                              "--external-root ADCM=../docs-adcm. Repeatable. Without this, "
                              "references into a component that isn't part of this repo are left "
@@ -8340,7 +8559,7 @@ def _build_v2_parser():
                              "'BRANCH' for files changed in base...head. Repeatable. "
                              "Repository-global checks are skipped, except nav parity "
                              "when BRANCH changed nav.adoc or an included nav partial; "
-                             "broken-refs keeps its "
+                             "reference checks keep their "
                              "site-wide resolution context.")
     pa.completer = _complete_page_or_dir_name
     c.add_argument("--head", metavar="REV",

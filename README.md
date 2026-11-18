@@ -49,7 +49,7 @@ Rules are grouped into seven **families**:
 |----------|------------------------------------------------------------------------------------------|
 | `chars`  | invisible chars, trailing whitespace, unicode dashes, RU/Latin homoglyphs, Cyrillic in EN files |
 | `markup` | stray backticks, unbalanced block delimiters, comma-corrupted link text                  |
-| `refs`   | broken `xref:`/`include:`/`image:` targets, orphaned pages/partials/examples/images/tags |
+| `refs`   | broken `<<...>>`/`xref:`/`include:`/`image:` targets, missing automatic xref text, orphaned pages/partials/examples/images/tags |
 | `style`  | `ё`/`Ё`, un-italicized file paths, table-cell periods, curly quotes, ©/®/™, missing page attributes, heading punctuation/markup, empty table cells |
 | `terms`  | EN term translated to a non-house-style RU word (glossary-driven)                        |
 | `l10n`   | line-count / structure / nav parity, link & literal parity, untranslated lines, `examples/` and image-dimension parity |
@@ -101,7 +101,7 @@ by kind:
 | Label | Means |
 |-------|-------|
 | `FILE` | header for the `path:line:col:` findings indented under it |
-| `BROKEN` | a reference (or, in `check links`, an external URL) that doesn't resolve |
+| `BROKEN` | a reference that doesn't resolve, an external URL failure in `check links`, or an automatic xref label that its target cannot supply |
 | `ORPHANED` | a file nothing points at — no line, the whole file is the finding |
 | `MISSING` | an EN or RU counterpart that doesn't exist |
 | `INVALID` | a raster image whose dimensions cannot be read |
@@ -248,15 +248,15 @@ own ID/Command/Flags table.
 
 | ID | Command | Flags |
 |----|---------|-------|
-| `RF01` | `check refs --broken` | dead xref / include / image |
+| `RF01` | `check refs --broken` | dead `<<...>>` / xref / include / image |
 | `RF02`–`RF06` | `check refs --orphaned [--target …]` | defined but never referenced |
+| `RF07` | `check refs --missing-xref-text` | target cannot supply automatic xref text |
 
 Reference resolution always scans the whole site. `--page` narrows which source files
-produce findings for `--broken`; every `--orphaned` target is repository-global and prints
-`SKIP` instead of running. Bare `check refs` without `--page` runs `--broken` plus every
-orphan target.
+produce findings for `--broken` and `--missing-xref-text`; every `--orphaned` target is repository-global and prints
+`SKIP` instead of running. Bare `check refs` without `--page` runs all three groups.
 
-- **`RF01` · `check refs --broken`** — every `xref:` / `include::` / `image:` /
+- **`RF01` · `check refs --broken`** — every shorthand `<<...>>` / `xref:` / `include::` / `image:` /
   `link:` reference resolves to a real file or anchor. Resolution context is built
   site-wide; `--page` limits findings to references written in selected source files.
   An `xref:` target not
@@ -311,6 +311,30 @@ orphan target.
   ./docs_tool.py check refs --broken --auto-external-root
   ./docs_tool.py check refs --broken --auto-external-root ../siblings
   ./docs_tool.py list external-roots --auto-external-root   # preview before relying on it
+  ```
+
+- **`RF07` · `check refs --missing-xref-text`** — an automatic-label shorthand
+  xref (`<<anchor>>` or `<<anchor,>>`) must resolve to a target that can supply
+  visible link text. Section, document, and titled-block targets supply their
+  titles; `[[anchor,reftext]]` supplies an explicit label. A link with its own
+  non-empty text (`<<anchor,label>>`) is always fine. A description-list term
+  written on the same line as its anchor (`[[anchor]]-p <level>::`) supplies the
+  term as link text. An anchor on the preceding line of an untitled
+  description-list term or paragraph supplies no text, so Asciidoctor renders
+  `[anchor]` instead. Fix either the link or the target:
+  ```asciidoc
+  <<diskquota_naptime,diskquota.naptime>>
+
+  [[diskquota_naptime,diskquota.naptime]]
+  diskquota.naptime::
+  ```
+  Missing targets are RF01 findings and are not duplicated here. Includes and
+  component-qualified targets resolve with the same site-wide context as RF01;
+  comments and literal/listing blocks are skipped, and `--page` limits findings.
+  ```bash
+  ./docs_tool.py check refs --missing-xref-text
+  ./docs_tool.py check refs --missing-xref-text --page diskquota.adoc
+  ./docs_tool.py check refs --missing-xref-text --auto-external-root
   ```
 
 - **`RF02`–`RF06` · `check refs --orphaned [--target …]`** — flags content that is
@@ -758,7 +782,7 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 
 By default, every per-file rule scans the whole site. `--page NAME` (repeatable)
 limits `chars`, `markup`, `style`, `terms`, `l10n`, and `links` to matching files.
-`refs --broken` uses the same filter for source-file findings while keeping its
+`refs --broken` and `refs --missing-xref-text` use the same filter for source-file findings while keeping their
 reference-resolution context site-wide:
 
 ```bash
@@ -865,8 +889,8 @@ Move a family from the second line to the first once it runs clean in practice.
 
 **Don't put bare `refs` in the hook.** Its orphan targets still scan and report
 site-wide, so every commit touching one `.adoc` would print old orphan findings.
-Use `check refs --broken --page UNCOMMITTED` if you want commit-scoped broken-reference
-findings (resolution still scans the whole site). Run the full orphan checks in CI,
+Use `check refs --broken --missing-xref-text --page UNCOMMITTED` if you want commit-scoped
+reference findings (resolution still scans the whole site). Run the full orphan checks in CI,
 or by hand before a release.
 
 ## Legacy `--check-*` flags

@@ -3366,6 +3366,192 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertIn("xref:no-such-anchor#some-fragment", output)
 
 
+class PagesMissingXrefTextTests(FixtureTestCase):
+    def test_section_document_and_titled_block_targets_pass(self):
+        self.antora_yml("en", "TEST")
+        self.write("en/modules/ROOT/pages/other.adoc", "= Other page\n")
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "= Page\n\n"
+            "<<section,>> <<paragraph,>> <<table,>> <<example,>> <<other.adoc>>\n\n"
+            "[#section]\n== Example section\n\n"
+            "[[paragraph]]\n.Paragraph title\nText\n\n"
+            "[[table]]\n.Table title\n|===\n|A\n|===\n\n"
+            "[[example]]\n.Example title\n====\nText\n====\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertTrue(ok, output)
+
+    def test_description_list_target_is_flagged_but_example_sections_pass(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/diskquota.adoc",
+            "= Disk quota\n\n"
+            "Set <<diskquota_naptime,>>; see <<example_soft_schema_quota,>> and <<example_hard_limit,>>.\n\n"
+            "[#example_soft_schema_quota]\n== Example: using a schema disk quota\n\n"
+            "[#example_hard_limit]\n== Example: setting a hard limit\n\n"
+            "[[diskquota_naptime]]\ndiskquota.naptime::\nDescription\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertFalse(ok)
+        self.assertIn("diskquota.adoc:3  ", output)
+        self.assertIn("<<diskquota_naptime,>>", output)
+        self.assertNotIn("example_soft_schema_quota", output)
+        self.assertNotIn("example_hard_limit", output)
+        self.assertIn("Total: 1 shorthand xref(s)", output)
+
+    def test_no_comma_and_whitespace_only_labels_are_checked(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "<<term>> and <<term, >>\n\n[[term]]\nparameter::\nDescription\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertFalse(ok)
+        self.assertEqual(output.count("BROKEN"), 2, output)
+
+    def test_explicit_link_or_target_text_passes(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "<<plain,Custom link>> <<labeled,>> <<inline,>>\n\n"
+            "[[plain]]\nplain_parameter::\nDescription\n\n"
+            "[[labeled,Custom target]]\nlabeled_parameter::\nDescription\n\n"
+            "anchor:inline[Inline target] text\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertTrue(ok, output)
+
+    def test_same_line_description_list_terms_supply_reference_text(self):
+        self.write(
+            "en/modules/ROOT/pages/analyzedb.adoc",
+            "<<full>> <<parallel_level>> <<clean_last>> <<clean_all>>\n\n"
+            "[[full]]--full::\nDescription\n\n"
+            "[[parallel_level]]-p <parallel_level>::\nDescription\n\n"
+            "[[clean_last]]--clean_last::\nDescription\n\n"
+            "[[clean_all]]--clean_all::\nDescription\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertTrue(ok, output)
+
+    def test_untitled_paragraph_is_flagged(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "See <<details,>>.\n\n[[details]]\nUntitled paragraph.\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertFalse(ok)
+        self.assertIn("<<details,>>", output)
+
+    def test_cross_page_anchor_uses_target_title_or_reftext(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/target.adoc",
+            "= Target\n\n[#section]\n== Target section\n\n"
+            "[[term]]\nparameter::\nDescription\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "<<target.adoc#section,>> and <<target.adoc#term,>>\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertFalse(ok)
+        self.assertNotIn("target.adoc#section", output)
+        self.assertIn("<<target.adoc#term,>>", output)
+
+    def test_missing_target_is_only_an_rf01_finding(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "See <<missing,>>.\n")
+
+        text_ok, text_output = self.run_check(dt.check_pages_missing_xref_text)
+        refs_ok, refs_output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(text_ok, text_output)
+        self.assertFalse(refs_ok)
+        self.assertIn("xref:missing (anchor not found)", refs_output)
+
+    def test_rf01_resolves_valid_shorthand_targets(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/pages/target.adoc",
+            "= Target\n\n[#section]\n== Section title\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "<<target.adoc#section,Section>> <<target.adoc,Target>>\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(ok, output)
+
+    def test_comments_literal_blocks_and_escaped_xrefs_are_skipped(self):
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "// <<missing,>>\n\\<<missing,>>\n----\n<<missing,>>\n----\n",
+        )
+
+        text_ok, text_output = self.run_check(dt.check_pages_missing_xref_text)
+        refs_ok, refs_output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(text_ok, text_output)
+        self.assertTrue(refs_ok, refs_output)
+
+    def test_ru_side_is_checked(self):
+        self.write(
+            "ru/modules/ROOT/pages/page.adoc",
+            "См. <<parameter,>>.\n\n[[parameter]]\nparameter::\nОписание\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertFalse(ok)
+        self.assertIn(str(Path("ru/modules/ROOT/pages/page.adoc")), output)
+
+    def test_page_filter_limits_findings(self):
+        selected = self.write(
+            "en/modules/ROOT/pages/selected.adoc",
+            "<<selected_term,>>\n\n[[selected_term]]\nselected::\nDescription\n",
+        )
+        other = self.write(
+            "en/modules/ROOT/pages/other.adoc",
+            "<<other_term,>>\n\n[[other_term]]\nother::\nDescription\n",
+        )
+        dt._PAGE_FILTER = {"names": {("selected",)}, "dirs": set()}
+
+        ok, output = self.run_check(dt.check_pages_missing_xref_text)
+
+        self.assertFalse(ok)
+        self.assertIn(str(selected), output)
+        self.assertNotIn(str(other), output)
+
+    def test_target_inside_nested_include_is_checked(self):
+        self.write("en/modules/ROOT/partials/inner.adoc", "[[term]]\nparameter::\nDescription\n")
+        self.write("en/modules/ROOT/partials/outer.adoc", "include::partial$inner.adoc[]\n")
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "See <<term,>>.\n\ninclude::partial$outer.adoc[]\n",
+        )
+
+        text_ok, text_output = self.run_check(dt.check_pages_missing_xref_text)
+        refs_ok, refs_output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertFalse(text_ok)
+        self.assertIn("<<term,>>", text_output)
+        self.assertTrue(refs_ok, refs_output)
+
+
 class PagesNoYoTests(FixtureTestCase):
     def test_yo_is_flagged(self):
         self.write("ru/modules/ROOT/pages/page.adoc", "Настройте параметр для Ёлка и ёж.\n")
@@ -5398,7 +5584,7 @@ class RuleExampleTests(unittest.TestCase):
                     parser.parse_args(argv)     # SystemExit here = a bad example
 
     def test_page_examples_follow_source_filter_support(self):
-        for rid in ("RF01", "ST01", "CH02", "CH07", "LN04", "LN08"):
+        for rid in ("RF01", "RF07", "ST01", "CH02", "CH07", "LN04", "LN08"):
             self.assertTrue(any("--page" in c for c, _ in self._examples(rid)), rid)
         for rid in ("RF02", "RF03", "RF04", "RF05", "RF06", "LN05"):
             self.assertFalse(any("--page" in c for c, _ in self._examples(rid)), rid)
@@ -5931,6 +6117,7 @@ class BranchPageFilterTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 0, err.getvalue())
         self.assertIn("=== RF01  check refs --broken ===\nOK:", out.getvalue())
+        self.assertIn("=== RF07  check refs --missing-xref-text ===\nOK:", out.getvalue())
         for rid in ("RF02", "RF03", "RF04", "RF05", "RF06"):
             self.assertIn(f"=== {rid}  check refs --orphaned", out.getvalue())
         self.assertEqual(out.getvalue().count("SKIP: repository-global check"), 5)
@@ -6102,7 +6289,7 @@ class FamilySelectionTests(unittest.TestCase):
         self.assertEqual(
             set(dt._resolve_family_selection("refs", None, None)),
             {"pages-broken-refs", "pages-orphaned", "partials-orphaned",
-             "examples-orphaned", "images-orphaned", "tags-orphaned"},
+             "examples-orphaned", "images-orphaned", "tags-orphaned", "pages-missing-xref-text"},
         )
 
     def test_whole_chars_family_skips_opt_in_trailing_whitespace(self):
@@ -6361,6 +6548,7 @@ class CliV2RoutingTests(unittest.TestCase):
 
         self.assertEqual(code, 0, err)
         self.assertIn("=== RF01  check refs --broken ===\nOK:", out)
+        self.assertIn("=== RF07  check refs --missing-xref-text ===\nOK:", out)
         for rid in ("RF02", "RF03", "RF04", "RF05", "RF06"):
             self.assertRegex(
                 out,
