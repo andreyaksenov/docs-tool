@@ -4690,7 +4690,7 @@ class PageAllowedDirectoryFilterTests(unittest.TestCase):
 
 
 class ResolvePageStemQualifiedNameTests(unittest.TestCase):
-    """--sync's fallback (_resolve_page_stem) gets the same suffix-matching
+    """sync's fallback (_resolve_page_stem) gets the same suffix-matching
     treatment as --page, for the same reason: a bare filename can be
     ambiguous across directories, and a qualifying prefix should actually
     disambiguate instead of being silently dropped."""
@@ -4756,15 +4756,15 @@ class PagesTerminologyTests(FixtureTestCase):
         self.assertEqual(ctx.exception.code, 2)   # usage error, not a finding
 
     def test_missing_glossary_in_multi_check_run_skips_not_aborts(self):
-        """A multi-family `check` or `--all-checks` sweeps terminology in; with
-        no glossary it must be dropped with a note, not abort the run."""
+        """A multi-family `check` sweeps terminology in; with no glossary it
+        must be dropped with a note, not abort the run."""
         self.write("ru/modules/ROOT/pages/page.adoc", "Обычный текст.\n")
         cwd = os.getcwd()
         os.chdir(self._tmpdir)  # away from this repo's own greengagedb-glossary.psv
         try:
             err = io.StringIO()
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-                ok = dt._run_selected(["pages-no-yo", "pages-terminology"], False, None)
+                ok = dt._run_selected(["pages-no-yo", "pages-terminology"], False)
         finally:
             os.chdir(cwd)
         self.assertTrue(ok)
@@ -5238,7 +5238,7 @@ class L10nLineParityTests(FixtureTestCase):
 
 class SyncMergeTests(unittest.TestCase):
     """Unit tests for sync_merge -- the pure structural-alignment function
-    behind --sync, no filesystem/git involved."""
+    behind sync, no filesystem/git involved."""
 
     def test_new_en_section_is_inserted_untranslated(self):
         en_lines = ["== Intro", "Some text.", "== New Section", "More text."]
@@ -5270,7 +5270,7 @@ class SyncMergeTests(unittest.TestCase):
 
 
 class RunSyncTests(unittest.TestCase):
-    """Integration tests for run_sync -- the --sync entry point, writing
+    """Integration tests for run_sync -- the sync entry point, writing
     real files under a tempdir."""
 
     def setUp(self):
@@ -5322,7 +5322,7 @@ class RunSyncTests(unittest.TestCase):
 
 
 class RunSyncStemResolutionTests(unittest.TestCase):
-    """--sync's fallback: when its argument isn't an existing path, resolve
+    """sync's fallback: when its argument isn't an existing path, resolve
     it as a bare filename (must end in .adoc, same as --page NAME) against
     discovered EN pages/partials, same lookup --page uses. Needs a real cwd
     change (unlike RunSyncTests) since module_roots() resolves
@@ -5424,7 +5424,7 @@ class MainPageValueFormTests(unittest.TestCase):
         shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_name_with_adoc_suffix_becomes_a_file_filter(self):
-        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "resource_groups.adoc"]
+        sys.argv = ["docs_tool.py", "check", "chars", "--no-cyrillic", "--page", "resource_groups.adoc"]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
@@ -5432,7 +5432,7 @@ class MainPageValueFormTests(unittest.TestCase):
         self.assertEqual(dt._PAGE_FILTER, {"names": {("resource_groups",)}, "dirs": set()})
 
     def test_bare_name_becomes_a_directory_filter(self):
-        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands"]
+        sys.argv = ["docs_tool.py", "check", "chars", "--no-cyrillic", "--page", "reference/sql_commands"]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
@@ -5440,7 +5440,7 @@ class MainPageValueFormTests(unittest.TestCase):
         self.assertEqual(dt._PAGE_FILTER, {"names": set(), "dirs": {("reference", "sql_commands")}})
 
     def test_trailing_slash_on_directory_is_ignored(self):
-        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "reference/sql_commands/"]
+        sys.argv = ["docs_tool.py", "check", "chars", "--no-cyrillic", "--page", "reference/sql_commands/"]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
@@ -5449,7 +5449,7 @@ class MainPageValueFormTests(unittest.TestCase):
 
     def test_uncommitted_sentinel_still_accepted(self):
         subprocess.run(["git", "init", "-q"], check=True)
-        sys.argv = ["docs_tool.py", "--check-pages-no-cyrillic", "--page", "UNCOMMITTED"]
+        sys.argv = ["docs_tool.py", "check", "chars", "--no-cyrillic", "--page", "UNCOMMITTED"]
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             with self.assertRaises(SystemExit) as ctx:
@@ -5458,7 +5458,7 @@ class MainPageValueFormTests(unittest.TestCase):
 
 
 class CompletePageNameTests(FixtureTestCase):
-    """--page/--sync's argcomplete tab-completion source: every EN/RU
+    """--page/sync's argcomplete tab-completion source: every EN/RU
     pages/partials .adoc filename across all discovered modules."""
 
     def test_collects_en_and_ru_filenames_deduplicated(self):
@@ -5473,12 +5473,14 @@ class CompletePageNameTests(FixtureTestCase):
         self.assertEqual(set(names), {"foo.adoc", "bar.adoc", "baz.adoc"})
 
     def test_page_action_and_sync_action_wired_to_the_right_completer(self):
-        """--page also accepts a directory (see _content_relpath), --sync
-        doesn't -- each gets the completer matching what it actually accepts."""
-        parser = dt.build_parser()
-        actions_by_flag = {opt: a for a in parser._actions for opt in a.option_strings}
-        self.assertIs(actions_by_flag["--page"].completer, dt._complete_page_or_dir_name)
-        self.assertIs(actions_by_flag["--sync"].completer, dt._complete_page_name)
+        """--page also accepts a directory (see _content_relpath), the sync
+        positional doesn't -- each gets its matching completer."""
+        parser = dt._build_parser()
+        subparsers = parser._subparsers._group_actions[0].choices
+        page_action = next(a for a in subparsers["check"]._actions if "--page" in a.option_strings)
+        sync_action = next(a for a in subparsers["sync"]._actions if a.dest == "file")
+        self.assertIs(page_action.completer, dt._complete_page_or_dir_name)
+        self.assertIs(sync_action.completer, dt._complete_page_name)
 
     def test_dir_completer_includes_every_nesting_level_with_trailing_slash(self):
         """Trailing "/" on every directory candidate (not "reference",
@@ -5630,7 +5632,7 @@ class HelpRulesTableTests(unittest.TestCase):
     this is the first thing people look at."""
 
     def test_help_lists_every_rule_and_its_command(self):
-        help_text = dt._build_v2_parser().format_help()
+        help_text = dt._build_parser().format_help()
         for fam, rules in dt.FAMILIES.items():
             for rule, targets in rules.items():
                 primary = targets.get("pages") or next(iter(targets.values()))
@@ -5680,7 +5682,7 @@ class RuleExampleTests(unittest.TestCase):
     def test_examples_are_real_commands(self):
         """Generated from _check_command, so they can't drift from the parser.
         Re-parse each one to prove it."""
-        parser = dt._build_v2_parser()
+        parser = dt._build_parser()
         for key in dt.CHECKS:
             for cmd, _ in dt._rule_examples(key):
                 argv = cmd.split()[1:]
@@ -5724,7 +5726,7 @@ class RuleExampleTests(unittest.TestCase):
         per-rule `show` needs 22 invocations to do the same job."""
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            dt._v2_show("all")
+            dt._show("all")
         text = out.getvalue()
         for key, rid in dt.RULE_IDS.items():
             self.assertIn(rid, text, rid)
@@ -5734,7 +5736,7 @@ class RuleExampleTests(unittest.TestCase):
         """22 full docstrings would be a document, not a reference."""
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            dt._v2_show("all")
+            dt._show("all")
         text = out.getvalue()
         doc = (dt.CHECKS["pages-no-yo"].__doc__ or "")
         self.assertNotIn("Фёдоров", text)          # from ST01's rationale
@@ -5742,7 +5744,7 @@ class RuleExampleTests(unittest.TestCase):
         # ...and the single-rule view still has it
         one = io.StringIO()
         with contextlib.redirect_stdout(one):
-            dt._v2_show("ST01")
+            dt._show("ST01")
         self.assertIn("Фёдоров", one.getvalue())
 
     def test_show_all_is_discoverable(self):
@@ -5750,13 +5752,13 @@ class RuleExampleTests(unittest.TestCase):
         self.assertIn("show all", dt.__doc__)
         listing = io.StringIO()
         with contextlib.redirect_stdout(listing):
-            dt._v2_list(None)
+            dt._list(None)
         self.assertIn("show all", listing.getvalue())
 
     def test_show_prints_the_examples(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            dt._v2_show("ST01")
+            dt._show("ST01")
         text = out.getvalue()
         self.assertIn("Examples:", text)
         self.assertIn("./docs_tool.py check style --no-yo", text)
@@ -5812,7 +5814,7 @@ class RuleFlagMetadataTests(unittest.TestCase):
         """_FLAG_FAMILY_SCOPE drives which flags `check <family> <TAB>`
         hides -- keep it honest against the parser and FAMILIES."""
         check_flags = set()
-        for a in dt._build_v2_parser()._subparsers._group_actions[0].choices["check"]._actions:
+        for a in dt._build_parser()._subparsers._group_actions[0].choices["check"]._actions:
             check_flags.update(a.option_strings)
         for flag, fams in dt._FLAG_FAMILY_SCOPE.items():
             self.assertIn(flag, check_flags, flag)
@@ -5847,11 +5849,6 @@ class NoDocsTreeTests(unittest.TestCase):
 
     def test_check_refuses_without_a_docs_tree(self):
         code, out = self._run("check", "chars", "markup", "refs", "style", "terms", "l10n")
-        self.assertNotEqual(code, 0)
-        self.assertNotIn("OK:", out)
-
-    def test_legacy_check_refuses_too(self):
-        code, out = self._run("--all-checks")
         self.assertNotEqual(code, 0)
         self.assertNotIn("OK:", out)
 
@@ -6362,7 +6359,7 @@ class RunSyncGitRewordTests(unittest.TestCase):
 
 class FamilySelectionTests(unittest.TestCase):
     """_resolve_family_selection: the routing layer that maps
-    `check <family> [--rule] [--target]` to legacy CHECKS keys."""
+    `check <family> [--rule] [--target]` to internal CHECKS keys."""
 
     def test_every_family_and_rule_maps_to_a_real_check(self):
         for fam, rules in dt.FAMILIES.items():
@@ -6436,7 +6433,7 @@ class FamilySelectionTests(unittest.TestCase):
     def test_none_family_spans_every_non_network_family(self):
         self.assertEqual(
             set(dt._resolve_family_selection(None, None, None)),
-            set(dt.CHECKS) - dt._NETWORK_ONLY_CHECKS - dt._OPT_IN_CHECKS,
+            set(dt.CHECKS) - {"links-external"} - dt._OPT_IN_CHECKS,
         )
 
     def test_network_family_only_runs_when_named(self):
@@ -6458,9 +6455,8 @@ class FamilySelectionTests(unittest.TestCase):
         self.assertIsNone(dt._family_of("nonsense"))
 
 
-class CliV2RoutingTests(unittest.TestCase):
-    """main() dispatch: `check|sync|list` route to the new surface,
-    everything else stays on the legacy --check-* parser."""
+class CliRoutingTests(unittest.TestCase):
+    """End-to-end routing through the check/show/list/sync subcommands."""
 
     def setUp(self):
         self._argv = sys.argv
@@ -6496,7 +6492,7 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("--no-yo", out)
         self.assertIn("CH01", out)
         self.assertIn("no Cyrillic", out)          # a SUMMARIES blurb
-        self.assertNotIn("pages-no-cyrillic", out) # no legacy-key line in the tree
+        self.assertNotIn("pages-no-cyrillic", out) # no internal-key line in the tree
 
     def test_show_rule_prints_its_rationale(self):
         code, out, _ = self._run("show", "no-yo")
@@ -6519,11 +6515,6 @@ class CliV2RoutingTests(unittest.TestCase):
         code, _, err = self._run("list", "no-yo")
         self.assertEqual(code, 2)
         self.assertIn("show no-yo", err)
-
-    def test_list_modules_points_at_legacy_flag(self):
-        code, _, err = self._run("list", "modules")
-        self.assertEqual(code, 2)
-        self.assertIn("--list-modules", err)
 
     def test_list_targets(self):
         code, out, _ = self._run("list", "targets")
@@ -6613,24 +6604,8 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 1, err)
         self.assertIn("trailing whitespace", out)
 
-    def test_legacy_all_checks_skips_opt_in_but_explicit_flag_runs_it(self):
-        original = dt._run_selected
-        calls = []
-        try:
-            dt._run_selected = lambda selected, *args, **kwargs: calls.append(selected) or True
-            code, _, err = self._run("--all-checks")
-            self.assertEqual(code, 0, err)
-            self.assertNotIn("pages-no-trailing-whitespace", calls[-1])
-            self.assertNotIn("examples-no-trailing-whitespace", calls[-1])
-
-            code, _, err = self._run("--check-pages-no-trailing-whitespace")
-            self.assertEqual(code, 0, err)
-            self.assertEqual(calls[-1], ["pages-no-trailing-whitespace"])
-        finally:
-            dt._run_selected = original
-
     def test_opt_in_rule_is_labelled_in_listings(self):
-        for args in (("list",), ("list", "rules"), ("show", "CH06"), ("--list-checks",)):
+        for args in (("list",), ("list", "rules"), ("show", "CH06")):
             code, out, err = self._run(*args)
             self.assertEqual(code, 0, err)
             self.assertIn("opt-in", out)
@@ -6688,16 +6663,6 @@ class CliV2RoutingTests(unittest.TestCase):
                 self.assertIn("OK:", out)
                 self.assertNotIn("SKIP:", out)
 
-    def test_legacy_page_scope_also_skips_global_checks(self):
-        (Path(self._tmp) / "en/modules/ROOT/pages/foo.adoc").write_text("= Foo\n")
-
-        code, out, err = self._run(
-            "--check-pages-orphaned", "--page", "foo.adoc")
-
-        self.assertEqual(code, 0, err)
-        self.assertIn("SKIP: repository-global check", out)
-        self.assertNotIn("OK:", out)
-
     def test_multi_check_run_shows_external_root_warning_once(self):
         code, _, err = self._run("check", "refs", "--orphaned")
         self.assertEqual(code, 0, err)
@@ -6708,11 +6673,6 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("bogus", err)
 
-    def test_legacy_flags_still_route_to_legacy(self):
-        code, out, _ = self._run("--check-pages-no-yo")
-        self.assertEqual(code, 0)
-        self.assertIn("OK:", out)
-
     def test_multi_rule_run_headers_name_the_rule_not_the_registry_key(self):
         """Section headers are what the user would type to re-run just that
         rule -- internal CHECKS keys (pages-no-cyrillic) are not a surface."""
@@ -6720,10 +6680,6 @@ class CliV2RoutingTests(unittest.TestCase):
         self.assertIn("=== CH01  check chars --no-cyrillic ===", out)
         self.assertIn("=== CH02  check chars --no-cyrillic --target examples ===", out)
         self.assertNotIn("=== pages-no-cyrillic ===", out)
-
-    def test_legacy_run_headers_still_name_the_legacy_flag(self):
-        code, out, _ = self._run("--check-pages-no-yo", "--check-pages-no-cyrillic")
-        self.assertIn("=== --check-pages-no-yo ===", out)
 
     def test_list_rules_prints_commands_sorted_by_id(self):
         code, out, _ = self._run("list", "rules")
@@ -6735,21 +6691,16 @@ class CliV2RoutingTests(unittest.TestCase):
         lines = [l for l in out.splitlines() if l[:2] in ("CH", "MK", "RF", "ST", "TM", "LN")]
         self.assertEqual(lines, sorted(lines))
 
-    def test_bare_invocation_prints_the_new_surface(self):
+    def test_bare_invocation_prints_command_help(self):
         code, out, _ = self._run()
         self.assertEqual(code, 0)
         self.assertIn("check <family>", out)
         self.assertIn("{check,show,list,sync}", out)
 
-    def test_top_level_help_routes_to_new_surface(self):
+    def test_top_level_help_prints_command_help(self):
         code, out, _ = self._run("--help")
         self.assertEqual(code, 0)
         self.assertIn("check <family>", out)
-
-    def test_legacy_flag_still_gets_legacy_help(self):
-        code, out, _ = self._run("--all-checks", "--help")
-        self.assertEqual(code, 0)
-        self.assertIn("Legacy flag interface", out)
 
 
 class MultiRepoCheckTests(unittest.TestCase):
@@ -7043,7 +6994,7 @@ class RuleIdRegistryTests(unittest.TestCase):
     def test_show_accepts_an_id(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            dt._v2_show("ST01")
+            dt._show("ST01")
         self.assertIn("check style --no-yo", out.getvalue())
 
     def test_resolve_check_name(self):
@@ -7616,14 +7567,8 @@ class ExternalLinkWiringTests(unittest.TestCase):
         self.assertIn("links-external", dt.BETA_CHECKS)
         self.assertEqual(dt._check_command("links-external"), "check links")
 
-    def test_links_excluded_from_legacy_all_checks(self):
-        parser = dt.build_parser()
-        args = parser.parse_args(["--all-checks"])
-        selected = [k for k in dt.CHECKS if k not in dt._NETWORK_ONLY_CHECKS]
-        self.assertNotIn("links-external", selected)
-
     def test_link_args_parse_and_configure(self):
-        p = dt._build_v2_parser()
+        p = dt._build_parser()
         args = p.parse_args(["check", "links", "--offline", "--timeout", "5",
                              "--allow-domain", "x.example", "--insecure",
                              "--show-unverified", "--link-cache", "/tmp/lc.json"])
@@ -7645,7 +7590,7 @@ class ExternalLinkWiringTests(unittest.TestCase):
              dt.LINK_CACHE_PATH, dt.LINK_INSECURE, dt.LINK_SHOW_UNVERIFIED) = _orig
 
     def test_no_cache_flag_means_no_caching(self):
-        args = dt._build_v2_parser().parse_args(["check", "links"])
+        args = dt._build_parser().parse_args(["check", "links"])
         _orig = dt.LINK_CACHE_PATH
         try:
             dt._configure_links_from_args(args)
@@ -7654,7 +7599,7 @@ class ExternalLinkWiringTests(unittest.TestCase):
             dt.LINK_CACHE_PATH = _orig
 
     def test_help_lists_lk01(self):
-        help_text = dt._build_v2_parser().format_help()
+        help_text = dt._build_parser().format_help()
         self.assertIn("LK01", help_text)
         self.assertIn("check links", help_text)
 

@@ -183,8 +183,8 @@ own ID/Command/Flags table.
 
 - **`CH06` · `check chars --trailing-whitespace`** · opt-in — no trailing ASCII spaces or
   tabs in `en/` or `ru/` pages/partials, including whitespace-only lines, comments,
-  and literal blocks. Omitted from bare `check chars` and legacy `--all-checks`;
-  pass the explicit flag to run it. Each finding is one clickable `file:line:column` line with
+  and literal blocks. Omitted from bare `check chars`; pass the explicit flag
+  to run it. Each finding is one clickable `file:line:column` line with
   space/tab counts; whitespace-only lines are labeled directly. AsciiDoc's intentional
   space-plus (` +`) hard break is clean. `--target examples` scans every
   example file type → `CH07`; under `--page`, example targets check only files
@@ -742,8 +742,7 @@ avoid cascading mismatches. LN01/LN02/LN04/LN05/LN08 are unchanged.
 
   This is the only check that touches the network — slow, non-deterministic, and
   connectivity-dependent — so it only runs when you name it (`check links`), on its
-  own schedule, for example as a nightly job. The legacy `--all-checks`
-  sweep skips it too. A big doc set can carry many hundreds of external links and a
+  own schedule, for example as a nightly job. A big doc set can carry many hundreds of external links and a
   full run then takes minutes; a `checking k/N` line on stderr tracks progress.
   **Every run is fresh** — pass `--link-cache PATH` to cache results there (7-day
   TTL) if you want reruns to be quick.
@@ -879,34 +878,6 @@ after to find them), and fixes drifted technical tokens (flag names, ids, paths)
 Existing RU prose is never rewritten. When an EN paragraph is **reworded** (not just
 extended), the new text is appended after the old translation with a
 `// STALE VERSION:` marker — reconcile those by hand.
-
-## Legacy `--check-*` flags
-
-The pre-subcommand interface still works: `--check-<name>`, `--all-checks`,
-`--sync`, `--list-checks`, `--list-modules`. Every check is reachable both ways —
-upgrading a vendored copy doesn't break existing scripts or CI jobs. Run
-`./docs_tool.py list` for the current family/rule map, or `./docs_tool.py --list-checks`
-for the legacy flags.
-`--all-checks` runs every default check except `--check-links-external` (network)
-and the opt-in trailing-whitespace checks. Those run only through their explicit
-flags; `--list-checks` marks them `(opt-in)`.
-
-Dropped along the way: `sync --since REF`, the `-v` / `-n` short aliases, and
-`--verbose` — every check now prints one complete output (a long per-file diff is
-capped at 30 lines, past which it's an "open the two files" job, not a `--page`
-one). Two silent no-ops also became errors — running outside a docs tree, and a
-`--page` that matches no file — since both previously reported a clean pass over
-nothing.
-
-If you need the pre-redesign script itself, it's frozen on the
-[`legacy-flags`](https://github.com/andreyaksenov/docs-tool/tree/legacy-flags) branch:
-
-```bash
-curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/legacy-flags/docs_tool.py
-```
-
-That branch is a snapshot for rollback, not a maintained release line — fixes land
-on `main`.
 
 ## Tab completion (optional)
 

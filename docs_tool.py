@@ -40,9 +40,6 @@ Examples:
     ./docs_tool.py check links --show-unverified
     ./docs_tool.py sync en/modules/ROOT/pages/reference/utils/analyzedb.adoc --dry-run
 
-The legacy flag interface -- --check-<name>, --all-checks, --sync,
---list-checks, --list-modules -- still works; see "docs_tool.py --list-checks".
-
 Heuristic checks (marked "beta" by "list") and sync can misfire on
 legitimate content -- treat their output as a review list, not a hard gate.
 Checks marked "opt-in" run only when explicitly selected.
@@ -109,7 +106,7 @@ _INVISIBLE_RE = re.compile('[' + ''.join(
 ) + ']')
 
 # Populated from --external-root NAME=PATH (see main()). Lets
-# --check-pages-broken-refs resolve xref:/include:: targets that point at a
+# `check refs --broken` resolve xref:/include:: targets that point at a
 # separate Antora component (e.g. `xref:ADCM:ROOT:page.adoc[]`) when the
 # user has that component's repo checked out locally -- otherwise such
 # targets are silently treated as pointing outside anything this tool can
@@ -295,7 +292,7 @@ def _merged_external_root_specs(auto_dir, explicit_specs):
     return specs
 
 
-# Populated from --glossary PATH (see main()). Backs --check-pages-terminology:
+# Populated from --glossary PATH (see main()). Backs `check terms`:
 # {lookup_key: {"ru_display": {ru_translation, ...}, "patterns": [pattern, ...]}}
 # where each `pattern` is a tuple of compiled regexes (see _compile_glossary_pattern)
 # -- an entry is satisfied if the RU line matches every regex in any one
@@ -328,8 +325,8 @@ def _discover_default_glossaries():
     """Default for --glossary when it isn't passed: every *-glossary.psv
     file directly under the current directory (the repo root docs_tool.py
     is run from -- same convention EN_MODULES_ROOT/RU_MODULES_ROOT rely on).
-    Lets a docs repo that carries its own glossary file run
-    --check-pages-terminology without spelling out the path every time.
+    Lets a docs repo that carries its own glossary file run `check terms`
+    without spelling out the path every time.
     Sorted for stable, reproducible output; not recursive, so a glossary
     tucked away in a subdirectory still needs to be passed explicitly."""
     return sorted(str(p) for p in Path(".").glob("*-glossary.psv"))
@@ -457,7 +454,7 @@ def _content_relpath(path: Path):
 def _content_relparts_stem(path: Path):
     """_content_relpath(path), as a tuple of parts with the final segment's
     .adoc extension stripped, e.g. ("reference", "sql_commands",
-    "create_role") -- what a --page/--sync file NAME (also .adoc-stripped
+    "create_role") -- what a --page/sync file NAME (also .adoc-stripped
     and split on "/") is suffix-matched against, so a qualifying directory
     prefix disambiguates a same-named file in two different directories
     instead of being silently dropped. None if `path` isn't under a
@@ -5593,8 +5590,8 @@ def check_pages_ru_latin_homoglyphs() -> bool:
 # The one check in this file that touches the network: every http(s) link in
 # pages/ and partials/ is fetched and its status classified (404, redirect,
 # unreachable host, ...). Because it is slow, non-deterministic, and needs
-# connectivity, it is deliberately kept OUT of `--all-checks` (see
-# _NETWORK_ONLY_CHECKS) -- it only ever runs on an explicit `check links`. Findings are advisory (marked [beta]): a link that 403s a
+# connectivity, it only ever runs on an explicit `check links`. Findings are
+# advisory (marked [beta]): a link that 403s a
 # datacenter IP or times out from a CI box is far more often the network in
 # between than a genuinely dead page, so only a hard 404/410 (or an NXDOMAIN
 # host) is counted as a failure; everything else is reported for a human to
@@ -6851,8 +6848,8 @@ CHECKS = {
 }
 
 # Checks whose logic is heuristic (no real AsciiDoc parser behind it) and can
-# therefore misfire on legitimate content -- flagged so --list-checks and the
-# README can warn people to treat their output as a review list, not a gate.
+# therefore misfire on legitimate content -- flagged in listings and the README
+# so people treat their output as a review list, not a gate.
 BETA_CHECKS = {
     "images-dimension-parity",
     "pages-file-path-italics",
@@ -6868,16 +6865,12 @@ BETA_CHECKS = {
     "links-external",   # not heuristic parsing, but network flakiness makes it advisory
 }
 
-# Checks that reach the network. Excluded from the legacy `--all-checks`
-# sweep (a pre-commit hook or CI job must not fan out hundreds of HTTP
-# requests just because it asked for "everything"); on the `check` surface
-# there is no "everything" keyword at all, so a network family only ever
-# runs when named (`check links`).
-_NETWORK_ONLY_CHECKS = {"links-external"}
+# Network families run only when named (`check links`); there is no
+# "everything" keyword that could trigger hundreds of HTTP requests.
 _NETWORK_FAMILIES = {"links"}
 
 # Deterministic but noisy cleanup checks omitted from family/default sweeps.
-# Every check remains available through its explicit rule or legacy flag.
+# Every check remains available through its explicit rule.
 _OPT_IN_CHECKS = {
     "pages-no-trailing-whitespace",
     "examples-no-trailing-whitespace",
@@ -6888,8 +6881,7 @@ _OPT_IN_CHECKS = {
 # CHECK FAMILIES  (the `docs_tool check <family>` surface)
 # --------------------------------------------------------------------------
 #
-# The flat CHECKS keys above stay the source of truth -- every check
-# function, its behaviour, and the legacy `--check-<key>` flag are unchanged.
+# The flat CHECKS keys above stay the source of truth for check functions.
 # FAMILIES is a routing layer on top: it groups the same checks by where a
 # rule's authority comes from, which also predicts how deterministic a check
 # is and whether it should block a commit.
@@ -7624,7 +7616,7 @@ def _sync_merge_safe(en_lines, ru_lines, old_en_lines):
     something to fix. Skipping pins on an already-clean file matters
     because the pins' baseline old-EN<->RU alignment assumes RU still
     mirrors old EN -- if RU was already hand-updated ahead of the tool
-    (e.g. a manual fix applied before re-running --sync), that assumption
+    (e.g. a manual fix applied before re-running sync), that assumption
     breaks and pins can misalign a file that was already fine."""
     plain = sync_merge(en_lines, ru_lines)
     if plain[0] == ru_lines or not old_en_lines:
@@ -7779,8 +7771,8 @@ def _resolve_page_stem(name_parts):
     """Every EN pages/partials .adoc file (across all discovered modules)
     whose content-relative path (.adoc stripped) ends with `name_parts` --
     the same suffix-matching convention --page's NAME already uses (see
-    _page_allowed). Backs --sync's fallback when its argument (already
-    validated to end in .adoc) isn't an existing path: lets --sync take a
+    _page_allowed). Backs sync's fallback when its argument (already
+    validated to end in .adoc) isn't an existing path: lets sync take a
     bare filename like "analyzedb.adoc", or a directory-qualified one like
     "reference/gp_toolkit/gp_ao_diskquota_no_perm_map.adoc" to disambiguate
     a same-named file in two different directories, instead of always
@@ -7797,7 +7789,7 @@ def _resolve_page_stem(name_parts):
 
 def run_sync(en_file: str, dry_run: bool):
     if not en_file.endswith(".adoc"):
-        _usage_error(f"error: --sync {en_file!r} must end with .adoc -- "
+        _usage_error(f"error: sync {en_file!r} must end with .adoc -- "
                   f"AsciiDoc/Antora has no separate topic-id, the filename is the identifier.")
     en_path = Path(en_file)
     if not en_path.is_file():
@@ -7811,7 +7803,7 @@ def run_sync(en_file: str, dry_run: bool):
             en_path = matches[0]
         elif len(matches) > 1:
             listing = "\n".join(f"  {m}" for m in sorted(str(m) for m in matches))
-            _usage_error(f"error: --sync {en_file!r} matches multiple files -- pass a full path to disambiguate:\n{listing}")
+            _usage_error(f"error: sync {en_file!r} matches multiple files -- pass a full path to disambiguate:\n{listing}")
         else:
             _usage_error(f"error: not a file, and no page/partial named {en_file!r}: {en_path}")
 
@@ -7925,7 +7917,7 @@ def run_sync(en_file: str, dry_run: bool):
             print()
 
     if real_inserted or replaced or marked:
-        print("\nNext: run ./docs_tool.py --check-pages-translation to locate the newly untranslated lines for translation.")
+        print("\nNext: run ./docs_tool.py check l10n --untranslated to locate the newly untranslated lines for translation.")
 
 
 # --------------------------------------------------------------------------
@@ -7933,7 +7925,7 @@ def run_sync(en_file: str, dry_run: bool):
 # --------------------------------------------------------------------------
 
 def _discover_page_completions():
-    """Return file and directory candidates for --page/--sync completion.
+    """Return file and directory candidates for --page/sync completion.
     Directory candidates end in `/` so path completion can continue. Files
     include every accepted suffix-qualified form, from the bare filename to
     the full content-relative path, across EN/RU pages and partials."""
@@ -7955,9 +7947,9 @@ def _discover_page_completions():
 
 
 def _complete_page_name(**kwargs):
-    """argcomplete completer for --sync: every EN/RU pages/partials .adoc
+    """argcomplete completer for sync: every EN/RU pages/partials .adoc
     filename (bare, no path -- matching what EN_FILE accepts), since
-    --sync's single-file target can't be a directory."""
+    sync's single-file target can't be a directory."""
     names, _ = _discover_page_completions()
     return sorted(names)
 
@@ -7965,7 +7957,7 @@ def _complete_page_name(**kwargs):
 def _complete_page_or_dir_name(**kwargs):
     """argcomplete completer for --page: filenames plus every
     content-relative directory, since --page can also scope a whole
-    subtree (unlike --sync's single-file-only target)."""
+    subtree (unlike sync's single-file-only target)."""
     names, dirs = _discover_page_completions()
     return sorted(names | dirs)
 
@@ -8027,93 +8019,6 @@ if argcomplete:
             return comps
 else:
     _CheckCompletionFinder = None
-
-
-def build_parser():
-    parser = argparse.ArgumentParser(
-        prog="docs_tool.py",
-        description="Legacy flag interface (--check-<name>, --all-checks, --sync, "
-                    "--list-checks, --list-modules). Still supported. The current "
-                    "surface is 'docs_tool.py check <family>' -- run 'docs_tool.py --help' "
-                    "(no other args) or 'docs_tool.py list' for it.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    check_group = parser.add_argument_group("checks")
-    for name in CHECKS:
-        check_group.add_argument(f"--check-{name}", action="store_true", help=argparse.SUPPRESS)
-
-    parser.add_argument("--all-checks", action="store_true",
-                        help="Run all default checks (excludes network and opt-in rules).")
-    parser.add_argument("--list-checks", action="store_true", help="List available --check-* flags and exit.")
-    parser.add_argument("--list-modules", action="store_true",
-                        help="List every discovered module (under en/modules/ and ru/modules/) and exit.")
-    page_action = parser.add_argument("--page", action="append", metavar="NAME",
-                        help="Limit the per-file en/ru checks (translation, line-parity, "
-                             "structure-parity, link-parity, literal-parity, no-cyrillic, "
-                             "no-unicode-dashes, no-yo, no-invisible-chars, ru-latin-homoglyphs, "
-                             "table-cell-periods, file-path-italics, terminology) to page(s)/partial(s) whose filename "
-                             "matches NAME, e.g. --page resource_groups.adoc -- NAME must end with .adoc "
-                             "(AsciiDoc/Antora has no separate topic-id, the filename is the identifier). "
-                             "A same-named file in two different directories can be disambiguated by "
-                             "qualifying NAME with as much of the trailing directory path as needed, e.g. "
-                             "--page reference/gp_toolkit/gp_ao.adoc or just --page gp_toolkit/gp_ao.adoc "
-                             "(matched by the path relative to pages/partials ending with NAME; the module "
-                             "itself is never part of the match, same as the directory form below). "
-                             "Alternatively, a NAME not ending in .adoc scopes every page/partial under "
-                             "that content-relative directory instead, recursively, in any module, e.g. "
-                             "--page reference/sql_commands matches every file under any module's "
-                             "pages/reference/sql_commands/ or partials/reference/sql_commands/. "
-                             "Repeatable, and file/directory forms can be mixed. Pass the "
-                             "special value UNCOMMITTED instead of a name to scope to whatever "
-                             ".adoc files currently have uncommitted changes (staged, unstaged, "
-                             "or untracked) per `git status` -- handy in a pre-commit hook. "
-                             "Pass BRANCH to scope to pages/partials changed by commits in "
-                             "base...head (default HEAD and the detected default base branch). "
-                             "Repository-global orphan checks are skipped with SKIP. "
-                             "Nav parity runs only when BRANCH changed nav.adoc or a nav partial. "
-                             "Example/image checks are limited to dependencies of selected "
-                             "content. Reference resolution remains site-wide, "
-                             "but only selected source files produce findings. Optional -- "
-                             "omit to check the whole site as before.")
-    page_action.completer = _complete_page_or_dir_name
-    parser.add_argument("--head", metavar="REV",
-                        help="With --page BRANCH: revision to compare (default HEAD). "
-                             "Must name the checked-out commit.")
-    parser.add_argument("--base", metavar="REV",
-                        help="With --page BRANCH: merge-base revision (default: origin/HEAD, "
-                             "then main/master).")
-    parser.add_argument("--external-root", action="append", metavar="NAME=PATH",
-                        help="With --check-pages-broken-refs and --check-pages-missing-xref-text: "
-                             "resolve xref:/include:: targets "
-                             "against another Antora component's repo checked out locally, e.g. "
-                             "--external-root ADCM=../docs-adcm. Repeatable. Without this, "
-                             "references into a component that isn't part of this repo are left "
-                             "unchecked rather than reported broken.")
-    parser.add_argument("--glossary", action="append", metavar="PATH",
-                        help="With --check-pages-terminology: an EN-term-to-RU-translation "
-                             "glossary file (pipe-delimited, columns en|ru|ru_pattern|note -- "
-                             "format documented in a *-glossary.psv file's own header) to check "
-                             "pages/partials against. Repeatable -- entries from every file "
-                             "passed are merged. If omitted, defaults to every *-glossary.psv "
-                             "file found directly under the current directory.")
-    _add_link_args(parser)
-
-    sync_group = parser.add_argument_group("sync")
-    sync_action = sync_group.add_argument("--sync", metavar="EN_FILE",
-                            help="(beta) Align the RU counterpart of EN_FILE to match its current "
-                                 "structure/content. EN_FILE must end with .adoc, and can be the full "
-                                 "relative path (e.g. en/modules/ROOT/pages/foo.adoc) or, like --page NAME, "
-                                 "just the bare filename (e.g. foo.adoc) -- resolved by searching all "
-                                 "discovered modules' pages/partials, same as --page. A bare filename "
-                                 "matching more than one file can be disambiguated the same way --page's "
-                                 "can, by qualifying it with trailing directory path segments (e.g. "
-                                 "reference/gp_toolkit/gp_ao.adoc), or by passing the full path instead. "
-                                 "Heuristic aligner, not a semantic merge -- review its output before "
-                                 "trusting it.")
-    sync_action.completer = _complete_page_name
-    sync_group.add_argument("--dry-run", action="store_true",
-                            help="With --sync: print the diff instead of writing the RU file.")
-    return parser
 
 
 def _require_a_docs_tree():
@@ -8199,9 +8104,8 @@ def _reject_unmatched_page_filters(page_args, repo_paths=None):
 
 
 def _apply_page_filter(page_args, head=None, base=None):
-    """Turn --page NAME values into the _PAGE_FILTER global (shared by both
-    the legacy and the `check` surface). Exits 0 immediately if dynamic
-    selectors resolve to no pages and no branch navigation change."""
+    """Turn --page NAME values into the _PAGE_FILTER global. Exits 0 immediately
+    if dynamic selectors resolve to no pages and no branch navigation change."""
     global _PAGE_FILTER
     _validate_branch_page_options(page_args, head, base)
     if not page_args:
@@ -8327,7 +8231,7 @@ def _repo_glossary_paths(base_glossary, selected):
     return combined
 
 
-def _run_selected(selected, glossary_paths, legacy_headers=False):
+def _run_selected(selected, glossary_paths):
     """Run an ordered list of CHECKS keys, printing a header between them
     when more than one is selected. With --page, repository-global checks
     report SKIP instead of running, except nav parity for a BRANCH that changed
@@ -8339,9 +8243,9 @@ def _run_selected(selected, glossary_paths, legacy_headers=False):
     if "pages-terminology" in selected:
         paths = glossary_paths or _discover_default_glossaries()
         if not paths and len(selected) > 1:
-            # Swept in as part of a multi-check run (a multi-family `check`,
-            # `--all-checks`) with no glossary available -- skip it with a note
-            # rather than aborting (a bare `check terms` still errors, in the check).
+            # Swept in as part of a multi-family run with no glossary available
+            # -- skip it with a note rather than aborting (a bare `check terms`
+            # still errors, in the check).
             print("note: skipping terminology check -- no --glossary and no "
                   "*-glossary.psv in the current directory", file=sys.stderr)
             selected = [k for k in selected if k != "pages-terminology"]
@@ -8356,11 +8260,7 @@ def _run_selected(selected, glossary_paths, legacy_headers=False):
         if len(selected) > 1:
             if i:
                 print()
-            # The `check` surface labels each section the way the user would
-            # re-run it (rule ID + command); the legacy surface keeps naming
-            # the --check-* flag that selected it.
-            header = f"--check-{name}" if legacy_headers else \
-                f"{RULE_IDS[name]}  {_check_command(name)}"
+            header = f"{RULE_IDS[name]}  {_check_command(name)}"
             print(f"=== {header} ===")
         if _PAGE_FILTER is not None and name in _GLOBAL_CHECKS:
             nav_in_scope = name == "nav-structure-parity" and _PAGE_FILTER.get("nav", False)
@@ -8372,73 +8272,13 @@ def _run_selected(selected, glossary_paths, legacy_headers=False):
     return overall_ok
 
 
-def _main_legacy():
-    """The pre-subcommand CLI: `docs_tool.py --check-<name> ...`,
-    `--all-checks`, `--sync`, `--list-checks`, `--list-modules`. Still
-    supported; `docs_tool.py check <family>` is the current surface."""
-    global EXTERNAL_COMPONENTS, _EXTERNAL_ROOT_WARNING_SHOWN
-    _EXTERNAL_ROOT_WARNING_SHOWN = False
-    parser = build_parser()
-    if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
-        # Blank out the SUPPRESS sentinel so it doesn't leak into the completion
-        # listing as a fake description -- only touches argparse's in-memory
-        # action objects during an actual completion request, so --help (which
-        # relies on help=SUPPRESS to hide these from its output) is unaffected.
-        for action in parser._actions:
-            if action.help == argparse.SUPPRESS:
-                action.help = None
-        argcomplete.autocomplete(parser, print_suppressed=True)
-    args = parser.parse_args()
-    EXTERNAL_COMPONENTS = _load_external_components(args.external_root)
-    _configure_links_from_args(args)
-
-    if args.list_checks:
-        for name in CHECKS:
-            tag = " (beta)" if name in BETA_CHECKS else ""
-            if name in _OPT_IN_CHECKS:
-                tag += " (opt-in)"
-            print(f"--check-{name}{tag}")
-        if any(name in BETA_CHECKS for name in CHECKS):
-            print("\n(beta): heuristic, not a real AsciiDoc parser -- treat findings as a "
-                  "review list, not a hard failure.")
-        return
-
-    if args.list_modules:
-        for name in discover_module_names():
-            print(name)
-        return
-
-    if args.sync:
-        _require_a_docs_tree()
-        run_sync(args.sync, dry_run=args.dry_run)
-        return
-
-    default_excluded = _NETWORK_ONLY_CHECKS | _OPT_IN_CHECKS
-    selected = [k for k in CHECKS if k not in default_excluded] if args.all_checks else [
-        name for name in CHECKS if getattr(args, f"check_{name.replace('-', '_')}")
-    ]
-
-    if not selected:
-        parser.print_help()
-        sys.exit(2)
-
-    _require_a_docs_tree()
-    _apply_page_filter(args.page, args.head, args.base)
-
-    overall_ok = _run_selected(selected, args.glossary, legacy_headers=True)
-    sys.exit(0 if overall_ok else 1)
-
-
 # --------------------------------------------------------------------------
-# `docs_tool check|show|list|sync` -- the family-based surface
+# `docs_tool check|show|list|sync`
 # --------------------------------------------------------------------------
-
-_V2_VERBS = ("check", "sync", "list", "show")
 
 
 def _add_link_args(parser):
-    """The `check links` knobs. Shared by both surfaces so
-    `--check-links-external --timeout 5` works on the legacy one too."""
+    """The `check links` knobs."""
     parser.add_argument("--timeout", type=float, metavar="SECONDS",
                         help="Per-request timeout for 'check links' (default 10).")
     parser.add_argument("--offline", action="store_true",
@@ -8482,7 +8322,7 @@ def _configure_links_from_args(args):
     LINK_INSECURE = bool(getattr(args, "insecure", False))
 
 
-def _build_v2_parser():
+def _build_parser():
     p = argparse.ArgumentParser(
         prog="docs_tool.py",
         # The rule table is generated, not written out here: --help is where
@@ -8610,7 +8450,7 @@ _FLAG_FAMILY_SCOPE = {
 
 
 def _resolve_check_name(name):
-    """A rule name, a legacy CHECKS key, or a rule ID -> CHECKS key
+    """A rule name, an internal CHECKS key, or a rule ID -> CHECKS key
     (None if it matches nothing)."""
     fam = _family_of(name)
     if fam:
@@ -8653,7 +8493,7 @@ def _check_command(key):
     return base + (f" --target {tgt}" if tgt else "")
 
 
-def _v2_list(what, args=None):
+def _list(what, args=None):
     if what == "rules":
         rows = sorted((RULE_IDS[k], _check_command(k),
                        ("  [beta]" if k in BETA_CHECKS else "")
@@ -8676,8 +8516,6 @@ def _v2_list(what, args=None):
         for spec in specs:
             print(spec)
         return
-    if what == "modules":
-        _usage_error("list: module discovery moved -- use 'docs_tool.py --list-modules'")
     if what not in (None, "families"):
         hint = f" -- did you mean 'docs_tool show {what}'?" if _resolve_check_name(what) else ""
         _usage_error(f"list: unknown argument '{what}' (expected: rules, targets, external-roots){hint}")
@@ -8722,7 +8560,7 @@ def _print_examples(key, indent="  "):
         print(f"{indent}{note:<{width}}   {cmd}")
 
 
-def _v2_show_all():
+def _show_all():
     """Every rule with its examples, in rule-ID order. The per-rule docstrings
     are left out on purpose: 22 full rationales is a document, not a reference
     you scan -- `show <rule>` is there when you want one of them."""
@@ -8737,9 +8575,9 @@ def _v2_show_all():
           "known false positives")
 
 
-def _v2_show(name):
+def _show(name):
     if name == "all":
-        return _v2_show_all()
+        return _show_all()
     key = _resolve_check_name(name)
     if key is None:
         _usage_error(f"unknown rule: {name}  (run 'docs_tool list' for the map, "
@@ -8757,19 +8595,19 @@ def _v2_show(name):
     _print_examples(key)
 
 
-def _main_v2():
+def main():
     global EXTERNAL_COMPONENTS, _EXTERNAL_ROOT_WARNING_SHOWN
     _EXTERNAL_ROOT_WARNING_SHOWN = False
-    parser = _build_v2_parser()
+    parser = _build_parser()
     if not sys.argv[1:]:                 # bare `docs_tool.py` -> full help, exit 0
         parser.print_help()
         return
     args = parser.parse_args()
 
     if args.verb == "list":
-        return _v2_list(args.what, args)
+        return _list(args.what, args)
     if args.verb == "show":
-        return _v2_show(args.name)
+        return _show(args.name)
     if args.verb == "sync":
         _require_a_docs_tree()
         run_sync(args.file, dry_run=args.dry_run)
@@ -8813,26 +8651,6 @@ def _main_v2():
         _apply_page_filter(args.page, args.head, args.base)
         ok = _run_selected(selected, glossary)
     sys.exit(0 if ok else 1)
-
-
-def main():
-    comp_line = os.environ.get("COMP_LINE")
-    if comp_line is not None:
-        # Tab-completion: route on the partial line. Prefer the subcommand
-        # parser while the first token is still empty or could become a verb
-        # (so `docs_tool <TAB>` and `docs_tool che<TAB>` complete the verbs);
-        # fall to the legacy parser only once a `-`-flag is being typed.
-        toks = comp_line.split()
-        first = toks[1] if len(toks) > 1 else ""
-        if not first or any(v.startswith(first) for v in _V2_VERBS) or first in _V2_VERBS:
-            return _main_v2()
-        return _main_legacy()
-    argv = sys.argv[1:]
-    # No args, top-level --help, or a subcommand -> the current surface.
-    # A legacy flag (--check-*, --all-checks, --list-*, --sync ...) -> legacy.
-    if not argv or argv[0] in _V2_VERBS or argv[0] in ("-h", "--help"):
-        return _main_v2()
-    return _main_legacy()
 
 
 if __name__ == "__main__":
