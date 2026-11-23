@@ -4152,8 +4152,8 @@ def _strip_noise(line: str) -> str:
 
 
 def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
-    """Returns the number of UNTRANSLATED/SUSPECT lines flagged, or None
-    when the pair cannot be aligned."""
+    """Returns the number of SUSPECT lines flagged, or None when the pair
+    cannot be aligned."""
     aligned = _l10n_aligned_lines(en_file, ru_file)
     if aligned is None:
         return None
@@ -4219,7 +4219,7 @@ def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
         if en_text == ru_text:
             ensure_header()
             finding_count += 1
-            print(f"  UNTRANSLATED  {_format_location(ru_file, lineno)}: {en_text}")
+            print(f"  SUSPECT       {_format_location(ru_file, lineno)}: {en_text}")
         elif not _HEADING_RE.match(en_text):
             candidate = _strip_noise(ru_text).lower()
             candidate = _HYPHEN_JOIN_RE.sub(r'\1\2', candidate)
@@ -4235,10 +4235,10 @@ def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
 
 def check_pages_translation() -> bool:
     """Port of check_pages_translation.sh. Flags RU lines byte-identical to EN
-    (UNTRANSLATED) and RU lines carrying English stopwords (SUSPECT); each
-    SUSPECT line ends with the matched stopword(s) in brackets. A length
-    mismatch is reported as unaligned and the pair is skipped without cascading
-    findings."""
+    and RU lines carrying English stopwords. Every finding is labeled SUSPECT
+    because both heuristics need review; stopword hits also end with the matched
+    word(s) in brackets. A length mismatch is reported as unaligned and the pair
+    is skipped without cascading findings."""
     ok = True
     total_hits = 0
     skipped_count = 0
@@ -4268,7 +4268,7 @@ def check_pages_translation() -> bool:
         print("OK: no untranslated lines detected.")
     else:
         if total_hits:
-            print(f"\nTotal: {total_hits} untranslated/suspect line(s).")
+            print(f"\nTotal: {total_hits} suspect line(s).")
         if skipped_count:
             print(f"\nTotal: {skipped_count} file(s) skipped during line comparison.")
     return ok

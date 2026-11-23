@@ -664,11 +664,11 @@ avoid cascading mismatches. LN01/LN02/LN04/LN05/LN08 are unchanged.
   ./docs_tool.py check l10n --structure --page resource_groups.adoc
   ```
 
-- **`LN03` · `check l10n --untranslated`** · beta — RU lines byte-identical to
-  their EN counterpart (`UNTRANSLATED`), plus RU lines carrying English stopwords
-  like `the`/`and`/`with` (`SUSPECT`). Each `SUSPECT` line ends with the matched stopword.
-  A line-count mismatch is reported as `UNALIGNED` rather than checking a
-  potentially shifted common prefix.
+- **`LN03` · `check l10n --untranslated`** · beta — flags RU lines byte-identical
+  to their EN counterpart and RU lines carrying English stopwords like `the`/`and`/`with`.
+  Every finding is labeled `SUSPECT` because both heuristics need review; stopword hits
+  also end with the matched word. A line-count mismatch is reported as `UNALIGNED`
+  rather than checking a potentially shifted common prefix.
   ```bash
   ./docs_tool.py check l10n --untranslated
   ./docs_tool.py check l10n --untranslated --page resource_groups.adoc

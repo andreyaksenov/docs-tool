@@ -4494,14 +4494,15 @@ class PagesShellBlockLangTests(FixtureTestCase):
 
 
 class PagesTranslationTests(FixtureTestCase):
-    def test_identical_line_is_flagged_as_untranslated(self):
+    def test_identical_line_is_flagged_as_suspect(self):
         self.write("en/modules/ROOT/pages/page.adoc",
                     "This is a real sentence with enough words.\n")
         self.write("ru/modules/ROOT/pages/page.adoc",
                     "This is a real sentence with enough words.\n")
         ok, output = self.run_check(dt.check_pages_translation)
         self.assertFalse(ok)
-        self.assertIn("UNTRANSLATED", output)
+        self.assertIn("SUSPECT", output)
+        self.assertNotIn("UNTRANSLATED", output)
 
     def test_code_block_is_skipped(self):
         """A code block that's identical between EN and RU (as code
@@ -4533,7 +4534,7 @@ class PagesTranslationTests(FixtureTestCase):
         self.assertIn("SUSPECT", output)
         self.assertIn("[and]", output)
 
-    def test_description_attribute_untranslated_is_flagged(self):
+    def test_identical_description_attribute_is_flagged_as_suspect(self):
         """:description:/:page-htmltitle: are ":"-prefixed structural
         attribute lines that _is_skip_line treats as non-prose, but their
         values render as real page <meta description>/<title> text and
@@ -4544,7 +4545,8 @@ class PagesTranslationTests(FixtureTestCase):
                     ":description: This page explains the new caching behavior.\n")
         ok, output = self.run_check(dt.check_pages_translation)
         self.assertFalse(ok)
-        self.assertIn("UNTRANSLATED", output)
+        self.assertIn("SUSPECT", output)
+        self.assertNotIn("UNTRANSLATED", output)
 
     def test_description_attribute_translated_passes(self):
         self.write("en/modules/ROOT/pages/page.adoc",
@@ -5217,7 +5219,7 @@ class L10nLineParityTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("UNALIGNED", out)
         self.assertIn("EN 2 / RU 1 lines", out)
-        self.assertNotIn("UNTRANSLATED", out)
+        self.assertNotIn("SUSPECT", out)
         self.assertNotIn("OK:", out)
 
     def test_unaligned_pair_is_reported_once_across_line_checks(self):
