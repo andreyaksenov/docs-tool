@@ -42,6 +42,7 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_external = dt.EXTERNAL_COMPONENTS
         self._orig_external_warning = dt._EXTERNAL_ROOT_WARNING_SHOWN
         self._orig_page_filter = dt._PAGE_FILTER
+        self._orig_l10n_strict = dt._L10N_STRICT
         self._orig_glossary = dt.GLOSSARY
         self._orig_links = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
                             dt.LINK_CACHE_PATH, dt._probe_url,
@@ -51,6 +52,8 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = {}
         dt._EXTERNAL_ROOT_WARNING_SHOWN = False
         dt._PAGE_FILTER = None
+        dt._L10N_STRICT = False
+        dt._L10N_STRICT_SKIPPED_REPORTED.clear()
         dt.GLOSSARY = {}
         dt.LINK_OFFLINE = False
         dt.LINK_ALLOW_DOMAINS = set()
@@ -66,6 +69,8 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = self._orig_external
         dt._EXTERNAL_ROOT_WARNING_SHOWN = self._orig_external_warning
         dt._PAGE_FILTER = self._orig_page_filter
+        dt._L10N_STRICT = self._orig_l10n_strict
+        dt._L10N_STRICT_SKIPPED_REPORTED.clear()
         dt.GLOSSARY = self._orig_glossary
         (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
          dt.LINK_CACHE_PATH, dt._probe_url,
@@ -5154,6 +5159,94 @@ class PagesLiteralParityTests(FixtureTestCase):
         self.assertTrue(ok, out)
 
 
+class L10nStrictTests(FixtureTestCase):
+    def setUp(self):
+        super().setUp()
+        dt._L10N_STRICT = True
+
+    def test_link_moved_to_another_line_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "See xref:first.adoc[first].\nThen xref:second.adoc[second].\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                   "См. xref:first.adoc[первое] и xref:second.adoc[второе].\n"
+                   "Вторая строка без ссылок.\n")
+
+        dt._L10N_STRICT = False
+        relaxed_ok, _ = self.run_check(dt.check_pages_link_parity)
+        dt._L10N_STRICT = True
+        strict_ok, out = self.run_check(dt.check_pages_link_parity)
+
+        self.assertTrue(relaxed_ok)
+        self.assertFalse(strict_ok)
+        self.assertIn("LINE 1", out)
+        self.assertIn("LINE 2", out)
+        self.assertIn("xref:second.adoc", out)
+
+    def test_literal_masked_by_another_line_is_flagged(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "The `operation` step.\nThe `operation` property.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                   "Шаг operation.\nСвойство `operation`.\n")
+
+        dt._L10N_STRICT = False
+        relaxed_ok, _ = self.run_check(dt.check_pages_literal_parity)
+        dt._L10N_STRICT = True
+        strict_ok, out = self.run_check(dt.check_pages_literal_parity)
+
+        self.assertTrue(relaxed_ok)
+        self.assertFalse(strict_ok)
+        self.assertIn("LINE 1", out)
+        self.assertNotIn("LINE 2", out)
+        self.assertIn("EN 1 / RU 0   `operation`", out)
+
+    def test_literal_repetition_count_is_compared(self):
+        self.write("en/modules/ROOT/pages/page.adoc", "`foo` then `foo`.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "`foo`, затем.\n")
+
+        ok, out = self.run_check(dt.check_pages_literal_parity)
+
+        self.assertFalse(ok)
+        self.assertIn("EN 2 / RU 1   `foo`", out)
+
+    def test_literal_normalization_and_ignore_list_still_apply(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "Call `get_part_name()`; it returns NULL here.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                   "Вызовите `get_part_name`; возвращается `NULL`.\n")
+
+        ok, out = self.run_check(dt.check_pages_literal_parity)
+
+        self.assertTrue(ok, out)
+        self.assertIn("corresponding lines", out)
+
+    def test_unaligned_translation_pair_is_not_compared_by_common_prefix(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "This copied sentence would normally be reported.\nAn extra EN line.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                   "This copied sentence would normally be reported.\n")
+
+        ok, out = self.run_check(dt.check_pages_translation)
+
+        self.assertFalse(ok)
+        self.assertIn("UNALIGNED", out)
+        self.assertIn("EN 2 / RU 1 lines", out)
+        self.assertNotIn("UNTRANSLATED", out)
+        self.assertNotIn("OK:", out)
+
+    def test_unaligned_pair_is_reported_once_across_strict_checks(self):
+        self.write("en/modules/ROOT/pages/page.adoc",
+                   "See xref:target.adoc[target] and `operation`.\nAn extra EN line.\n")
+        self.write("ru/modules/ROOT/pages/page.adoc",
+                   "См. xref:target.adoc[цель] и `operation`.\n")
+        selected = ["pages-translation", "pages-link-parity", "pages-literal-parity"]
+
+        ok, out = self.run_check(dt._run_selected, selected, None)
+
+        self.assertFalse(ok)
+        self.assertEqual(out.count("UNALIGNED"), 1, out)
+        self.assertEqual(out.count("not compared in strict mode"), 3, out)
+
+
 class SyncMergeTests(unittest.TestCase):
     """Unit tests for sync_merge -- the pure structural-alignment function
     behind --sync, no filesystem/git involved."""
@@ -5619,6 +5712,12 @@ class RuleExampleTests(unittest.TestCase):
         self.assertTrue(any("--glossary" in c for c, _ in self._examples("TM01")))
         for rid in ("CH01", "LN02", "RF01"):
             self.assertFalse(any("--glossary" in c for c, _ in self._examples(rid)), rid)
+
+    def test_l10n_strict_examples_only_on_line_compared_rules(self):
+        for rid in ("LN03", "LN06", "LN07"):
+            self.assertTrue(any("--l10n-strict" in c for c, _ in self._examples(rid)), rid)
+        for rid in ("LN01", "LN02", "LN04", "LN05", "LN08"):
+            self.assertFalse(any("--l10n-strict" in c for c, _ in self._examples(rid)), rid)
 
     def test_sibling_targets_are_each_named_outright(self):
         """refs --orphaned (RF02) has four sibling targets (partials/
@@ -6190,6 +6289,8 @@ class CheckRuleCompletionTests(unittest.TestCase):
         comps = self._complete("docs_tool.py check l10n ")
         for f in ("--show-unverified", "--offline", "--timeout", "--insecure", "--glossary"):
             self.assertNotIn(f, comps, f)
+        self.assertIn("--l10n-strict", comps)
+        self.assertNotIn("--l10n-strict", self._complete("docs_tool.py check chars "))
         self.assertIn("--external-root", comps)  # dependency traversal can enter external content
         self.assertIn("--page", comps)       # generic flags stay
         self.assertIn("--target", comps)
@@ -6383,6 +6484,7 @@ class CliV2RoutingTests(unittest.TestCase):
     def setUp(self):
         self._argv = sys.argv
         self._pf = dt._PAGE_FILTER
+        self._strict = dt._L10N_STRICT
         self._tmp = tempfile.mkdtemp(prefix="docs_tool_cli_")
         self._cwd = os.getcwd()
         os.chdir(self._tmp)
@@ -6393,6 +6495,7 @@ class CliV2RoutingTests(unittest.TestCase):
     def tearDown(self):
         sys.argv = self._argv
         dt._PAGE_FILTER = self._pf
+        dt._L10N_STRICT = self._strict
         os.chdir(self._cwd)
         shutil.rmtree(self._tmp, ignore_errors=True)
 
@@ -6495,6 +6598,16 @@ class CliV2RoutingTests(unittest.TestCase):
     def test_check_accepts_multiple_families(self):
         code, out, err = self._run("check", "chars", "markup")
         self.assertEqual(code, 0, err)   # no fixture tree -> nothing found
+
+    def test_l10n_strict_sets_mode_in_a_multi_family_run(self):
+        code, _, err = self._run("check", "chars", "l10n", "--l10n-strict")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(dt._L10N_STRICT)
+
+    def test_l10n_strict_requires_the_l10n_family(self):
+        code, _, err = self._run("check", "chars", "--l10n-strict")
+        self.assertEqual(code, 2)
+        self.assertIn("requires the l10n family", err)
 
     def test_rule_with_multiple_families_is_rejected(self):
         code, _, err = self._run("check", "chars", "markup", "--backticks")

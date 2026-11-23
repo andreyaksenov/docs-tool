@@ -626,6 +626,19 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 
 ### `l10n` — EN↔RU parity
 
+`--l10n-strict` makes LN03, LN06 and LN07 compare corresponding EN/RU line numbers.
+LN06/LN07 compare token counts on each line instead of page-wide totals/sets; LN03
+reports a line-count mismatch instead of comparing only the common prefix. A pair with
+different line counts is reported once as `UNALIGNED` and skipped by these checks to
+avoid cascading mismatches. LN01/LN02/LN04/LN05/LN08 are unchanged. The flag also works
+in multi-family runs and with `--page`; without it, the original page-wide behavior stays
+unchanged.
+
+```bash
+./docs_tool.py check l10n --l10n-strict
+./docs_tool.py check chars l10n markup --page BRANCH --l10n-strict
+```
+
 | ID | Command | Flags |
 |----|---------|-------|
 | `LN01` | `check l10n --lines` | EN/RU line counts differ |
@@ -656,9 +669,12 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
 - **`LN03` · `check l10n --untranslated`** · beta — RU lines byte-identical to
   their EN counterpart (`UNTRANSLATED`), plus RU lines carrying English stopwords
   like `the`/`and`/`with` (`SUSPECT`). Each `SUSPECT` line ends with the matched stopword.
+  With `--l10n-strict`, a line-count mismatch is reported as `UNALIGNED` rather than
+  checking a potentially shifted common prefix.
   ```bash
   ./docs_tool.py check l10n --untranslated
   ./docs_tool.py check l10n --untranslated --page resource_groups.adoc
+  ./docs_tool.py check l10n --untranslated --l10n-strict
   ```
 
 - **`LN04` · `check l10n --examples`** — EN and RU `examples/` must hold the same
@@ -688,10 +704,12 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   deliberately links its EN docs site from RU pages, or writes an xref sometimes
   module-qualified and sometimes not, shows up here. Every finding carries a
   clickable `path:line` (first hit on each side on the row, further
-  occurrences one sub-line each).
+  occurrences one sub-line each). By default, counts are compared across the whole page;
+  `--l10n-strict` compares them on each corresponding line.
   ```bash
   ./docs_tool.py check l10n --links
   ./docs_tool.py check l10n --links --page resource_groups.adoc
+  ./docs_tool.py check l10n --links --l10n-strict
   ```
 
 - **`LN07` · `check l10n --literals`** · beta — EN and RU must carry the same set
@@ -702,10 +720,14 @@ Needs a glossary: `--glossary PATH` (pipe-delimited `en|ru|ru_pattern|note`), or
   EN-only, then RU-only. Presence is compared, not count. Beta: RU prose that
   back-ticks a term EN left bare shows up here and usually isn't a bug — treat the
   output as a review list. Every finding carries a clickable `path:line` (first hit
-  on each side on the row, further occurrences one sub-line each).
+  on each side on the row, further occurrences one sub-line each). With `--l10n-strict`,
+  normalized literal counts are compared on each corresponding line, so moving a literal
+  to another line or dropping only its backticks is a mismatch; normalization and the
+  `NULL`/`true`/`false` exclusions still apply.
   ```bash
   ./docs_tool.py check l10n --literals
   ./docs_tool.py check l10n --literals --page resource_groups.adoc
+  ./docs_tool.py check l10n --literals --l10n-strict
   ```
 
 - **`LN08` · `check l10n --image-dimensions`** · beta — EN and RU must have the
