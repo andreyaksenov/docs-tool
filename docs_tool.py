@@ -1810,15 +1810,16 @@ def _substitute_attrs(text, attrs):
     return _ATTR_REF_RE.sub(lambda m: attrs.get(m.group(1), m.group(0)), text)
 
 
-def _resolve_xref_target(t, file, lang_module_roots, lang, own_name, candidate_roots):
+def _resolve_xref_target(t, file, lang_module_roots, lang, own_name, candidate_roots, same_page_targets=None):
     """Resolve an xref destination without reporting it.
 
     Returns (status, display_target, targets). Status is True for a usable
     destination, False for a missing page, and None for an unchecked or empty
     target. Each targets entry is (file, fragment, module_root,
-    target_lang_module_roots); same-page xrefs can have several entries when a
-    partial is included from different modules. Anchor existence is checked by
-    the caller so RF01 and RF07 can apply their own diagnostics."""
+    target_lang_module_roots). For same-page xrefs in partials,
+    same_page_targets supplies the including documents that render the
+    reference. Anchor existence is checked by the caller so RF01 and RF07 can
+    apply their own diagnostics."""
     if _VERSION_PIN_RE.match(t):
         return None, "", []
     ref_lang_module_roots = lang_module_roots
@@ -1844,13 +1845,18 @@ def _resolve_xref_target(t, file, lang_module_roots, lang, own_name, candidate_r
             return False, disp, []
         return True, disp, [(found_root / "pages" / page_t, fragment, found_root, ref_lang_module_roots)]
     if t:
+        if same_page_targets and not m_component:
+            return True, disp, [
+                (target_file, t, target_root, target_roots)
+                for target_file, target_root, target_roots in same_page_targets
+            ]
         return True, disp, [
             (file, t, cand, ref_lang_module_roots) for cand in candidate_roots
         ]
     return None, disp, []
 
 
-def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots):
+def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots, same_page_targets=None):
     """Resolve an xref and report a missing page or anchor.
 
     `t` has its leading `xref:` stripped and any attributes substituted.
@@ -1858,7 +1864,7 @@ def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, ca
     or unregistered external component leaves it unchecked. report=None runs
     the resolution silently so callers can try several attribute contexts."""
     status, disp, targets = _resolve_xref_target(
-        t, file, lang_module_roots, lang, own_name, candidate_roots)
+        t, file, lang_module_roots, lang, own_name, candidate_roots, same_page_targets)
     if status is None:
         return None
     if status is False:
@@ -1876,7 +1882,7 @@ def _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, ca
 
 def _check_shorthand_xref(source, raw_target, has_explicit_text, file, lineno, report,
                           missing_text_report, lang_module_roots, lang, own_name,
-                          candidate_roots, doc_attrs, attrs_contexts):
+                          candidate_roots, doc_attrs, attrs_contexts, same_page_targets=None):
     t = _substitute_attrs(raw_target, doc_attrs)
     context_targets = []
     if "{" in t and attrs_contexts:
@@ -1892,7 +1898,8 @@ def _check_shorthand_xref(source, raw_target, has_explicit_text, file, lineno, r
         missing_text = False
         for candidate in candidates:
             status, _disp, targets = _resolve_xref_target(
-                candidate, file, lang_module_roots, lang, own_name, candidate_roots)
+                candidate, file, lang_module_roots, lang, own_name, candidate_roots,
+                same_page_targets)
             if status is not True:
                 continue
             verdict = _xref_has_automatic_text(
@@ -1909,18 +1916,21 @@ def _check_shorthand_xref(source, raw_target, has_explicit_text, file, lineno, r
         return
     for candidate in context_targets:
         if _resolve_xref(candidate, file, lineno, None, lang_module_roots,
-                         lang, own_name, candidate_roots):
+                         lang, own_name, candidate_roots, same_page_targets):
             return
-    _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, candidate_roots)
+    _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name,
+                  candidate_roots, same_page_targets)
 
 
-def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None, check_macros=True, check_shorthand=False, missing_text_report=None):
+def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, lang="en", partial_includers=None, partial_attrs_contexts=None, partial_live=None, partial_pages=None, check_macros=True, check_shorthand=False, missing_text_report=None):
     """Check references using sibling and registered external module roots.
     Unqualified xrefs, images, and family-attribute links in partials use their
-    including modules; nested includes retain the partial's own module context.
-    Undefined partial attributes are tried against each including page's attribute
-    context and pass if any context resolves. References in tag regions that
-    no include selects are skipped; orphan-tag checking reports them instead."""
+    including modules; same-page xrefs use the documents that include each
+    selected partial line. Nested includes retain the partial's own module
+    context. Undefined partial attributes are tried against each including
+    page's attribute context and pass if any context resolves. References in
+    tag regions that no include selects are skipped; orphan-tag checking
+    reports them instead."""
     lines = _read_lines(file)
     if lines is None:
         return
@@ -1932,19 +1942,26 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
     doc_attrs = _collect_doc_attrs(lines)
     fallback_roots = (partial_includers or {}).get(file) or {root}
     attrs_contexts = (partial_attrs_contexts or {}).get(file)
+    including_pages = (partial_pages or {}).get(file)
 
     for lineno, line in enumerate(lines, 1):
         if lineno in excluded:
             continue
         if live_entry is not None and lineno in live_entry[0] and lineno not in live_entry[1]:
             continue  # dead tag region -- no include:: renders this line (see _build_partial_live_lines)
+        same_page_targets = [
+            (page, page_root, page_roots)
+            for page, page_root, page_roots, selected_lines in (including_pages or ())
+            if selected_lines is None or lineno in selected_lines
+        ] or None
         if check_shorthand:
             for m in _SHORTHAND_XREF_RE.finditer(line):
                 label = m.group(2)
                 _check_shorthand_xref(
                     m.group(0), m.group(1), label is not None and bool(label.strip()),
                     file, lineno, report, missing_text_report, lang_module_roots,
-                    lang, own_name, list(fallback_roots), doc_attrs, attrs_contexts)
+                    lang, own_name, list(fallback_roots), doc_attrs, attrs_contexts,
+                    same_page_targets)
         if not check_macros:
             continue
         for m in _XREF_CANDIDATE_RE.finditer(line):
@@ -1965,12 +1982,12 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                         candidate_t = _substitute_attrs(raw_target, {**ctx, **doc_attrs})[len("xref:"):]
                         if "{" in candidate_t:
                             continue  # this context doesn't define the missing attr(s) either
-                        if _resolve_xref(candidate_t, file, lineno, None, lang_module_roots, lang, own_name, list(fallback_roots)):
+                        if _resolve_xref(candidate_t, file, lineno, None, lang_module_roots, lang, own_name, list(fallback_roots), same_page_targets):
                             resolved_by_a_context = True
                             break
                     if resolved_by_a_context:
                         continue  # resolves under a known including page's own attrs -- not broken
-                _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, list(fallback_roots))
+                _resolve_xref(t, file, lineno, report, lang_module_roots, lang, own_name, list(fallback_roots), same_page_targets)
 
             elif target.startswith("include::"):
                 t = target[len("include::"):]
@@ -2132,6 +2149,62 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     return includers
 
 
+def _build_partial_including_pages(lang_module_roots, lang):
+    """Map each partial to the top-level pages and tag-selected line sets that
+    render it. Each entry is (page, page_root, page_lang_module_roots,
+    selected_lines). A fresh traversal per page preserves distinct include
+    contexts; registered external components are included as sources."""
+    contexts = {}
+    own_name = _own_component_name(lang)
+    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    for comp_modules in EXTERNAL_COMPONENTS.values():
+        comp_lang_module_roots = comp_modules.get(lang, {})
+        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+
+    def walk(file, root, current_roots, only_lines, page, page_root, page_roots, seen, depth=0):
+        key = (file, root, None if only_lines is None else frozenset(only_lines))
+        if depth > 8 or key in seen:
+            return
+        seen.add(key)
+        lines = _read_lines(file)
+        if lines is None:
+            return
+        for lineno, line in enumerate(lines, 1):
+            if only_lines is not None and lineno not in only_lines:
+                continue
+            for m in _INCLUDE_MACRO_RE.finditer(line):
+                target = m.group(1)
+                resolved = _resolve_include_target(
+                    target, file.parent, root, current_roots, lang, own_name,
+                    with_root=True, own_lang_module_roots=lang_module_roots)
+                if resolved is None:
+                    continue
+                target_file, target_root = resolved
+                if not target_file.is_file():
+                    continue
+                target_lines = _read_lines(target_file)
+                if target_lines is None:
+                    continue
+                tags, negated, whole_file = _parse_include_attrs(m.group(2))
+                selected_lines = _tag_filtered_line_numbers(
+                    target_lines, tags, negated, whole_file)
+                if _is_under(target_file, target_root / "partials"):
+                    contexts.setdefault(target_file, []).append(
+                        (page, page_root, page_roots, selected_lines))
+                m_component = _COMPONENT_PREFIX_RE.match(target)
+                next_roots = (_component_context(
+                    m_component.group(0)[:-1], lang, current_roots)
+                    if m_component else current_roots)
+                walk(target_file, target_root, next_roots, selected_lines,
+                     page, page_root, page_roots, seen, depth + 1)
+
+    for module_root, this_lang_module_roots in sources:
+        for page in _iter_files(module_root / "pages", ".adoc"):
+            walk(page, module_root, this_lang_module_roots, None,
+                 page, module_root, this_lang_module_roots, set())
+    return contexts
+
+
 def _build_included_content_roots(lang_module_roots, lang):
     """Map included pages/partials to their including module roots, scanning
     this repo and registered external components. References that use the
@@ -2289,16 +2362,18 @@ def _run_reference_scan(report=None, missing_text_report=None):
     ru_attrs_contexts = _build_partial_attrs_contexts(ru_module_list, ru_module_roots, "ru")
     en_live = _build_partial_live_lines(en_module_roots, "en")
     ru_live = _build_partial_live_lines(ru_module_roots, "ru")
+    en_pages = _build_partial_including_pages(en_module_roots, "en")
+    ru_pages = _build_partial_including_pages(ru_module_roots, "ru")
 
     for _, en_root, ru_root in modules:
-        for lang, root, lang_module_roots, includers, attrs_contexts, partial_live in (
-                ("en", en_root, en_module_roots, en_includers, en_attrs_contexts, en_live),
-                ("ru", ru_root, ru_module_roots, ru_includers, ru_attrs_contexts, ru_live),
+        for lang, root, lang_module_roots, includers, attrs_contexts, partial_live, partial_pages in (
+                ("en", en_root, en_module_roots, en_includers, en_attrs_contexts, en_live, en_pages),
+                ("ru", ru_root, ru_module_roots, ru_includers, ru_attrs_contexts, ru_live, ru_pages),
         ):
             for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
                 _check_refs_in_file(
                     f, root, report, lang_module_roots, lang, includers,
-                    attrs_contexts, partial_live, check_macros=report is not None,
+                    attrs_contexts, partial_live, partial_pages, check_macros=report is not None,
                     check_shorthand=True, missing_text_report=missing_text_report)
 
 

@@ -2633,6 +2633,80 @@ class PagesBrokenRefsTests(FixtureTestCase):
         self.assertFalse(ok)
         self.assertIn("tag 'nope' not found", out)
 
+    def test_same_page_xref_in_partial_uses_including_page_anchor(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See <<partial-restore,partial restore>>.\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/actions.adoc",
+            "= Actions\n\ninclude::partial$shared.adoc[]\n\n"
+            "[#partial-restore]\n== Partial restore\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(ok, output)
+
+    def test_same_page_xref_in_nested_partial_uses_top_level_page_anchor(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/inner.adoc",
+            "See <<details,Details>>.\n",
+        )
+        self.write(
+            "en/modules/ROOT/partials/outer.adoc",
+            "include::partial$inner.adoc[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "= Page\n\ninclude::partial$outer.adoc[]\n\n[#details]\n== Details\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertTrue(ok, output)
+
+    def test_same_page_xref_in_partial_without_including_page_anchor_is_broken(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "See <<missing,Missing>>.\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/page.adoc",
+            "= Page\n\ninclude::partial$shared.adoc[]\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertFalse(ok)
+        self.assertIn("xref:missing (anchor not found)", output)
+
+    def test_same_page_xref_in_partial_respects_include_tags(self):
+        self.antora_yml("en", "TEST")
+        self.write(
+            "en/modules/ROOT/partials/shared.adoc",
+            "tag::used[]\nSee <<details,Details>>.\nend::used[]\n"
+            "tag::other[]\nOther content.\nend::other[]\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/with-anchor.adoc",
+            "= With anchor\n\ninclude::partial$shared.adoc[tag=other]\n\n"
+            "[#details]\n== Details\n",
+        )
+        self.write(
+            "en/modules/ROOT/pages/with-xref.adoc",
+            "= With xref\n\ninclude::partial$shared.adoc[tag=used]\n",
+        )
+
+        ok, output = self.run_check(dt.check_pages_broken_refs)
+
+        self.assertFalse(ok)
+        self.assertEqual(output.count("BROKEN"), 1)
+        self.assertIn("xref:details (anchor not found)", output)
+
     def test_anchor_defined_right_after_a_table_cell_marker_resolves(self):
         """Regression test for the real docs-adpg configure-logging.adoc
         case: `a|[#log_min_messages]` -- an AsciiDoc-content table cell
