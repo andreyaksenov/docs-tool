@@ -40,8 +40,8 @@ Needs Python 3.7+ (no dependencies). `git` is used by `sync` and the Git-backed
 Run with no arguments to print the full command list. A run exits `0` if everything
 passed, `1` if any rule found something, `2` on a usage or setup error (bad flag,
 missing glossary, wrong directory — nothing was checked). `list` labels each
-family `suggest: block` / `suggest: warn` — that's advice for your pre-commit hook,
-not something the tool enforces; the exit code is the same for every family.
+family `suggest: block` / `suggest: warn` as advisory metadata only; the exit code
+is the same for every family.
 
 Rules are grouped into seven **families**:
 
@@ -742,7 +742,7 @@ avoid cascading mismatches. LN01/LN02/LN04/LN05/LN08 are unchanged.
 
   This is the only check that touches the network — slow, non-deterministic, and
   connectivity-dependent — so it only runs when you name it (`check links`), on its
-  own schedule (a nightly job, not a pre-commit hook). The legacy `--all-checks`
+  own schedule, for example as a nightly job. The legacy `--all-checks`
   sweep skips it too. A big doc set can carry many hundreds of external links and a
   full run then takes minutes; a `checking k/N` line on stderr tracks progress.
   **Every run is fresh** — pass `--link-cache PATH` to cache results there (7-day
@@ -806,8 +806,7 @@ reference-resolution context site-wide:
 
 If a bare filename matches two files, qualify it (`--page gp_toolkit/gp_ao.adoc`) or
 pass the full path. `--page UNCOMMITTED` selects staged, unstaged, and untracked
-`.adoc` files. With nothing uncommitted it exits `0` immediately — which is what the
-pre-commit hook relies on.
+`.adoc` files. With nothing uncommitted it exits `0` immediately.
 
 `--page BRANCH` selects complete pages/partials whose paths differ in the committed
 Git range `base...head`. The merge-base comparison excludes changes made only on the
@@ -881,34 +880,11 @@ Existing RU prose is never rewritten. When an EN paragraph is **reworded** (not 
 extended), the new text is appended after the old translation with a
 `// STALE VERSION:` marker — reconcile those by hand.
 
-## Pre-commit hook
-
-Two `check` calls scoped to the commit — the deterministic families block, the rest
-just report. Put this in `.git/hooks/pre-commit` (and `chmod +x` it):
-
-```bash
-#!/usr/bin/env bash
-cd "$(git rev-parse --show-toplevel)"
-
-python3 docs_tool.py check chars markup --page UNCOMMITTED \
-  || { echo "pre-commit: blocking check(s) failed" >&2; exit 1; }
-
-python3 docs_tool.py check style terms l10n --page UNCOMMITTED || true
-```
-
-Move a family from the second line to the first once it runs clean in practice.
-
-**Don't put bare `refs` in the hook.** Its orphan targets still scan and report
-site-wide, so every commit touching one `.adoc` would print old orphan findings.
-Use `check refs --broken --missing-xref-text --page UNCOMMITTED` if you want commit-scoped
-reference findings (resolution still scans the whole site). Run the full orphan checks in CI,
-or by hand before a release.
-
 ## Legacy `--check-*` flags
 
 The pre-subcommand interface still works: `--check-<name>`, `--all-checks`,
 `--sync`, `--list-checks`, `--list-modules`. Every check is reachable both ways —
-upgrading a vendored copy doesn't break an existing hook or CI job. Run
+upgrading a vendored copy doesn't break existing scripts or CI jobs. Run
 `./docs_tool.py list` for the current family/rule map, or `./docs_tool.py --list-checks`
 for the legacy flags.
 `--all-checks` runs every default check except `--check-links-external` (network)
