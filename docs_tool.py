@@ -435,8 +435,7 @@ def _iter_files(root: Path, suffix: str = None):
 # runner skips repository-global rules whenever this filter is set, except for
 # nav parity when a BRANCH filter has "nav" set.
 _PAGE_FILTER = None
-_L10N_STRICT = True
-_L10N_STRICT_SKIPPED_REPORTED = set()
+_L10N_PAIR_ISSUES_REPORTED = set()
 
 
 def _content_relpath(path: Path):
@@ -3859,8 +3858,8 @@ def _en_ru_page_pairs():
                     yield None, ru_file
 
 
-def _strict_l10n_aligned_lines(en_file: Path, ru_file: Path):
-    """Return EN/RU lines only when strict checks can compare them by number.
+def _l10n_aligned_lines(en_file: Path, ru_file: Path):
+    """Return EN/RU lines only when checks can compare them by number.
     Report an unreadable or misaligned pair once per run, not once per check."""
     en_lines = _read_lines(en_file)
     ru_lines = _read_lines(ru_file)
@@ -3870,19 +3869,19 @@ def _strict_l10n_aligned_lines(en_file: Path, ru_file: Path):
     elif len(en_lines) != len(ru_lines):
         label = "UNALIGNED"
         detail = (f"EN {len(en_lines)} / RU {len(ru_lines)} lines; "
-                  "fix LN01 before strict line comparison")
+                  "fix LN01 before comparing corresponding lines")
     else:
         return en_lines, ru_lines
 
     key = (en_file, ru_file)
-    if key not in _L10N_STRICT_SKIPPED_REPORTED:
+    if key not in _L10N_PAIR_ISSUES_REPORTED:
         print(_diff_pair_header(en_file, ru_file))
         print(f"    {label}   {detail}")
-        _L10N_STRICT_SKIPPED_REPORTED.add(key)
+        _L10N_PAIR_ISSUES_REPORTED.add(key)
     return None
 
 
-def _check_strict_line_token_parity(token_fn, quote_tokens, success_message, mismatch_label):
+def _check_line_token_parity(token_fn, quote_tokens, success_message, mismatch_label):
     """Compare language-invariant token multisets on corresponding EN/RU lines."""
     ok = True
     mismatch_count = 0
@@ -3898,7 +3897,7 @@ def _check_strict_line_token_parity(token_fn, quote_tokens, success_message, mis
             ok = False
             mismatch_count += 1
             continue
-        aligned = _strict_l10n_aligned_lines(en_file, ru_file)
+        aligned = _l10n_aligned_lines(en_file, ru_file)
         if aligned is None:
             ok = False
             skipped_count += 1
@@ -3932,7 +3931,7 @@ def _check_strict_line_token_parity(token_fn, quote_tokens, success_message, mis
         if mismatch_count:
             print(f"\nTotal: {mismatch_count} file(s) with {mismatch_label}.")
         if skipped_count:
-            print(f"\nTotal: {skipped_count} file(s) not compared in strict mode.")
+            print(f"\nTotal: {skipped_count} file(s) skipped during line comparison.")
     return ok
 
 
@@ -3985,89 +3984,16 @@ def _link_parity_line_tokens(line):
     return toks
 
 
-def _link_parity_tokens(path: Path):
-    """{token: [line numbers]} for every language-invariant link on a
-    comment/code-filtered line: xref target files (the `#fragment` is
-    dropped -- Antora derives a section anchor from the heading text,
-    which is translated), inline image targets, and external URLs. Image
-    and URL targets are normalised for the `/en/`|`/ru/` and `_en`|`_ru`
-    localisation patterns."""
-    lines = _read_lines(path)
-    if lines is None:
-        return {}
-    excluded = _excluded_ref_lines(path)
-    hits = {}
-    for lineno, line in enumerate(lines, 1):
-        if lineno in excluded:
-            continue
-        for t in _link_parity_line_tokens(line):
-            hits.setdefault(t, []).append(lineno)
-    return hits
-
-
-def _parity_refs(en_file, en_lines, ru_file, ru_lines):
-    """Clickable `path:line` references for one differing token, so a
-    finding opens straight from an IDE / editor terminal. Returns
-    (row_suffix, extra_lines): the first hit on each side goes on the
-    token's own row, any further occurrences get an indented sub-line
-    each."""
-    sides = [(en_file, sorted(set(en_lines))), (ru_file, sorted(set(ru_lines)))]
-    suffix = "   " + "  ".join(f"{_format_location(f, ns[0])}" for f, ns in sides if ns)
-    extra = [f"        {_format_location(f, n)}" for f, ns in sides for n in ns[1:]]
-    return (suffix if suffix.strip() else ""), extra
-
-
 def check_pages_link_parity() -> bool:
-    """Compare multisets of xref files, inline images, and external URLs in
-    EN/RU page pairs, ignoring translated link text. Normalize language-
-    specific fragments, URL hosts/paths, Wikipedia articles, and image suffixes.
-    Findings include source line locations. This beta review list can flag
-    intentional localization or qualification differences. Comments and
-    literal blocks are skipped; --page is honored. By default, token counts are
-    compared on corresponding lines; a line-count mismatch skips the pair to
-    avoid cascading findings."""
-    if _L10N_STRICT:
-        return _check_strict_line_token_parity(
-            _link_parity_line_tokens, False,
-            "OK: en/ru reference the same xrefs, images and URLs on corresponding lines.",
-            "link mismatches")
-    ok = True
-    mismatch_count = 0
-    for en_file, ru_file in _en_ru_page_pairs():
-        if en_file is None:
-            print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
-            ok = False
-            mismatch_count += 1
-            continue
-        if not ru_file.is_file():
-            print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
-            ok = False
-            mismatch_count += 1
-            continue
-        en_hits, ru_hits = _link_parity_tokens(en_file), _link_parity_tokens(ru_file)
-        en_c = Counter({k: len(v) for k, v in en_hits.items()})
-        ru_c = Counter({k: len(v) for k, v in ru_hits.items()})
-        if en_c == ru_c:
-            continue
-        print(_diff_pair_header(en_file, ru_file))
-        rows = []
-        for t in sorted(set(en_c) | set(ru_c)):
-            if en_c[t] == ru_c[t]:
-                continue
-            suffix, extra = _parity_refs(en_file, en_hits.get(t, []),
-                                         ru_file, ru_hits.get(t, []))
-            rows.append(f"    EN {en_c[t]} / RU {ru_c[t]}   {t}{suffix}")
-            rows += extra
-        _emit_parity_rows(rows)
-        print()
-        ok = False
-        mismatch_count += 1
-
-    if ok:
-        print("OK: en/ru reference the same xrefs, images and URLs.")
-    else:
-        print(f"\nTotal: {mismatch_count} file(s) with link mismatches.")
-    return ok
+    """Compare xref, inline-image and URL token counts on corresponding EN/RU
+    lines, ignoring translated link text. Normalize language-specific fragments,
+    URL hosts/paths, Wikipedia articles, and image suffixes. Comments and literal
+    blocks are skipped; --page is honored. A line-count mismatch skips the pair
+    without cascading findings."""
+    return _check_line_token_parity(
+        _link_parity_line_tokens, False,
+        "OK: en/ru reference the same xrefs, images and URLs on corresponding lines.",
+        "link mismatches")
 
 
 # Inline monospace: the ``double`` form first so a `single` span inside it
@@ -4108,99 +4034,16 @@ def _literal_parity_line_tokens(line):
     return toks
 
 
-def _literal_parity_tokens(path: Path):
-    """{literal: [line numbers]} for every inline monospace span on a
-    comment/code-filtered line, after _normalize_literal. Dropped: empty
-    tokens, spans with no alphanumeric character (`|`, `<=`, punctuation
-    table artifacts), very long spans (a whole translated sentence in
-    backticks), and _LITERAL_PARITY_IGNORE entries."""
-    lines = _read_lines(path)
-    if lines is None:
-        return {}
-    excluded = _excluded_ref_lines(path)
-    hits = {}
-    for lineno, line in enumerate(lines, 1):
-        if lineno in excluded:
-            continue
-        for tok in _literal_parity_line_tokens(line):
-            hits.setdefault(tok, []).append(lineno)
-    return hits
-
-
-def _pair_changed_literals(en_only, ru_only):
-    """Match near-identical EN-only / RU-only literals -- a typo, a case
-    slip, a renumbered identifier -- so they print as one CHANGED line
-    instead of a scattered pair. Greedy, best-ratio-first; mutates the two
-    lists to remove what it paired and returns the (en, ru) pairs."""
-    pairs = []
-    for a in list(en_only):
-        best, best_r = None, 0.80
-        for b in ru_only:
-            r = difflib.SequenceMatcher(None, a, b).ratio()
-            if r > best_r:
-                best, best_r = b, r
-        if best is not None:
-            pairs.append((a, best))
-            en_only.remove(a)
-            ru_only.remove(best)
-    return pairs
-
-
 def check_pages_literal_parity() -> bool:
     """Compare normalized backticked-literal counts on corresponding EN/RU
     lines, so moving a literal or dropping only its backticks is a mismatch.
     Normalize `foo()` to `foo`, unwrap passthroughs, and ignore configured or
     punctuation-only spans. Comments and literal blocks are skipped; --page is
     honored. A line-count mismatch skips the pair without cascading findings."""
-    if _L10N_STRICT:
-        return _check_strict_line_token_parity(
-            _literal_parity_line_tokens, True,
-            "OK: en/ru pages carry the same back-ticked literals on corresponding lines.",
-            "literal mismatches")
-    ok = True
-    mismatch_count = 0
-    for en_file, ru_file in _en_ru_page_pairs():
-        if en_file is None:
-            print(f"MISSING  {_format_path(ru_file)}  (no en counterpart)")
-            ok = False
-            mismatch_count += 1
-            continue
-        if not ru_file.is_file():
-            print(f"MISSING  {_format_path(en_file)}  (no ru counterpart)")
-            ok = False
-            mismatch_count += 1
-            continue
-        en_hits = _literal_parity_tokens(en_file)
-        ru_hits = _literal_parity_tokens(ru_file)
-        en_only = sorted(set(en_hits) - set(ru_hits))
-        ru_only = sorted(set(ru_hits) - set(en_hits))
-        if not en_only and not ru_only:
-            continue
-        changed = _pair_changed_literals(en_only, ru_only)
-        print(_diff_pair_header(en_file, ru_file))
-        rows = []
-        for a, b in changed:
-            suffix, extra = _parity_refs(en_file, en_hits[a], ru_file, ru_hits[b])
-            rows.append(f"    CHANGED   `{a}`  ->  `{b}`{suffix}")
-            rows += extra
-        for a in en_only:
-            suffix, extra = _parity_refs(en_file, en_hits[a], ru_file, [])
-            rows.append(f"    EN only   `{a}`{suffix}")
-            rows += extra
-        for b in ru_only:
-            suffix, extra = _parity_refs(en_file, [], ru_file, ru_hits[b])
-            rows.append(f"    RU only   `{b}`{suffix}")
-            rows += extra
-        _emit_parity_rows(rows)
-        print()
-        ok = False
-        mismatch_count += 1
-
-    if ok:
-        print("OK: en/ru pages carry the same back-ticked literals.")
-    else:
-        print(f"\nTotal: {mismatch_count} file(s) with literal mismatches.")
-    return ok
+    return _check_line_token_parity(
+        _literal_parity_line_tokens, True,
+        "OK: en/ru pages carry the same back-ticked literals on corresponding lines.",
+        "literal mismatches")
 
 
 # --------------------------------------------------------------------------
@@ -4310,18 +4153,12 @@ def _strip_noise(line: str) -> str:
 
 def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
     """Returns the number of UNTRANSLATED/SUSPECT lines flagged, or None
-    when strict mode cannot align the pair."""
-    if _L10N_STRICT:
-        aligned = _strict_l10n_aligned_lines(en_file, ru_file)
-        if aligned is None:
-            return None
-        en_lines, ru_lines = aligned
-    else:
-        en_lines = _read_lines(en_file)
-        ru_lines = _read_lines(ru_file)
-        if en_lines is None or ru_lines is None:
-            return 0
-    n = min(len(en_lines), len(ru_lines))
+    when the pair cannot be aligned."""
+    aligned = _l10n_aligned_lines(en_file, ru_file)
+    if aligned is None:
+        return None
+    en_lines, ru_lines = aligned
+    n = len(en_lines)
 
     in_code = None
     in_comment_block = False
@@ -4399,9 +4236,9 @@ def _check_translation_pair(en_file: Path, ru_file: Path, report_header):
 def check_pages_translation() -> bool:
     """Port of check_pages_translation.sh. Flags RU lines byte-identical to EN
     (UNTRANSLATED) and RU lines carrying English stopwords (SUSPECT); each
-    SUSPECT line ends with the matched stopword(s) in brackets. By default a
-    length mismatch is reported as unaligned and the pair is skipped without
-    cascading findings."""
+    SUSPECT line ends with the matched stopword(s) in brackets. A length
+    mismatch is reported as unaligned and the pair is skipped without cascading
+    findings."""
     ok = True
     total_hits = 0
     skipped_count = 0
@@ -4433,7 +4270,7 @@ def check_pages_translation() -> bool:
         if total_hits:
             print(f"\nTotal: {total_hits} untranslated/suspect line(s).")
         if skipped_count:
-            print(f"\nTotal: {skipped_count} file(s) not compared in strict mode.")
+            print(f"\nTotal: {skipped_count} file(s) skipped during line comparison.")
     return ok
 
 
@@ -8498,7 +8335,7 @@ def _run_selected(selected, glossary_paths, legacy_headers=False):
     Returns True if every executed check passed."""
     global GLOSSARY
     selected = list(selected)
-    _L10N_STRICT_SKIPPED_REPORTED.clear()
+    _L10N_PAIR_ISSUES_REPORTED.clear()
     if "pages-terminology" in selected:
         paths = glossary_paths or _discover_default_glossaries()
         if not paths and len(selected) > 1:
@@ -8673,11 +8510,6 @@ def _build_v2_parser():
                    choices=_SCAN_TARGETS + ("all",),
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
-    c.add_argument("--l10n-strict", action="store_true",
-                   help="Compatibility flag; strict EN/RU line comparison is already "
-                        "the default for untranslated prose, links and back-ticked "
-                        "literals. Pairs with different line counts are reported and "
-                        "skipped by these checks to avoid cascading findings.")
     c.add_argument("--repo", action="append", metavar="PATH",
                    help="Run against this docs repo instead of the current "
                         "directory. Repeatable, to sweep several repos in one "
@@ -8773,7 +8605,6 @@ _FLAG_FAMILY_SCOPE = {
     **{f: {"links"} for f in _LINK_FLAG_NAMES},
     "--nofollow-exempt": {"style"},
     "--glossary": {"terms"},
-    "--l10n-strict": {"l10n"},
     "--external-root": {_family_of(_rule_of(k)) for k in _RULES_WITH_EXTERNAL_ROOT},
 }
 
@@ -8927,7 +8758,7 @@ def _v2_show(name):
 
 
 def _main_v2():
-    global EXTERNAL_COMPONENTS, _EXTERNAL_ROOT_WARNING_SHOWN, _L10N_STRICT
+    global EXTERNAL_COMPONENTS, _EXTERNAL_ROOT_WARNING_SHOWN
     _EXTERNAL_ROOT_WARNING_SHOWN = False
     parser = _build_v2_parser()
     if not sys.argv[1:]:                 # bare `docs_tool.py` -> full help, exit 0
@@ -8956,9 +8787,6 @@ def _main_v2():
     glossary = [str(Path(p).resolve()) for p in args.glossary] if args.glossary else None
 
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
-    if args.l10n_strict and "l10n" not in families:
-        _usage_error("check: --l10n-strict requires the l10n family")
-    _L10N_STRICT = True
     picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
 
     if picked and len(families) != 1:

@@ -630,8 +630,7 @@ LN03, LN06 and LN07 compare corresponding EN/RU line numbers by default.
 LN06/LN07 compare token counts on each line, not page-wide totals/sets; LN03
 reports a line-count mismatch instead of comparing only the common prefix. A pair with
 different line counts is reported once as `UNALIGNED` and skipped by these checks to
-avoid cascading mismatches. LN01/LN02/LN04/LN05/LN08 are unchanged. The former
-`--l10n-strict` opt-in flag is still accepted for compatibility, but is no longer needed.
+avoid cascading mismatches. LN01/LN02/LN04/LN05/LN08 are unchanged.
 
 ```bash
 ./docs_tool.py check l10n

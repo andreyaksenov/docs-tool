@@ -42,7 +42,6 @@ class FixtureTestCase(unittest.TestCase):
         self._orig_external = dt.EXTERNAL_COMPONENTS
         self._orig_external_warning = dt._EXTERNAL_ROOT_WARNING_SHOWN
         self._orig_page_filter = dt._PAGE_FILTER
-        self._orig_l10n_strict = dt._L10N_STRICT
         self._orig_glossary = dt.GLOSSARY
         self._orig_links = (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
                             dt.LINK_CACHE_PATH, dt._probe_url,
@@ -52,8 +51,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = {}
         dt._EXTERNAL_ROOT_WARNING_SHOWN = False
         dt._PAGE_FILTER = None
-        dt._L10N_STRICT = True
-        dt._L10N_STRICT_SKIPPED_REPORTED.clear()
+        dt._L10N_PAIR_ISSUES_REPORTED.clear()
         dt.GLOSSARY = {}
         dt.LINK_OFFLINE = False
         dt.LINK_ALLOW_DOMAINS = set()
@@ -69,8 +67,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = self._orig_external
         dt._EXTERNAL_ROOT_WARNING_SHOWN = self._orig_external_warning
         dt._PAGE_FILTER = self._orig_page_filter
-        dt._L10N_STRICT = self._orig_l10n_strict
-        dt._L10N_STRICT_SKIPPED_REPORTED.clear()
+        dt._L10N_PAIR_ISSUES_REPORTED.clear()
         dt.GLOSSARY = self._orig_glossary
         (dt.LINK_TIMEOUT, dt.LINK_OFFLINE, dt.LINK_ALLOW_DOMAINS,
          dt.LINK_CACHE_PATH, dt._probe_url,
@@ -5161,11 +5158,7 @@ class PagesLiteralParityTests(FixtureTestCase):
         self.assertIn("EN 1 / RU 2   `foo`", out)
 
 
-class L10nStrictTests(FixtureTestCase):
-    def setUp(self):
-        super().setUp()
-        dt._L10N_STRICT = True
-
+class L10nLineParityTests(FixtureTestCase):
     def test_link_moved_to_another_line_is_flagged(self):
         self.write("en/modules/ROOT/pages/page.adoc",
                    "See xref:first.adoc[first].\nThen xref:second.adoc[second].\n")
@@ -5173,13 +5166,9 @@ class L10nStrictTests(FixtureTestCase):
                    "См. xref:first.adoc[первое] и xref:second.adoc[второе].\n"
                    "Вторая строка без ссылок.\n")
 
-        dt._L10N_STRICT = False
-        relaxed_ok, _ = self.run_check(dt.check_pages_link_parity)
-        dt._L10N_STRICT = True
-        strict_ok, out = self.run_check(dt.check_pages_link_parity)
+        ok, out = self.run_check(dt.check_pages_link_parity)
 
-        self.assertTrue(relaxed_ok)
-        self.assertFalse(strict_ok)
+        self.assertFalse(ok)
         self.assertIn("LINE 1", out)
         self.assertIn("LINE 2", out)
         self.assertIn("xref:second.adoc", out)
@@ -5190,13 +5179,9 @@ class L10nStrictTests(FixtureTestCase):
         self.write("ru/modules/ROOT/pages/page.adoc",
                    "Шаг operation.\nСвойство `operation`.\n")
 
-        dt._L10N_STRICT = False
-        relaxed_ok, _ = self.run_check(dt.check_pages_literal_parity)
-        dt._L10N_STRICT = True
-        strict_ok, out = self.run_check(dt.check_pages_literal_parity)
+        ok, out = self.run_check(dt.check_pages_literal_parity)
 
-        self.assertTrue(relaxed_ok)
-        self.assertFalse(strict_ok)
+        self.assertFalse(ok)
         self.assertIn("LINE 1", out)
         self.assertNotIn("LINE 2", out)
         self.assertIn("EN 1 / RU 0   `operation`", out)
@@ -5235,7 +5220,7 @@ class L10nStrictTests(FixtureTestCase):
         self.assertNotIn("UNTRANSLATED", out)
         self.assertNotIn("OK:", out)
 
-    def test_unaligned_pair_is_reported_once_across_strict_checks(self):
+    def test_unaligned_pair_is_reported_once_across_line_checks(self):
         self.write("en/modules/ROOT/pages/page.adoc",
                    "See xref:target.adoc[target] and `operation`.\nAn extra EN line.\n")
         self.write("ru/modules/ROOT/pages/page.adoc",
@@ -5246,7 +5231,7 @@ class L10nStrictTests(FixtureTestCase):
 
         self.assertFalse(ok)
         self.assertEqual(out.count("UNALIGNED"), 1, out)
-        self.assertEqual(out.count("not compared in strict mode"), 3, out)
+        self.assertEqual(out.count("skipped during line comparison"), 3, out)
 
 
 class SyncMergeTests(unittest.TestCase):
@@ -5714,10 +5699,6 @@ class RuleExampleTests(unittest.TestCase):
         self.assertTrue(any("--glossary" in c for c, _ in self._examples("TM01")))
         for rid in ("CH01", "LN02", "RF01"):
             self.assertFalse(any("--glossary" in c for c, _ in self._examples(rid)), rid)
-
-    def test_default_l10n_strict_needs_no_special_example_flag(self):
-        for rid in ("LN03", "LN06", "LN07"):
-            self.assertFalse(any("--l10n-strict" in c for c, _ in self._examples(rid)), rid)
 
     def test_sibling_targets_are_each_named_outright(self):
         """refs --orphaned (RF02) has four sibling targets (partials/
@@ -6289,8 +6270,6 @@ class CheckRuleCompletionTests(unittest.TestCase):
         comps = self._complete("docs_tool.py check l10n ")
         for f in ("--show-unverified", "--offline", "--timeout", "--insecure", "--glossary"):
             self.assertNotIn(f, comps, f)
-        self.assertIn("--l10n-strict", comps)
-        self.assertNotIn("--l10n-strict", self._complete("docs_tool.py check chars "))
         self.assertIn("--external-root", comps)  # dependency traversal can enter external content
         self.assertIn("--page", comps)       # generic flags stay
         self.assertIn("--target", comps)
@@ -6484,7 +6463,6 @@ class CliV2RoutingTests(unittest.TestCase):
     def setUp(self):
         self._argv = sys.argv
         self._pf = dt._PAGE_FILTER
-        self._strict = dt._L10N_STRICT
         self._tmp = tempfile.mkdtemp(prefix="docs_tool_cli_")
         self._cwd = os.getcwd()
         os.chdir(self._tmp)
@@ -6495,7 +6473,6 @@ class CliV2RoutingTests(unittest.TestCase):
     def tearDown(self):
         sys.argv = self._argv
         dt._PAGE_FILTER = self._pf
-        dt._L10N_STRICT = self._strict
         os.chdir(self._cwd)
         shutil.rmtree(self._tmp, ignore_errors=True)
 
@@ -6598,22 +6575,6 @@ class CliV2RoutingTests(unittest.TestCase):
     def test_check_accepts_multiple_families(self):
         code, out, err = self._run("check", "chars", "markup")
         self.assertEqual(code, 0, err)   # no fixture tree -> nothing found
-
-    def test_l10n_strict_is_default_without_a_flag(self):
-        dt._L10N_STRICT = False
-        code, _, err = self._run("check", "l10n", "--literals")
-        self.assertEqual(code, 0, err)
-        self.assertTrue(dt._L10N_STRICT)
-
-    def test_l10n_strict_flag_remains_accepted_in_a_multi_family_run(self):
-        code, _, err = self._run("check", "chars", "l10n", "--l10n-strict")
-        self.assertEqual(code, 0, err)
-        self.assertTrue(dt._L10N_STRICT)
-
-    def test_l10n_strict_requires_the_l10n_family(self):
-        code, _, err = self._run("check", "chars", "--l10n-strict")
-        self.assertEqual(code, 2)
-        self.assertIn("requires the l10n family", err)
 
     def test_rule_with_multiple_families_is_rejected(self):
         code, _, err = self._run("check", "chars", "markup", "--backticks")
