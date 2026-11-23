@@ -64,6 +64,7 @@ import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
+from typing import Callable, cast
 
 try:
     import argcomplete
@@ -8409,9 +8410,9 @@ def _build_parser():
                          "relying on --auto-external-root, or to pin into CI."
                     ).completer = _complete_list_what
     ls.add_argument("--external-root", action="append", metavar="NAME=PATH",
-                    help="With 'list external-roots': same as 'check's flag.")
+                    help="Equivalent to the check command flag for list external-roots.")
     ls.add_argument("--auto-external-root", nargs="?", const="..", default=None, metavar="DIR",
-                    help="With 'list external-roots': same as 'check's flag.")
+                    help="Equivalent to the check command flag for list external-roots.")
 
     s = sub.add_parser("sync", help="Align a RU page to its EN counterpart (beta).")
     sy = s.add_argument("file", metavar="EN_FILE",
@@ -8421,7 +8422,7 @@ def _build_parser():
                    help="Print the diff instead of writing the RU file.")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
-        _CheckCompletionFinder()(p)
+        cast(Callable[[], Callable[[argparse.ArgumentParser], None]], _CheckCompletionFinder)()(p)
     return p
 
 
