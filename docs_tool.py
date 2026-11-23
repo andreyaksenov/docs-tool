@@ -11,7 +11,7 @@ check scans all discovered modules automatically.
 Commands:
     ./docs_tool.py check <family> [<family> ...] [--<rule> ...] [--target NAME] [--page NAME ...]
                         [--head REV] [--base REV]
-                        check terms adds  [--glossary PATH ...];  check l10n adds [--l10n-strict]
+                        check terms adds  [--glossary PATH ...]
                         check refs adds  [--external-root NAME=PATH ...]
                         check links adds  [--offline] [--timeout N] [--allow-domain HOST ...]
                                           [--show-unverified] [--insecure] [--link-cache PATH]
@@ -34,7 +34,7 @@ Examples:
     ./docs_tool.py check chars
     ./docs_tool.py check style --no-yo
     ./docs_tool.py check l10n --structure --page resource_groups.adoc
-    ./docs_tool.py check l10n --l10n-strict --page resource_groups.adoc
+    ./docs_tool.py check l10n --page resource_groups.adoc
     ./docs_tool.py check chars markup --page UNCOMMITTED
     ./docs_tool.py check chars markup --page BRANCH --base master
     ./docs_tool.py check links --show-unverified
@@ -435,7 +435,7 @@ def _iter_files(root: Path, suffix: str = None):
 # runner skips repository-global rules whenever this filter is set, except for
 # nav parity when a BRANCH filter has "nav" set.
 _PAGE_FILTER = None
-_L10N_STRICT = False
+_L10N_STRICT = True
 _L10N_STRICT_SKIPPED_REPORTED = set()
 
 
@@ -3835,8 +3835,8 @@ def check_pages_structure_parity() -> bool:
 #
 # Both walk the same en/ru page pairs as structure-parity and compare
 # *language-invariant* tokens -- things a translator has to carry across
-# unchanged. The default compares page-wide bags; --l10n-strict compares
-# corresponding-line multisets. A divergence means a cross-reference, an
+# unchanged. The default compares corresponding-line multisets. A divergence
+# means a cross-reference, an
 # external link, or a code identifier was dropped, added, retargeted, moved,
 # or (for a literal) accidentally translated.
 # --------------------------------------------------------------------------
@@ -4023,8 +4023,9 @@ def check_pages_link_parity() -> bool:
     specific fragments, URL hosts/paths, Wikipedia articles, and image suffixes.
     Findings include source line locations. This beta review list can flag
     intentional localization or qualification differences. Comments and
-    literal blocks are skipped; --page is honored. With --l10n-strict, compare
-    token counts on corresponding lines instead of across the whole page."""
+    literal blocks are skipped; --page is honored. By default, token counts are
+    compared on corresponding lines; a line-count mismatch skips the pair to
+    avoid cascading findings."""
     if _L10N_STRICT:
         return _check_strict_line_token_parity(
             _link_parity_line_tokens, False,
@@ -4146,13 +4147,11 @@ def _pair_changed_literals(en_only, ru_only):
 
 
 def check_pages_literal_parity() -> bool:
-    """Compare sets of backticked literals in EN/RU page pairs. Normalize
-    `foo()` to `foo`, unwrap passthroughs, and ignore configured or punctuation-
-    only spans. Report near-identical CHANGED pairs, then EN-only and RU-only
-    values with source lines. Repetition counts and formatting-only additions
-    are not findings by default. Comments and literal blocks are skipped.
-    With --l10n-strict, compare normalized literal counts on corresponding
-    lines, so moving a literal to another line is also a mismatch."""
+    """Compare normalized backticked-literal counts on corresponding EN/RU
+    lines, so moving a literal or dropping only its backticks is a mismatch.
+    Normalize `foo()` to `foo`, unwrap passthroughs, and ignore configured or
+    punctuation-only spans. Comments and literal blocks are skipped; --page is
+    honored. A line-count mismatch skips the pair without cascading findings."""
     if _L10N_STRICT:
         return _check_strict_line_token_parity(
             _literal_parity_line_tokens, True,
@@ -4401,8 +4400,8 @@ def check_pages_translation() -> bool:
     """Port of check_pages_translation.sh. Flags RU lines byte-identical to EN
     (UNTRANSLATED) and RU lines carrying English stopwords (SUSPECT); each
     SUSPECT line ends with the matched stopword(s) in brackets. By default a
-    length mismatch leaves the common prefix checked; --l10n-strict instead
-    reports the pair as unaligned and skips it without cascading findings."""
+    length mismatch is reported as unaligned and the pair is skipped without
+    cascading findings."""
     ok = True
     total_hits = 0
     skipped_count = 0
@@ -7410,9 +7409,6 @@ def _rule_examples(key):
         other = _check_command(_resolve_family_selection(
             _family_of(_rule_of(key)), {_rule_of(key)}, tgt)[0])
         out.append((f"./docs_tool.py {other}", f"over {tgt}/"))
-    if key in {"pages-translation", "pages-link-parity", "pages-literal-parity"}:
-        out.append((f"./docs_tool.py {cmd} --l10n-strict",
-                    "strict comparison on corresponding EN/RU lines"))
     if key == "pages-terminology":
         out.append((f"./docs_tool.py {cmd} --glossary my-glossary.psv",
                     "explicit glossary (else *-glossary.psv)"))
@@ -8678,10 +8674,10 @@ def _build_v2_parser():
                    help="Restrict to one scan target: %s, or 'all' "
                         "(default: pages)." % ", ".join(_SCAN_TARGETS))
     c.add_argument("--l10n-strict", action="store_true",
-                   help="With 'check l10n': compare untranslated prose, links and "
-                        "back-ticked literals on corresponding EN/RU lines, including "
-                        "token counts. Pairs with different line counts are reported "
-                        "and skipped by these checks to avoid cascading findings.")
+                   help="Compatibility flag; strict EN/RU line comparison is already "
+                        "the default for untranslated prose, links and back-ticked "
+                        "literals. Pairs with different line counts are reported and "
+                        "skipped by these checks to avoid cascading findings.")
     c.add_argument("--repo", action="append", metavar="PATH",
                    help="Run against this docs repo instead of the current "
                         "directory. Repeatable, to sweep several repos in one "
@@ -8962,7 +8958,7 @@ def _main_v2():
     families = list(dict.fromkeys(args.families))   # de-dup, keep order
     if args.l10n_strict and "l10n" not in families:
         _usage_error("check: --l10n-strict requires the l10n family")
-    _L10N_STRICT = bool(args.l10n_strict)
+    _L10N_STRICT = True
     picked = {rule for rule in _ALL_RULES if getattr(args, rule.replace("-", "_"))}
 
     if picked and len(families) != 1:

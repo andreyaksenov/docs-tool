@@ -52,7 +52,7 @@ class FixtureTestCase(unittest.TestCase):
         dt.EXTERNAL_COMPONENTS = {}
         dt._EXTERNAL_ROOT_WARNING_SHOWN = False
         dt._PAGE_FILTER = None
-        dt._L10N_STRICT = False
+        dt._L10N_STRICT = True
         dt._L10N_STRICT_SKIPPED_REPORTED.clear()
         dt.GLOSSARY = {}
         dt.LINK_OFFLINE = False
@@ -5103,7 +5103,7 @@ class PagesLinkParityTests(FixtureTestCase):
     def test_link_in_a_code_block_is_ignored(self):
         self.write("en/modules/ROOT/pages/page.adoc",
                    "----\nxref:only-in-en.adoc[x]\n----\n")
-        self.write("ru/modules/ROOT/pages/page.adoc", "----\n----\n")
+        self.write("ru/modules/ROOT/pages/page.adoc", "----\n\n----\n")
         ok, out = self.run_check(dt.check_pages_link_parity)
         self.assertTrue(ok, out)
 
@@ -5133,12 +5133,13 @@ class PagesLiteralParityTests(FixtureTestCase):
         ok, out = self.run_check(dt.check_pages_literal_parity)
         self.assertTrue(ok, out)
 
-    def test_near_identical_pair_reported_as_changed(self):
+    def test_near_identical_pair_is_reported_on_the_same_line(self):
         self.write("en/modules/ROOT/pages/page.adoc", "The `VACUUM` command.\n")
         self.write("ru/modules/ROOT/pages/page.adoc", "Команда `VACCUM`.\n")
         ok, out = self.run_check(dt.check_pages_literal_parity)
         self.assertFalse(ok)
-        self.assertIn("CHANGED", out)
+        self.assertIn("EN 1 / RU 0   `VACUUM`", out)
+        self.assertIn("EN 0 / RU 1   `VACCUM`", out)
 
     def test_ignore_list_literal_is_not_flagged(self):
         self.write("en/modules/ROOT/pages/page.adoc", "It returns NULL here.\n")
@@ -5152,11 +5153,12 @@ class PagesLiteralParityTests(FixtureTestCase):
         ok, out = self.run_check(dt.check_pages_literal_parity)
         self.assertTrue(ok, out)
 
-    def test_repeated_literal_with_different_count_is_not_flagged(self):
+    def test_repeated_literal_with_different_count_is_flagged_by_default(self):
         self.write("en/modules/ROOT/pages/page.adoc", "`foo` then it runs.\n")
         self.write("ru/modules/ROOT/pages/page.adoc", "`foo`, затем `foo` запускается.\n")
         ok, out = self.run_check(dt.check_pages_literal_parity)
-        self.assertTrue(ok, out)
+        self.assertFalse(ok)
+        self.assertIn("EN 1 / RU 2   `foo`", out)
 
 
 class L10nStrictTests(FixtureTestCase):
@@ -5713,10 +5715,8 @@ class RuleExampleTests(unittest.TestCase):
         for rid in ("CH01", "LN02", "RF01"):
             self.assertFalse(any("--glossary" in c for c, _ in self._examples(rid)), rid)
 
-    def test_l10n_strict_examples_only_on_line_compared_rules(self):
+    def test_default_l10n_strict_needs_no_special_example_flag(self):
         for rid in ("LN03", "LN06", "LN07"):
-            self.assertTrue(any("--l10n-strict" in c for c, _ in self._examples(rid)), rid)
-        for rid in ("LN01", "LN02", "LN04", "LN05", "LN08"):
             self.assertFalse(any("--l10n-strict" in c for c, _ in self._examples(rid)), rid)
 
     def test_sibling_targets_are_each_named_outright(self):
@@ -6599,7 +6599,13 @@ class CliV2RoutingTests(unittest.TestCase):
         code, out, err = self._run("check", "chars", "markup")
         self.assertEqual(code, 0, err)   # no fixture tree -> nothing found
 
-    def test_l10n_strict_sets_mode_in_a_multi_family_run(self):
+    def test_l10n_strict_is_default_without_a_flag(self):
+        dt._L10N_STRICT = False
+        code, _, err = self._run("check", "l10n", "--literals")
+        self.assertEqual(code, 0, err)
+        self.assertTrue(dt._L10N_STRICT)
+
+    def test_l10n_strict_flag_remains_accepted_in_a_multi_family_run(self):
         code, _, err = self._run("check", "chars", "l10n", "--l10n-strict")
         self.assertEqual(code, 0, err)
         self.assertTrue(dt._L10N_STRICT)
