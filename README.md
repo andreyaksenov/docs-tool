@@ -92,7 +92,7 @@ $ ./docs_tool.py check chars --dashes
 FILE     en/modules/ROOT/pages/table_partitioning.adoc
   en/modules/ROOT/pages/table_partitioning.adoc:821:97: … for dates March 1–15 and …
 
-Total: 1 line(s) with en/em dash characters.
+Total: 1 line(s) with Unicode dash/hyphen characters.
 ```
 
 Every finding starts with an uppercase label and a path, so runs are easy to `grep`
@@ -148,7 +148,7 @@ own ID/Command/Flags table.
 |----|---------|-------|
 | `CH01` | `check chars --no-cyrillic` | Cyrillic in EN files |
 | `CH03` | `check chars --no-invisible` | zero-width characters |
-| `CH04` | `check chars --dashes` | literal en/em dashes |
+| `CH04` | `check chars --dashes` | non-breaking hyphens and en/em dashes |
 | `CH05` | `check chars --homoglyphs` | Latin letters in RU prose |
 | `CH06` | `check chars --trailing-whitespace` | trailing spaces/tabs (opt-in) |
 
@@ -167,8 +167,8 @@ own ID/Command/Flags table.
   ./docs_tool.py check chars --no-invisible --page auth.adoc
   ```
 
-- **`CH04` · `check chars --dashes`** — no literal en dash (`–`) or em dash (`—`);
-  house style uses `--`.
+- **`CH04` · `check chars --dashes`** — no literal non-breaking hyphen (`‑`),
+  en dash (`–`) or em dash (`—`); house style uses ASCII `-` for hyphens and `--` for dashes.
   ```bash
   ./docs_tool.py check chars --dashes
   ./docs_tool.py check chars --dashes --page resource_groups.adoc

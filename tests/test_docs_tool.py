@@ -1259,6 +1259,28 @@ class IterFilesTests(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+class UnicodeDashesTests(FixtureTestCase):
+    def test_non_breaking_hyphen_is_flagged_in_both_languages(self):
+        en_page = self.write("en/modules/ROOT/pages/p.adoc", "Run `ansible‑playbook`.\n")
+        ru_page = self.write("ru/modules/ROOT/pages/p.adoc", "Запустите `ansible‑playbook`.\n")
+
+        ok, out = self.run_check(dt.check_pages_no_unicode_dashes)
+
+        self.assertFalse(ok)
+        self.assertIn(f"{en_page}:1:13:", out)
+        self.assertIn(f"{ru_page}:1:19:", out)
+        self.assertIn("Total: 2 line(s) with Unicode dash/hyphen characters.", out)
+
+    def test_ascii_hyphen_passes(self):
+        self.write("en/modules/ROOT/pages/p.adoc", "Run `ansible-playbook`.\n")
+
+        ok, out = self.run_check(dt.check_pages_no_unicode_dashes)
+
+        self.assertTrue(ok, out)
+        self.assertIn("OK: no non-breaking hyphen (‑), en dash (–) or em dash (—) "
+                      "characters found in pages.", out)
+
+
 class TrailingWhitespaceTests(FixtureTestCase):
     def test_pages_and_partials_in_both_languages_are_checked(self):
         en_page = self.write("en/modules/ROOT/pages/p.adoc", "clean\nabc  \t\n")

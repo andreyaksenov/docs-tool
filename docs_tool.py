@@ -83,7 +83,7 @@ def _usage_error(msg):
     sys.exit(2)
 
 CYRILLIC_RE = re.compile(r'[Ѐ-ӿ]')
-EN_EM_DASH_RE = re.compile(r'[–—]')
+UNICODE_DASH_RE = re.compile(r'[‑–—]')
 
 # Zero-width/invisible-by-definition Unicode ranges: ZWSP/ZWNJ/ZWJ/bidi marks,
 # soft hyphen, the Mongolian vowel separator, bidi embedding/override/isolate
@@ -3028,7 +3028,7 @@ def check_examples_no_trailing_whitespace() -> bool:
 
 
 def check_pages_no_unicode_dashes() -> bool:
-    """Port of check_pages_no_unicode_dashes.sh (en/ and ru/, all modules)."""
+    """Flag non-breaking hyphens and en/em dashes in en/ru pages/partials."""
     ok = True
     total_hits = 0
     for _, en_root, ru_root in module_roots():
@@ -3039,7 +3039,7 @@ def check_pages_no_unicode_dashes() -> bool:
                 lines = _read_lines(f)
                 if lines is None:
                     continue
-                hits = list(_first_match_hits(lines, EN_EM_DASH_RE))
+                hits = list(_first_match_hits(lines, UNICODE_DASH_RE))
                 if hits:
                     ok = False
                     total_hits += len(hits)
@@ -3047,9 +3047,9 @@ def check_pages_no_unicode_dashes() -> bool:
                     for i, col, l in hits:
                         print(f"  {_format_location(f, i, col)}: {l}")
     if ok:
-        print("OK: no en dash (–) or em dash (—) characters found in pages.")
+        print("OK: no non-breaking hyphen (‑), en dash (–) or em dash (—) characters found in pages.")
     else:
-        print(f"\nTotal: {total_hits} line(s) with en/em dash characters.")
+        print(f"\nTotal: {total_hits} line(s) with Unicode dash/hyphen characters.")
     return ok
 
 
@@ -7103,7 +7103,7 @@ SUMMARIES = {
     "pages-no-invisible-chars":    "no zero-width / invisible / bidi-control characters",
     "pages-no-trailing-whitespace": "no trailing ASCII spaces or tabs",
     "examples-no-trailing-whitespace": "same check, over examples/ (all file types)",
-    "pages-no-unicode-dashes":     "no literal en/em dash -- house style uses --",
+    "pages-no-unicode-dashes":     "no literal non-breaking hyphen or en/em dash -- use ASCII -/--",
     "pages-ru-latin-homoglyphs":   "Latin letters in ru/ prose that should be Cyrillic",
     "pages-stray-backticks":       "no line with an odd number of backticks",
     "pages-unbalanced-delimiters": "every block delimiter closed once includes are flattened",
@@ -7175,7 +7175,7 @@ RULE_FLAGS = {
     "pages-no-cyrillic":           "Cyrillic in EN files",
     "pages-no-invisible-chars":    "zero-width characters",
     "pages-no-trailing-whitespace": "spaces/tabs",
-    "pages-no-unicode-dashes":     "literal en/em dashes",
+    "pages-no-unicode-dashes":     "non-breaking hyphens and en/em dashes",
     "pages-ru-latin-homoglyphs":   "Latin letters in RU prose",
     "pages-stray-backticks":       "odd backtick count",
     "pages-unbalanced-delimiters": "unclosed block delimiter",
