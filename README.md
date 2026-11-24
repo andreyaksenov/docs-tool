@@ -3,10 +3,13 @@
 One self-contained Python script that checks an Antora docs repo's `en/` and `ru/`
 trees for consistency, and aligns a RU page's structure after an EN edit. Run it
 from the repo root; every module under `en/modules/` and `ru/modules/` is
-discovered and scanned automatically. Run from anywhere else (and pass no
-`--repo`) and `check`/`sync` refuse to start rather than report a clean pass over
-files they never read. `check --repo PATH` (repeatable) points it at one or more
-other repos instead — see [Checking other repos](#checking-other-repos).
+discovered and scanned automatically. Multi-component repos such as the
+Greengage landing use `<lang>/<component>/modules/` instead: every component is
+scanned separately, and qualified references between its local components
+resolve without an external root. Run from anywhere else (and pass no `--repo`)
+and `check`/`sync` refuse to start rather than report a clean pass over files
+they never read. `check --repo PATH` (repeatable) points it at one or more other
+repos instead — see [Checking other repos](#checking-other-repos).
 
 ## Get it
 

@@ -5896,7 +5896,7 @@ class RuleFlagMetadataTests(unittest.TestCase):
 
 
 class NoDocsTreeTests(unittest.TestCase):
-    """A check run from a directory with no en/modules or ru/modules must
+    """A check run from a directory with no recognized Antora modules must
     refuse to run. Scanning nothing and reporting "OK:" for every rule is a
     clean pass over content that was never read -- the failure mode that
     silently green-lights a CI job pointed at the wrong directory."""
@@ -6777,6 +6777,132 @@ class CliRoutingTests(unittest.TestCase):
         self.assertIn("check <family>", out)
 
 
+class MultiComponentCheckTests(unittest.TestCase):
+    def setUp(self):
+        self._argv = sys.argv
+        self._pf = dt._PAGE_FILTER
+        self._cwd = os.getcwd()
+        self._roots = dt.EN_MODULES_ROOT, dt.RU_MODULES_ROOT
+        self._external = dt.EXTERNAL_COMPONENTS
+        self.root = Path(tempfile.mkdtemp(prefix="docs_tool_multicomponent_")).resolve()
+        os.chdir(self.root)
+
+    def tearDown(self):
+        sys.argv = self._argv
+        dt._PAGE_FILTER = self._pf
+        dt.EN_MODULES_ROOT, dt.RU_MODULES_ROOT = self._roots
+        dt.EXTERNAL_COMPONENTS = self._external
+        dt._OWN_COMPONENT_NAME_CACHE.clear()
+        os.chdir(self._cwd)
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _write(self, rel_path, content=""):
+        path = self.root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _component(self, name, langs=("en", "ru")):
+        for lang in langs:
+            self._write(f"{lang}/{name}/antora.yml", f"name: {name}\nversion: master\n")
+            (self.root / lang / name / "modules" / "ROOT" / "pages").mkdir(parents=True)
+
+    def _run(self, *args):
+        sys.argv = ["docs_tool.py", *args]
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                dt.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_check_scans_every_nested_component(self):
+        self._component("blog")
+        self._component("home")
+        self._write("en/blog/modules/ROOT/pages/post.adoc", "Plain text.\n")
+        self._write("en/home/modules/ROOT/pages/index.adoc", "Curly ’ quote.\n")
+
+        code, out, err = self._run("check", "style", "--no-curly-quotes")
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("--- component: blog ---", out)
+        self.assertIn("--- component: home ---", out)
+        self.assertIn("en/home/modules/ROOT/pages/index.adoc:1:7", out)
+        self.assertIn("OK: no curly quote", out.split("--- component: blog ---")[1].split("--- component: home ---")[0])
+
+    def test_explicit_page_filter_matches_nested_content(self):
+        self._component("blog")
+        self._write("en/blog/modules/ROOT/pages/post.adoc", "Plain text.\n")
+
+        code, _, err = self._run("check", "style", "--no-curly-quotes", "--page", "post.adoc")
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(dt._PAGE_FILTER["names"], {("post",)})
+
+    def test_qualified_reference_to_sibling_component_resolves(self):
+        self._component("blog")
+        self._component("home")
+        self._write("en/home/modules/ROOT/pages/index.adoc", "= Home\n")
+        self._write("en/blog/modules/ROOT/pages/post.adoc",
+                    "xref:home::index.adoc[Home]\nxref:home::missing.adoc[Missing]\n")
+
+        code, out, err = self._run("check", "refs", "--broken")
+
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("post.adoc:2", out)
+        self.assertNotIn("post.adoc:1", out)
+        self.assertNotIn("left unchecked", err)
+        self.assertIn("note: no --external-root registered", err)
+
+    def test_repo_accepts_nested_component_tree(self):
+        self._component("blog")
+        self._write("en/blog/modules/ROOT/pages/post.adoc", "Curly ’ quote.\n")
+        neutral = self.root / "neutral"
+        neutral.mkdir()
+        os.chdir(neutral)
+
+        code, out, err = self._run("check", "style", "--no-curly-quotes",
+                                   "--repo", str(self.root))
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("en/blog/modules/ROOT/pages/post.adoc", out)
+
+    def test_branch_page_scope_selects_nested_content(self):
+        self._component("blog")
+        self._write("en/blog/modules/ROOT/pages/post.adoc", "Plain text.\n")
+        subprocess.run(["git", "init", "-q"], check=True)
+        subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/master"], check=True)
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "-c", "user.email=test@example.com",
+                        "-c", "user.name=Test", "commit", "-m", "base"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], check=True)
+        self._write("en/blog/modules/ROOT/pages/post.adoc", "Curly ’ quote.\n")
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "-c", "user.email=test@example.com",
+                        "-c", "user.name=Test", "commit", "-m", "change"],
+                       check=True, capture_output=True)
+
+        code, out, err = self._run("check", "style", "--no-curly-quotes",
+                                   "--page", "BRANCH", "--base", "master")
+
+        self.assertEqual(code, 1, err)
+        self.assertIn("Curly", out)
+
+    def test_sync_full_path_supports_nested_components(self):
+        self._component("blog")
+        self._write("en/blog/modules/ROOT/pages/post.adoc", "= Title\n\nText.\n")
+        self._write("ru/blog/modules/ROOT/pages/post.adoc", "= Заголовок\n\nТекст.\n")
+
+        code, out, err = self._run("sync", "en/blog/modules/ROOT/pages/post.adoc", "--dry-run")
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("already matches", out)
+        self.assertIn("ru/blog/modules/ROOT/pages/post.adoc", out)
+
+
 class MultiRepoCheckTests(unittest.TestCase):
     """End-to-end tests for `check ... --repo PATH` (repeatable): chdir's
     into each target in turn -- the same thing you'd do by hand (cd repo
@@ -6951,9 +7077,9 @@ class MultiRepoCheckTests(unittest.TestCase):
 
     def test_own_component_name_cache_does_not_leak_across_repos(self):
         """Regression test for a real bug found while testing
-        --auto-external-root: _own_component_name caches by lang only,
-        assuming one repo per process -- true for every other entry
-        point, but not a --repo sweep. repo_b's own content here
+        --auto-external-root: _own_component_name caches by lang within
+        the active component, so it must not leak across a --repo sweep.
+        repo_b's own content here
         contains a fully-qualified reference to "FIRST" -- coincidentally
         repo_a's real antora.yml name, not repo_b's own, and not
         registered via --external-root -- so it must be left unchecked

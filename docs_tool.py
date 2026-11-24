@@ -2,8 +2,9 @@
 # PYTHON_ARGCOMPLETE_OK
 """
 docs_tool.py -- consistency checks and EN->RU sync for Antora documentation
-trees laid out as en/modules/<module>/... and ru/modules/<module>/...
-(single-module sites with just a ROOT module work the same way).
+trees laid out as en/modules/<module>/... and ru/modules/<module>/..., or as
+multi-component <lang>/<component>/modules/<module>/... trees (single-module
+sites with just a ROOT module work the same way).
 
 Run from the repo root (use "python docs_tool.py ..." on Windows). Every
 check scans all discovered modules automatically.
@@ -45,6 +46,7 @@ legitimate content -- treat their output as a review list, not a hard gate.
 Checks marked "opt-in" run only when explicitly selected.
 """
 import argparse
+import contextlib
 import difflib
 import ipaddress
 import json
@@ -113,6 +115,8 @@ _INVISIBLE_RE = re.compile('[' + ''.join(
 # targets are silently treated as pointing outside anything this tool can
 # see, and left unchecked. {component_name: {"en": {module: root}, "ru": {module: root}}}
 EXTERNAL_COMPONENTS = {}
+_LOCAL_COMPONENT_NAMES = set()
+_EXTERNAL_ANALYSIS_CACHE = None
 
 # Component/module names a reference pointed at that couldn't be resolved
 # against this repo or any --external-root, filled in by _resolve_module_ref
@@ -126,23 +130,99 @@ _SKIPPED_COMPONENTS = set()
 # Module discovery
 # --------------------------------------------------------------------------
 
-def discover_module_names():
-    """Every module directory found under en/modules/ and/or ru/modules/,
-    sorted for stable output. A single-module site (just en/modules/ROOT)
-    yields ["ROOT"]; a multi-module Antora site yields every module
-    (ROOT, concept, how-to, ...) whether or not it has a RU counterpart yet
-    (a missing RU module still produces useful MISSING findings)."""
+def _module_names(en_modules_root, ru_modules_root):
     names = set()
-    for base in (EN_MODULES_ROOT, RU_MODULES_ROOT):
+    for base in (en_modules_root, ru_modules_root):
         if base.is_dir():
             names.update(p.name for p in base.iterdir() if p.is_dir())
     return sorted(names)
 
 
+def discover_module_names():
+    """Every module directory in the active component, sorted for stable output."""
+    return _module_names(EN_MODULES_ROOT, RU_MODULES_ROOT)
+
+
+def _discover_component_roots(en_modules_root=None, ru_modules_root=None):
+    """Return (component_name, EN modules root, RU modules root) tuples.
+
+    A flat repo has one component rooted at <lang>/modules. A multi-component
+    repo has one per <lang>/<component>/modules directory; components are
+    paired by directory name across languages."""
+    en_modules_root = en_modules_root or EN_MODULES_ROOT
+    ru_modules_root = ru_modules_root or RU_MODULES_ROOT
+    if _module_names(en_modules_root, ru_modules_root):
+        return [(None, en_modules_root, ru_modules_root)]
+
+    components = {}
+    for lang, modules_root in (("en", en_modules_root), ("ru", ru_modules_root)):
+        lang_root = modules_root.parent
+        if not lang_root.is_dir():
+            continue
+        for child in sorted(lang_root.iterdir()):
+            modules = child / "modules"
+            if not child.is_dir() or not modules.is_dir():
+                continue
+            if not any(p.is_dir() for p in modules.iterdir()):
+                continue
+            components.setdefault(child.name, {})[lang] = modules
+
+    result = []
+    for directory_name, roots in sorted(components.items()):
+        en_root = roots.get("en", en_modules_root.parent / directory_name / "modules")
+        ru_root = roots.get("ru", ru_modules_root.parent / directory_name / "modules")
+        name = (_parse_component_name(en_root.parent / "antora.yml")
+                or _parse_component_name(ru_root.parent / "antora.yml")
+                or directory_name)
+        result.append((name, en_root, ru_root))
+    return result
+
+
 def module_roots():
-    """Yield (module_name, en_root, ru_root) for every discovered module."""
+    """Yield (module_name, en_root, ru_root) for the active component."""
     for name in discover_module_names():
         yield name, EN_MODULES_ROOT / name, RU_MODULES_ROOT / name
+
+
+def _local_external_components(components):
+    local = {}
+    for name, en_modules_root, ru_modules_root in components:
+        if not name:
+            continue
+        local[name] = {
+            "en": {p.name: p for p in en_modules_root.iterdir() if p.is_dir()}
+                  if en_modules_root.is_dir() else {},
+            "ru": {p.name: p for p in ru_modules_root.iterdir() if p.is_dir()}
+                  if ru_modules_root.is_dir() else {},
+        }
+    return local
+
+
+@contextlib.contextmanager
+def _use_component_roots(component, components):
+    """Run checks with one component's roots and all repo-local components
+    available to qualified-reference resolution."""
+    global EN_MODULES_ROOT, RU_MODULES_ROOT, EXTERNAL_COMPONENTS, _LOCAL_COMPONENT_NAMES
+    old_roots = EN_MODULES_ROOT, RU_MODULES_ROOT
+    old_external = EXTERNAL_COMPONENTS
+    old_local_names = _LOCAL_COMPONENT_NAMES
+    _, EN_MODULES_ROOT, RU_MODULES_ROOT = component
+    if len(components) > 1:
+        external = dict(old_external)
+        local = _local_external_components(components)
+        external.update(local)
+        EXTERNAL_COMPONENTS = external
+        _LOCAL_COMPONENT_NAMES = set(local)
+    else:
+        _LOCAL_COMPONENT_NAMES = set()
+    _OWN_COMPONENT_NAME_CACHE.clear()
+    try:
+        yield
+    finally:
+        EN_MODULES_ROOT, RU_MODULES_ROOT = old_roots
+        EXTERNAL_COMPONENTS = old_external
+        _LOCAL_COMPONENT_NAMES = old_local_names
+        _OWN_COMPONENT_NAME_CACHE.clear()
 
 
 def _external_lang_base(repo_root: Path, lang: str, name: str) -> Path:
@@ -534,25 +614,41 @@ def _git_default_base():
                  "origin/HEAD, main, or master; pass --base REV")
 
 
-def _branch_page_name(repo_path):
+def _antora_module_relative_parts(repo_path):
     parts = PurePosixPath(repo_path).parts
-    if (len(parts) < 5 or parts[0] not in ("en", "ru") or parts[1] != "modules"
-            or parts[3] not in ("pages", "partials") or not parts[-1].endswith(".adoc")):
+    if not parts or parts[0] not in ("en", "ru"):
         return None
-    return parts[4:-1] + (PurePosixPath(parts[-1]).stem,)
+    if len(parts) >= 4 and parts[1] == "modules":
+        return parts[3:]
+    if len(parts) >= 5 and parts[2] == "modules":
+        return parts[4:]
+    return None
+
+
+def _branch_page_name(repo_path):
+    parts = _antora_module_relative_parts(repo_path)
+    if (not parts or len(parts) < 2 or parts[0] not in ("pages", "partials")
+            or not parts[-1].endswith(".adoc")):
+        return None
+    return parts[1:-1] + (PurePosixPath(parts[-1]).stem,)
 
 
 def _nav_dependency_repo_paths():
     """Repository-relative nav.adoc and included nav-partial paths."""
     paths = set()
     repo = Path.cwd().resolve()
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            for file in _nav_files_and_partials(root):
-                try:
-                    paths.add(file.resolve().relative_to(repo).as_posix())
-                except ValueError:
+    for _, en_modules_root, ru_modules_root in _discover_component_roots():
+        for modules_root in (en_modules_root, ru_modules_root):
+            if not modules_root.is_dir():
+                continue
+            for module in modules_root.iterdir():
+                if not module.is_dir():
                     continue
+                for file in _nav_files_and_partials(module):
+                    try:
+                        paths.add(file.resolve().relative_to(repo).as_posix())
+                    except ValueError:
+                        continue
     return paths
 
 
@@ -588,10 +684,7 @@ def _git_branch_page_scope(head=None, base=None):
                      + (f": {detail}" if detail else ""))
     nav_paths = paths + [path for path in deleted.stdout.split("\0") if path]
     nav_changed = any(
-        len(PurePosixPath(path).parts) == 4
-        and PurePosixPath(path).parts[0] in ("en", "ru")
-        and PurePosixPath(path).parts[1] == "modules"
-        and PurePosixPath(path).parts[3] == "nav.adoc"
+        _antora_module_relative_parts(path) == ("nav.adoc",)
         for path in nav_paths
     )
     if not nav_changed:
@@ -714,43 +807,50 @@ def _collect_used_examples(lang_module_roots, lang, includer_roots):
     """Resolve example$ includes in local and registered external content.
     Unqualified targets in included pages/partials use each including
     page's module context; a page also retains its own module context."""
-    used = set()
     own_name = _own_component_name(lang)
-    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+
+    def collect(sources):
+        used = set()
+        for root, this_lang_module_roots in sources:
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_comment_lines(f)
+                fallback_roots = includer_roots.get(f) or {root}
+                if _is_under(f, root / "pages"):
+                    fallback_roots = fallback_roots | {root}
+                for lineno, line in enumerate(lines, 1):
+                    if lineno in excluded:
+                        continue
+                    for t, _attrs in _INCLUDE_MACRO_RE.findall(line):
+                        if _VERSION_PIN_RE.match(t):
+                            continue
+                        candidate_roots = fallback_roots
+                        m_component = _COMPONENT_PREFIX_RE.match(t)
+                        if m_component:
+                            component = m_component.group(0)[:-1]
+                            resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], this_lang_module_roots,
+                                                           lang, own_name, lang_module_roots)
+                            if resolved is None:
+                                continue
+                            candidate_roots = {resolved[0]}
+                            t = resolved[1]
+                        if not t.startswith("example$"):
+                            continue
+                        name = _strip_root_slash(t[len("example$"):])
+                        for cand in candidate_roots:
+                            used.add(cand / "examples" / name)
+        return used
+
+    local_sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-    for root, this_lang_module_roots in sources:
-        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-            lines = _read_lines(f)
-            if lines is None:
-                continue
-            excluded = _excluded_comment_lines(f)
-            fallback_roots = includer_roots.get(f) or {root}
-            if _is_under(f, root / "pages"):
-                fallback_roots = fallback_roots | {root}
-            for lineno, line in enumerate(lines, 1):
-                if lineno in excluded:
-                    continue
-                for t, _attrs in _INCLUDE_MACRO_RE.findall(line):
-                    if _VERSION_PIN_RE.match(t):
-                        continue
-                    candidate_roots = fallback_roots
-                    m_component = _COMPONENT_PREFIX_RE.match(t)
-                    if m_component:
-                        component = m_component.group(0)[:-1]
-                        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], this_lang_module_roots,
-                                                       lang, own_name, lang_module_roots)
-                        if resolved is None:
-                            continue
-                        candidate_roots = {resolved[0]}
-                        t = resolved[1]
-                    if not t.startswith("example$"):
-                        continue
-                    name = _strip_root_slash(t[len("example$"):])
-                    for cand in candidate_roots:
-                        used.add(cand / "examples" / name)
-    return used
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    used = collect(local_sources)
+    external = _cached_external_analysis("used-examples", lang, external_sources, collect)
+    return used | external
 
 
 def check_examples_orphaned() -> bool:
@@ -908,46 +1008,53 @@ def _collect_used_images(lang_module_roots, lang, includer_roots):
     each including module; pages also retain their own module because they
     can render standalone. Path resolution, rather than basename matching,
     keeps same-named images in different modules distinct."""
-    used = set()
     own_name = _own_component_name(lang)
-    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+
+    def collect(sources):
+        used = set()
+        for root, this_lang_module_roots in sources:
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_ref_lines(f)
+                fallback_roots = includer_roots.get(f) or {root}
+                if _is_under(f, root / "pages"):
+                    fallback_roots = fallback_roots | {root}
+                for lineno, line in enumerate(lines, 1):
+                    if lineno in excluded:
+                        continue
+                    for macro, t in _IMAGE_REF_RE.findall(line):
+                        if t.startswith(("http://", "https://")):
+                            continue
+                        if macro.startswith("injectSvg") or macro.startswith("inlineSVG"):
+                            used.add(root / "images" / _strip_root_slash(t))
+                            continue
+                        if _VERSION_PIN_RE.match(t):
+                            continue  # version@component:... pin -- can't resolve, left unchecked
+                        candidate_roots = list(fallback_roots)
+                        m_component = _COMPONENT_PREFIX_RE.match(t)
+                        if m_component:
+                            component = m_component.group(0)[:-1]
+                            resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], this_lang_module_roots,
+                                                           lang, own_name, lang_module_roots)
+                            if resolved is None:
+                                continue  # external component image, not registered via --external-root
+                            candidate_roots = [resolved[0]]
+                            t = resolved[1]
+                        t = _strip_root_slash(t)
+                        for cand in candidate_roots:
+                            used.add(cand / "images" / t)
+        return used
+
+    local_sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-    for root, this_lang_module_roots in sources:
-        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-            lines = _read_lines(f)
-            if lines is None:
-                continue
-            excluded = _excluded_ref_lines(f)
-            fallback_roots = includer_roots.get(f) or {root}
-            if _is_under(f, root / "pages"):
-                fallback_roots = fallback_roots | {root}
-            for lineno, line in enumerate(lines, 1):
-                if lineno in excluded:
-                    continue
-                for macro, t in _IMAGE_REF_RE.findall(line):
-                    if t.startswith(("http://", "https://")):
-                        continue
-                    if macro.startswith("injectSvg") or macro.startswith("inlineSVG"):
-                        used.add(root / "images" / _strip_root_slash(t))
-                        continue
-                    if _VERSION_PIN_RE.match(t):
-                        continue  # version@component:... pin -- can't resolve, left unchecked
-                    candidate_roots = list(fallback_roots)
-                    m_component = _COMPONENT_PREFIX_RE.match(t)
-                    if m_component:
-                        component = m_component.group(0)[:-1]
-                        resolved = _resolve_module_ref(component, t[len(m_component.group(0)):], this_lang_module_roots,
-                                                       lang, own_name, lang_module_roots)
-                        if resolved is None:
-                            continue  # external component image, not registered via --external-root
-                        candidate_roots = [resolved[0]]
-                        t = resolved[1]
-                    t = _strip_root_slash(t)
-                    for cand in candidate_roots:
-                        used.add(cand / "images" / t)
-    return used
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    used = collect(local_sources)
+    external = _cached_external_analysis("used-images", lang, external_sources, collect)
+    return used | external
 
 
 def check_images_orphaned() -> bool:
@@ -1437,7 +1544,7 @@ _OWN_COMPONENT_NAME_CACHE = {}
 
 
 def _own_component_name(lang):
-    """This repo's own antora.yml `name:` for `lang` (e.g. "ADB"), cached.
+    """The active component's antora.yml `name:` for `lang`, cached.
     A page is free to reference its own component's content fully
     qualified -- `image::ADCM:ROOT:clusters/downloads_en.png[]` written
     inside docs-adcm's own partials is a real, existing pattern, not just
@@ -2112,6 +2219,31 @@ def _check_refs_in_file(file: Path, root: Path, report, lang_module_roots=None, 
                     report(file, lineno, target)
 
 
+def _external_analysis_signature(lang):
+    return tuple(sorted(
+        (name, tuple(sorted(comp_modules.get(lang, {}).items())))
+        for name, comp_modules in EXTERNAL_COMPONENTS.items()))
+
+
+def _cached_external_analysis(kind, lang, sources, build):
+    """Share external-source analysis across components in one check run."""
+    if _EXTERNAL_ANALYSIS_CACHE is None:
+        return build(sources)
+    key = kind, lang, _external_analysis_signature(lang)
+    if key not in _EXTERNAL_ANALYSIS_CACHE:
+        _EXTERNAL_ANALYSIS_CACHE[key] = build(sources)
+    return _EXTERNAL_ANALYSIS_CACHE[key]
+
+
+def _merge_analysis_maps(base, extra):
+    for file, value in extra.items():
+        if isinstance(value, set):
+            base.setdefault(file, set()).update(value)
+        else:
+            base.setdefault(file, []).extend(value)
+    return base
+
+
 def _build_partial_includers(module_list, lang_module_roots, lang):
     """{partial_file: {module_root, ...}} for every partials/*.adoc file
     (in this language) actually pulled in via include::...partial$...[]
@@ -2124,29 +2256,36 @@ def _build_partial_includers(module_list, lang_module_roots, lang):
     against module A, even though the partial physically lives under
     module B's partials/. Nested includes are the exception: they retain
     the included file's own context."""
-    includers = {}
     own_name = _own_component_name(lang)
-    sources = [(root, lang_module_roots) for _, root in module_list]
+
+    def collect(sources):
+        includers = {}
+        for module_root, this_lang_module_roots in sources:
+            for f in list(_iter_files(module_root / "pages", ".adoc")) + list(_iter_files(module_root / "partials", ".adoc")):
+                text = _read_text(f)
+                if text is None:
+                    continue
+                for prefix1, prefix2, family, name in _INCLUDE_CONTENT_RE.findall(text):
+                    if family != "partial":
+                        continue
+                    target_root = module_root
+                    if prefix1:
+                        resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", this_lang_module_roots,
+                                                       lang, own_name, lang_module_roots)
+                        if resolved is None:
+                            continue
+                        target_root, _ = resolved
+                    includers.setdefault(target_root / "partials" / _strip_root_slash(name), set()).add(module_root)
+        return includers
+
+    local_sources = [(root, lang_module_roots) for _, root in module_list]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-    for module_root, this_lang_module_roots in sources:
-        for f in list(_iter_files(module_root / "pages", ".adoc")) + list(_iter_files(module_root / "partials", ".adoc")):
-            text = _read_text(f)
-            if text is None:
-                continue
-            for prefix1, prefix2, family, name in _INCLUDE_CONTENT_RE.findall(text):
-                if family != "partial":
-                    continue
-                target_root = module_root
-                if prefix1:
-                    resolved = _resolve_module_ref(prefix1, f"{prefix2}:" if prefix2 else "", this_lang_module_roots,
-                                                   lang, own_name, lang_module_roots)
-                    if resolved is None:
-                        continue
-                    target_root, _ = resolved
-                includers.setdefault(target_root / "partials" / _strip_root_slash(name), set()).add(module_root)
-    return includers
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    includers = collect(local_sources)
+    external = _cached_external_analysis("partial-includers", lang, external_sources, collect)
+    return _merge_analysis_maps(includers, external)
 
 
 def _build_partial_including_pages(lang_module_roots, lang):
@@ -2154,78 +2293,92 @@ def _build_partial_including_pages(lang_module_roots, lang):
     render it. Each entry is (page, page_root, page_lang_module_roots,
     selected_lines). A fresh traversal per page preserves distinct include
     contexts; registered external components are included as sources."""
-    contexts = {}
     own_name = _own_component_name(lang)
-    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+
+    def collect(sources):
+        contexts = {}
+
+        def walk(file, root, current_roots, only_lines, page, page_root, page_roots, seen, depth=0):
+            key = (file, root, None if only_lines is None else frozenset(only_lines))
+            if depth > 8 or key in seen:
+                return
+            seen.add(key)
+            lines = _read_lines(file)
+            if lines is None:
+                return
+            for lineno, line in enumerate(lines, 1):
+                if only_lines is not None and lineno not in only_lines:
+                    continue
+                for m in _INCLUDE_MACRO_RE.finditer(line):
+                    target = m.group(1)
+                    resolved = _resolve_include_target(
+                        target, file.parent, root, current_roots, lang, own_name,
+                        with_root=True, own_lang_module_roots=lang_module_roots)
+                    if resolved is None:
+                        continue
+                    target_file, target_root = resolved
+                    if not target_file.is_file():
+                        continue
+                    target_lines = _read_lines(target_file)
+                    if target_lines is None:
+                        continue
+                    tags, negated, whole_file = _parse_include_attrs(m.group(2))
+                    selected_lines = _tag_filtered_line_numbers(
+                        target_lines, tags, negated, whole_file)
+                    if _is_under(target_file, target_root / "partials"):
+                        contexts.setdefault(target_file, []).append(
+                            (page, page_root, page_roots, selected_lines))
+                    m_component = _COMPONENT_PREFIX_RE.match(target)
+                    next_roots = (_component_context(
+                        m_component.group(0)[:-1], lang, current_roots)
+                        if m_component else current_roots)
+                    walk(target_file, target_root, next_roots, selected_lines,
+                         page, page_root, page_roots, seen, depth + 1)
+
+        for module_root, this_lang_module_roots in sources:
+            for page in _iter_files(module_root / "pages", ".adoc"):
+                walk(page, module_root, this_lang_module_roots, None,
+                     page, module_root, this_lang_module_roots, set())
+        return contexts
+
+    local_sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-
-    def walk(file, root, current_roots, only_lines, page, page_root, page_roots, seen, depth=0):
-        key = (file, root, None if only_lines is None else frozenset(only_lines))
-        if depth > 8 or key in seen:
-            return
-        seen.add(key)
-        lines = _read_lines(file)
-        if lines is None:
-            return
-        for lineno, line in enumerate(lines, 1):
-            if only_lines is not None and lineno not in only_lines:
-                continue
-            for m in _INCLUDE_MACRO_RE.finditer(line):
-                target = m.group(1)
-                resolved = _resolve_include_target(
-                    target, file.parent, root, current_roots, lang, own_name,
-                    with_root=True, own_lang_module_roots=lang_module_roots)
-                if resolved is None:
-                    continue
-                target_file, target_root = resolved
-                if not target_file.is_file():
-                    continue
-                target_lines = _read_lines(target_file)
-                if target_lines is None:
-                    continue
-                tags, negated, whole_file = _parse_include_attrs(m.group(2))
-                selected_lines = _tag_filtered_line_numbers(
-                    target_lines, tags, negated, whole_file)
-                if _is_under(target_file, target_root / "partials"):
-                    contexts.setdefault(target_file, []).append(
-                        (page, page_root, page_roots, selected_lines))
-                m_component = _COMPONENT_PREFIX_RE.match(target)
-                next_roots = (_component_context(
-                    m_component.group(0)[:-1], lang, current_roots)
-                    if m_component else current_roots)
-                walk(target_file, target_root, next_roots, selected_lines,
-                     page, page_root, page_roots, seen, depth + 1)
-
-    for module_root, this_lang_module_roots in sources:
-        for page in _iter_files(module_root / "pages", ".adoc"):
-            walk(page, module_root, this_lang_module_roots, None,
-                 page, module_root, this_lang_module_roots, set())
-    return contexts
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    contexts = collect(local_sources)
+    external = _cached_external_analysis("partial-including-pages", lang, external_sources, collect)
+    return _merge_analysis_maps(contexts, external)
 
 
 def _build_included_content_roots(lang_module_roots, lang):
     """Map included pages/partials to their including module roots, scanning
     this repo and registered external components. References that use the
     including page's context, such as images, resolve in these modules."""
-    includers = {}
     own_name = _own_component_name(lang)
-    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+
+    def collect(sources):
+        includers = {}
+        for root, this_lang_module_roots in sources:
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
+                text = _read_text(f)
+                if text is None:
+                    continue
+                for t, _attrs in _INCLUDE_MACRO_RE.findall(text):
+                    target = _resolve_include_target(t, f.parent, root, this_lang_module_roots, lang, own_name,
+                                                     own_lang_module_roots=lang_module_roots)
+                    if target is not None:
+                        includers.setdefault(target, set()).add(root)
+        return includers
+
+    local_sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-    for root, this_lang_module_roots in sources:
-        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")):
-            text = _read_text(f)
-            if text is None:
-                continue
-            for t, _attrs in _INCLUDE_MACRO_RE.findall(text):
-                target = _resolve_include_target(t, f.parent, root, this_lang_module_roots, lang, own_name,
-                                                 own_lang_module_roots=lang_module_roots)
-                if target is not None:
-                    includers.setdefault(target, set()).add(root)
-    return includers
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    includers = collect(local_sources)
+    external = _cached_external_analysis("included-content-roots", lang, external_sources, collect)
+    return _merge_analysis_maps(includers, external)
 
 
 def _is_under(path: Path, base: Path) -> bool:
@@ -2286,21 +2439,28 @@ def _build_partial_attrs_contexts(module_list, lang_module_roots, lang):
     comes from the top-level page, including when traversal enters a
     registered external component."""
     own_name = _own_component_name(lang)
-    contexts = {}
-    sources = [(root, lang_module_roots) for _, root in module_list]
+
+    def collect(sources):
+        contexts = {}
+        for module_root, this_lang_module_roots in sources:
+            for f in _iter_files(module_root / "pages", ".adoc"):
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                attrs = {"docname": f.stem, **_collect_doc_attrs(lines)}
+                _propagate_attrs_to_partials(
+                    f, module_root, this_lang_module_roots, lang, own_name, attrs, contexts, set(),
+                    own_lang_module_roots=lang_module_roots)
+        return contexts
+
+    local_sources = [(root, lang_module_roots) for _, root in module_list]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-    for module_root, this_lang_module_roots in sources:
-        for f in _iter_files(module_root / "pages", ".adoc"):
-            lines = _read_lines(f)
-            if lines is None:
-                continue
-            attrs = {"docname": f.stem, **_collect_doc_attrs(lines)}
-            _propagate_attrs_to_partials(
-                f, module_root, this_lang_module_roots, lang, own_name, attrs, contexts, set(),
-                own_lang_module_roots=lang_module_roots)
-    return contexts
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    contexts = collect(local_sources)
+    external = _cached_external_analysis("partial-attrs-contexts", lang, external_sources, collect)
+    return _merge_analysis_maps(contexts, external)
 
 
 def _report_skipped_components():
@@ -2339,7 +2499,7 @@ def _warn_if_no_external_root():
     specific, evidence-based note at the end is the more useful signal. Not a
     finding, so it doesn't fail the run."""
     global _EXTERNAL_ROOT_WARNING_SHOWN
-    if EXTERNAL_COMPONENTS or _EXTERNAL_ROOT_WARNING_SHOWN:
+    if set(EXTERNAL_COMPONENTS) - _LOCAL_COMPONENT_NAMES or _EXTERNAL_ROOT_WARNING_SHOWN:
         return
     print("note: no --external-root registered -- findings below may be wrong "
           "if another product's repo references this one; pass --external-root "
@@ -2720,31 +2880,38 @@ def _collect_tag_usage(lang_module_roots, lang):
     Registered external components are scanned too. Each source uses its own
     component's module context, with the original repo context retained for
     qualified references back to it."""
-    events = {}
     own_name = _own_component_name(lang)
-    sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+
+    def collect(sources):
+        events = {}
+        for root, this_lang_module_roots in sources:
+            nav = root / "nav.adoc"
+            nav_files = [nav] if nav.is_file() else []
+            for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")) + nav_files:
+                lines = _read_lines(f)
+                if lines is None:
+                    continue
+                excluded = _excluded_comment_lines(f)
+                directory = f.parent
+                for lineno, line in enumerate(lines, 1):
+                    if lineno in excluded:
+                        continue
+                    for t, attrs in _INCLUDE_MACRO_RE.findall(line):
+                        target_file = _resolve_include_target(t, directory, root, this_lang_module_roots, lang, own_name, own_lang_module_roots=lang_module_roots)
+                        if target_file is None:
+                            continue  # external component's content, not registered via --external-root
+                        tags, negated, whole_file = _parse_include_attrs(attrs)
+                        events.setdefault(target_file, []).append((tags, negated, whole_file))
+        return events
+
+    local_sources = [(root, lang_module_roots) for root in lang_module_roots.values()]
+    external_sources = []
     for comp_modules in EXTERNAL_COMPONENTS.values():
         comp_lang_module_roots = comp_modules.get(lang, {})
-        sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
-    for root, this_lang_module_roots in sources:
-        nav = root / "nav.adoc"
-        nav_files = [nav] if nav.is_file() else []
-        for f in list(_iter_files(root / "pages", ".adoc")) + list(_iter_files(root / "partials", ".adoc")) + nav_files:
-            lines = _read_lines(f)
-            if lines is None:
-                continue
-            excluded = _excluded_comment_lines(f)
-            directory = f.parent
-            for lineno, line in enumerate(lines, 1):
-                if lineno in excluded:
-                    continue
-                for t, attrs in _INCLUDE_MACRO_RE.findall(line):
-                    target_file = _resolve_include_target(t, directory, root, this_lang_module_roots, lang, own_name, own_lang_module_roots=lang_module_roots)
-                    if target_file is None:
-                        continue  # external component's content, not registered via --external-root
-                    tags, negated, whole_file = _parse_include_attrs(attrs)
-                    events.setdefault(target_file, []).append((tags, negated, whole_file))
-    return events
+        external_sources.extend((root, comp_lang_module_roots) for root in comp_lang_module_roots.values())
+    events = collect(local_sources)
+    external = _cached_external_analysis("tag-usage", lang, external_sources, collect)
+    return _merge_analysis_maps(events, external)
 
 
 def _build_partial_live_lines(lang_module_roots, lang):
@@ -7837,10 +8004,21 @@ def apply_orphan_markers(ru_lines, orphaned, already_reported):
 
 
 def ru_path_for(en_path: Path) -> Path:
-    s = str(en_path)
-    if EN_MARK not in s:
-        _usage_error(f"error: path does not look like an EN page (missing '{EN_MARK}'): {en_path}")
-    return Path(s.replace(EN_MARK, RU_MARK, 1))
+    parts = en_path.parts
+    lang_index = None
+    for i, part in enumerate(parts):
+        if part != "modules":
+            continue
+        if i >= 1 and parts[i - 1] == "en":
+            lang_index = i - 1
+            break
+        if i >= 2 and parts[i - 2] == "en":
+            lang_index = i - 2
+            break
+    if lang_index is None:
+        _usage_error(f"error: path does not look like an EN page (missing "
+                     f"'{EN_MARK}' or 'en/<component>/modules/'): {en_path}")
+    return Path(*parts[:lang_index], "ru", *parts[lang_index + 1:])
 
 
 def _resolve_page_stem(name_parts):
@@ -7854,12 +8032,17 @@ def _resolve_page_stem(name_parts):
     a same-named file in two different directories, instead of always
     requiring the full relative path."""
     matches = []
-    for _, en_root, _ in module_roots():
-        for subdir in ("pages", "partials"):
-            for f in _iter_files(en_root / subdir, ".adoc"):
-                relparts_stem = _content_relparts_stem(f)
-                if relparts_stem is not None and _ends_with_parts(relparts_stem, name_parts):
-                    matches.append(f)
+    for _, en_modules_root, _ in _discover_component_roots():
+        if not en_modules_root.is_dir():
+            continue
+        for en_root in en_modules_root.iterdir():
+            if not en_root.is_dir():
+                continue
+            for subdir in ("pages", "partials"):
+                for f in _iter_files(en_root / subdir, ".adoc"):
+                    relparts_stem = _content_relparts_stem(f)
+                    if relparts_stem is not None and _ends_with_parts(relparts_stem, name_parts):
+                        matches.append(f)
     return matches
 
 
@@ -8007,18 +8190,23 @@ def _discover_page_completions():
     the full content-relative path, across EN/RU pages and partials."""
     names = set()
     dirs = set()
-    for _, en_root, ru_root in module_roots():
-        for root in (en_root, ru_root):
-            for subdir in ("pages", "partials"):
-                for f in _iter_files(root / subdir, ".adoc"):
-                    rel = _content_relpath(f)
-                    if rel is None:
-                        continue
-                    parts = rel.parts[:-1]
-                    for i in range(len(parts), -1, -1):
-                        names.add("/".join(parts[i:] + (f.name,)))
-                    for i in range(1, len(parts) + 1):
-                        dirs.add("/".join(parts[:i]) + "/")
+    for _, en_modules_root, ru_modules_root in _discover_component_roots():
+        for modules_root in (en_modules_root, ru_modules_root):
+            if not modules_root.is_dir():
+                continue
+            for module in modules_root.iterdir():
+                if not module.is_dir():
+                    continue
+                for subdir in ("pages", "partials"):
+                    for f in _iter_files(module / subdir, ".adoc"):
+                        rel = _content_relpath(f)
+                        if rel is None:
+                            continue
+                        parts = rel.parts[:-1]
+                        for i in range(len(parts), -1, -1):
+                            names.add("/".join(parts[i:] + (f.name,)))
+                        for i in range(1, len(parts) + 1):
+                            dirs.add("/".join(parts[:i]) + "/")
     return names, dirs
 
 
@@ -8102,10 +8290,11 @@ def _require_a_docs_tree():
     from the wrong directory scans nothing and every check reports "OK:" --
     a clean pass over content that was never read, which is worse than an
     error (same reasoning as the --external-root warning above)."""
-    if discover_module_names():
+    if _discover_component_roots():
         return
-    _usage_error(f"error: no {EN_MODULES_ROOT}/ or {RU_MODULES_ROOT}/ found in "
-             f"{Path.cwd()} -- run docs_tool from the docs repo root")
+    _usage_error(f"error: no {EN_MODULES_ROOT}/, {RU_MODULES_ROOT}/, or nested "
+                 f"<lang>/<component>/modules/ found in {Path.cwd()} -- "
+                 "run docs_tool from the docs repo root")
 
 
 def _parse_explicit_page_names(names):
@@ -8143,17 +8332,22 @@ def _reject_unmatched_page_filters(page_args, repo_paths=None):
         for repo in (repo_paths or [None]):
             if repo is not None:
                 os.chdir(repo)
-            for _, en_root, ru_root in module_roots():
-                for root in (en_root, ru_root):
-                    for subdir in ("pages", "partials"):
-                        for path in _iter_files(root / subdir, ".adoc"):
-                            relparts = _content_relparts_stem(path)
-                            if relparts is None:
-                                continue
-                            matched_names |= {n for n in _PAGE_FILTER["names"]
-                                              if _ends_with_parts(relparts, n)}
-                            matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
-                                             if relparts[:len(d)] == d}
+            for _, en_modules_root, ru_modules_root in _discover_component_roots():
+                for modules_root in (en_modules_root, ru_modules_root):
+                    if not modules_root.is_dir():
+                        continue
+                    for module in modules_root.iterdir():
+                        if not module.is_dir():
+                            continue
+                        for subdir in ("pages", "partials"):
+                            for path in _iter_files(module / subdir, ".adoc"):
+                                relparts = _content_relparts_stem(path)
+                                if relparts is None:
+                                    continue
+                                matched_names |= {n for n in _PAGE_FILTER["names"]
+                                                  if _ends_with_parts(relparts, n)}
+                                matched_dirs |= {d for d in _PAGE_FILTER["dirs"]
+                                                 if relparts[:len(d)] == d}
     finally:
         if original_cwd is not None:
             os.chdir(original_cwd)
@@ -8247,10 +8441,11 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args, head=None, b
     repos = [Path(r).resolve() for r in repo_args]
 
     bad = [r for r in repos
-           if not (r / "en" / "modules").is_dir() and not (r / "ru" / "modules").is_dir()]
+           if not _discover_component_roots(r / "en" / "modules", r / "ru" / "modules")]
     if bad:
         _usage_error("error: --repo " + ", ".join(str(b) for b in bad) +
-                     ": no en/modules/ or ru/modules/ found there")
+                     ": no en/modules/ or ru/modules/ found there, nor nested "
+                     "<lang>/<component>/modules/")
 
     if page_args and any(n not in _PAGE_SCOPE_SENTINELS for n in page_args):
         global _PAGE_FILTER
@@ -8266,9 +8461,8 @@ def _run_multi_repo_check(repo_args, selected, glossary, page_args, head=None, b
         print(f"##### {_format_path(repo)} #####")
         os.chdir(repo)
         try:
-            # _own_component_name caches by lang only, assuming one repo per
-            # process -- true for every other entry point, but not here: a
-            # previous repo in this same sweep could have cached "ADBES",
+            # _own_component_name caches by lang within the active component.
+            # Clear it between repos: a previous repo could have cached "ADBES",
             # and docs-adb's own content can legitimately contain a fully-
             # qualified self-reference to a DIFFERENT real component also
             # spelled "ADBES" (e.g. xref:ADBES:ROOT:page.adoc[] inside
@@ -8307,14 +8501,33 @@ def _repo_glossary_paths(base_glossary, selected):
     return combined
 
 
+def _run_check_with_components(name, components):
+    if not components:
+        return CHECKS[name]()
+    if len(components) == 1:
+        with _use_component_roots(components[0], components):
+            return CHECKS[name]()
+
+    overall_ok = True
+    for i, component in enumerate(components):
+        if i:
+            print()
+        print(f"--- component: {component[0]} ---")
+        with _use_component_roots(component, components):
+            if not CHECKS[name]():
+                overall_ok = False
+    return overall_ok
+
+
 def _run_selected(selected, glossary_paths):
     """Run an ordered list of CHECKS keys, printing a header between them
     when more than one is selected. With --page, repository-global checks
     report SKIP instead of running, except nav parity for a BRANCH that changed
     navigation. Loads the glossary lazily if a terminology check is in the set.
     Returns True if every executed check passed."""
-    global GLOSSARY
+    global GLOSSARY, _EXTERNAL_ANALYSIS_CACHE
     selected = list(selected)
+    components = _discover_component_roots()
     _L10N_PAIR_ISSUES_REPORTED.clear()
     if "pages-terminology" in selected:
         paths = glossary_paths or _discover_default_glossaries()
@@ -8332,19 +8545,24 @@ def _run_selected(selected, glossary_paths):
             GLOSSARY = _load_glossary(paths)
 
     overall_ok = True
-    for i, name in enumerate(selected):
-        if len(selected) > 1:
-            if i:
-                print()
-            header = f"{RULE_IDS[name]}  {_check_command(name)}"
-            print(f"=== {header} ===")
-        if _PAGE_FILTER is not None and name in _GLOBAL_CHECKS:
-            nav_in_scope = name == "nav-structure-parity" and _PAGE_FILTER.get("nav", False)
-            if not nav_in_scope:
-                print("SKIP: repository-global check; not applicable with --page.")
-                continue
-        if not CHECKS[name]():
-            overall_ok = False
+    old_analysis_cache = _EXTERNAL_ANALYSIS_CACHE
+    _EXTERNAL_ANALYSIS_CACHE = {}
+    try:
+        for i, name in enumerate(selected):
+            if len(selected) > 1:
+                if i:
+                    print()
+                header = f"{RULE_IDS[name]}  {_check_command(name)}"
+                print(f"=== {header} ===")
+            if _PAGE_FILTER is not None and name in _GLOBAL_CHECKS:
+                nav_in_scope = name == "nav-structure-parity" and _PAGE_FILTER.get("nav", False)
+                if not nav_in_scope:
+                    print("SKIP: repository-global check; not applicable with --page.")
+                    continue
+            if not _run_check_with_components(name, components):
+                overall_ok = False
+    finally:
+        _EXTERNAL_ANALYSIS_CACHE = old_analysis_cache
     return overall_ok
 
 
