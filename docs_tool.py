@@ -6440,9 +6440,13 @@ def check_links_external() -> bool:
 # <>"`|^ the same way _BARE_URL_RE does, so a URL embedded inside another
 # scheme and monospace-wrapped (`` `k8s://https://10.92.14.35` ``) doesn't
 # swallow the closing backtick into the "host" and defeat the private-IP
-# check in _should_probe.
-_STYLE_LINK_MACRO_RE = re.compile(r'\blink:{1,2}(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
-_STYLE_BARE_URL_RE = re.compile(r'(?<![:\w])(https?://[^\s\[\]<>"`|^]+)(\[([^\]]*)\])?')
+# check in _should_probe. Inline macros in link text have their own brackets;
+# allow one nested level so their `]` doesn't terminate the outer attribute list.
+_STYLE_LINK_ATTR_BODY = r'(?:[^\[\]]|\[[^\]]*\])*'
+_STYLE_LINK_MACRO_RE = re.compile(
+    r'\blink:{1,2}(https?://[^\s\[\]<>"`|^]+)(\[(' + _STYLE_LINK_ATTR_BODY + r')\])?')
+_STYLE_BARE_URL_RE = re.compile(
+    r'(?<![:\w])(https?://[^\s\[\]<>"`|^]+)(\[(' + _STYLE_LINK_ATTR_BODY + r')\])?')
 # A caret before a comma or end-of-attrs is target=_blank shorthand. Quoted
 # first attributes may place the closing quote between the caret and comma.
 _LINK_TARGET_BLANK_RE = re.compile(r'\^["\']?\s*(?:,|$)')

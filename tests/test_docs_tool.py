@@ -571,6 +571,20 @@ class ExternalLinkAttrsTests(unittest.TestCase):
         urls = dt._iter_external_link_attrs("link:https://x.io/p[Label^,opts=nofollow]")
         self.assertEqual(urls, [("https://x.io/p", "Label^,opts=nofollow")])
 
+    def test_inline_macro_in_link_text_does_not_end_attrs(self):
+        line = ('https://github.com/GreengageDB/greengage/releases/tag/7.5.1'
+                '[gg-icon:github[] Full notes^,opts=nofollow, role=freakTab]::')
+        self.assertEqual(dt._iter_external_link_attrs(line), [
+            ('https://github.com/GreengageDB/greengage/releases/tag/7.5.1',
+             'gg-icon:github[] Full notes^,opts=nofollow, role=freakTab'),
+        ])
+
+    def test_inline_macro_with_attrs_in_link_macro_text(self):
+        line = 'link:https://x.io/p[image:icon.svg[Icon] Label^,opts=nofollow]'
+        self.assertEqual(dt._iter_external_link_attrs(line), [
+            ('https://x.io/p', 'image:icon.svg[Icon] Label^,opts=nofollow'),
+        ])
+
     def test_missing_caret_is_flagged(self):
         self.assertEqual(dt._missing_link_decoration("Label,opts=nofollow"), "missing ^")
 
@@ -718,6 +732,12 @@ class PagesLinkNewTabTests(FixtureTestCase):
         ok, out = self.run_check(dt.check_pages_link_new_tab)
         self.assertTrue(ok, out)
         self.assertIn("OK:", out)
+
+    def test_inline_icon_macro_in_link_text_is_ok(self):
+        self._page('https://github.com/GreengageDB/greengage/releases/tag/7.5.1'
+                   '[gg-icon:github[] Full notes^,opts=nofollow, role=freakTab]::\n')
+        ok, out = self.run_check(dt.check_pages_link_new_tab)
+        self.assertTrue(ok, out)
 
     def test_undecorated_link_is_flagged(self):
         self._page("See https://greenplum.org/[Greenplum] docs.\n")
