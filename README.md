@@ -40,7 +40,7 @@ executable on `PATH`.
 ./docs_tool.py list rules | list targets      # flat rule list · --target values
 ./docs_tool.py list external-roots            # what --auto-external-root/--external-root resolve to
 ./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
-./docs_tool.py extract-text --page BRANCH [--head REV] [--base REV] [--lang LANG]
+./docs_tool.py extract-text [--page NAME|BRANCH] [--head REV] [--base REV] [--lang LANG]
 ```
 
 Run with no arguments to print the full command list. A run exits `0` if everything
@@ -887,16 +887,20 @@ extended), the new text is appended after the old translation with a
 
 ## Screen text extraction
 
-`extract-text` runs OCR on every PNG, JPEG, or GIF image added or updated by the
-committed changes in `base...head`, including images in nested multi-component
-repos. Renames use the new path; deleted, unchanged, and non-image files are
-ignored. Selection covers module `images/` trees directly, not merely images
-referenced by changed pages.
+`extract-text` runs OCR on PNG, JPEG, and GIF images in flat and nested
+multi-component repos. Omitting `--page` scans every image in every module's
+`images/` tree, referenced or not. `--page NAME` selects images referenced by the
+matching pages/partials, following nested includes and their tag filters in both
+language trees. `--page BRANCH` instead selects images added or updated by the
+committed changes in `base...head`; renames use the new path, while deleted,
+unchanged, and non-image files are ignored.
 
 ```bash
-./docs_tool.py extract-text --page BRANCH
+./docs_tool.py extract-text                            # every repository image
+./docs_tool.py extract-text --page install.adoc        # images referenced by a page
+./docs_tool.py extract-text --page BRANCH              # images changed on the branch
 ./docs_tool.py extract-text --page BRANCH --base master --head HEAD
-./docs_tool.py extract-text --page BRANCH --lang eng+rus
+./docs_tool.py extract-text --lang eng                 # override the language pair
 ```
 
 `--base` and `--head` have the same defaults and checked-out-`HEAD` requirement as

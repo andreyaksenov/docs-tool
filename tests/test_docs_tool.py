@@ -6325,6 +6325,7 @@ class ExtractTextTests(unittest.TestCase):
         self.root = Path(self._tmpdir)
         self._orig_cwd = os.getcwd()
         self._orig_argv = sys.argv
+        self._orig_page_filter = dt._PAGE_FILTER
         self.output_paths = []
         os.chdir(self.root)
         subprocess.run(["git", "init", "-q"], check=True)
@@ -6340,6 +6341,7 @@ class ExtractTextTests(unittest.TestCase):
 
     def tearDown(self):
         sys.argv = self._orig_argv
+        dt._PAGE_FILTER = self._orig_page_filter
         os.chdir(self._orig_cwd)
         for path in self.output_paths:
             with contextlib.suppress(OSError):
@@ -6367,8 +6369,12 @@ class ExtractTextTests(unittest.TestCase):
         self._git("add", "-A")
         self._git("commit", "-m", "change")
 
-    def _run(self, lang=None, which="/fake/tesseract", ocr=None):
-        sys.argv = ["docs_tool.py", "extract-text", "--page", "BRANCH", "--base", "master"]
+    def _run(self, lang=None, which="/fake/tesseract", ocr=None, page="BRANCH"):
+        sys.argv = ["docs_tool.py", "extract-text"]
+        if page is not None:
+            sys.argv.extend(["--page", page])
+        if page == "BRANCH":
+            sys.argv.extend(["--base", "master"])
         if lang is not None:
             sys.argv.extend(["--lang", lang])
         if ocr is None:
@@ -6388,6 +6394,38 @@ class ExtractTextTests(unittest.TestCase):
                 output_path = Path(line[len("TEXT  "):])
                 self.output_paths.append(output_path)
         return ctx.exception.code, out.getvalue(), err.getvalue(), ocr_mock, output_path
+
+    def test_no_page_scans_every_repository_image(self):
+        code, _, err, ocr, output_path = self._run(page=None)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual([call.args[1] for call in ocr.call_args_list], [
+            Path("en/modules/ROOT/images/deleted.png"),
+            Path("en/modules/ROOT/images/modified.png"),
+            Path("en/modules/ROOT/images/old-name.png"),
+            Path("en/modules/ROOT/images/unchanged.png"),
+        ])
+        self.assertTrue(output_path.is_file())
+
+    def test_page_selects_images_referenced_directly_and_through_includes(self):
+        self.write("en/modules/ROOT/pages/index.adoc",
+                   "= Index\n\nimage::unchanged.png[]\ninclude::partial$snippet.adoc[]\n")
+        self.write("en/modules/ROOT/partials/snippet.adoc", "image::modified.png[]\n")
+        self.write("en/modules/ROOT/pages/other.adoc", "image::old-name.png[]\n")
+        self._commit_all()
+
+        code, _, err, ocr, output_path = self._run(page="index.adoc")
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual([call.args[1] for call in ocr.call_args_list], [
+            Path("en/modules/ROOT/images/modified.png"),
+            Path("en/modules/ROOT/images/unchanged.png"),
+        ])
+        content = output_path.read_text(encoding="utf-8")
+        self.assertIn("modified.png", content)
+        self.assertIn("unchanged.png", content)
+        self.assertNotIn("old-name.png", content)
+        self.assertNotIn("deleted.png", content)
 
     def test_combines_added_modified_and_renamed_images_in_one_file(self):
         self.write_bytes("en/modules/ROOT/images/modified.png", b"new")

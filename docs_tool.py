@@ -19,7 +19,7 @@ Commands:
     ./docs_tool.py show  <rule|rule-id>|all     -- one rule's rationale, or every rule with examples
     ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
-    ./docs_tool.py extract-text --page BRANCH [--head REV] [--base REV] [--lang LANG]
+    ./docs_tool.py extract-text [--page NAME|BRANCH] [--head REV] [--base REV] [--lang LANG]
 
 Rules are grouped into seven families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
@@ -721,6 +721,40 @@ def _git_branch_image_paths(head=None, base=None):
             continue
         paths.append(Path(*PurePosixPath(repo_path).parts))
     return sorted(set(paths))
+
+
+def _all_repo_image_paths():
+    """Every raster image in every discovered EN/RU component and module."""
+    components = _discover_component_roots()
+    paths = set()
+    for component in components:
+        with _use_component_roots(component, components):
+            for _, en_root, ru_root in module_roots():
+                for root in (en_root, ru_root):
+                    for path in _iter_files(root / "images"):
+                        if path.suffix.lower() in _RASTER_IMAGE_SUFFIXES:
+                            paths.add(path)
+    return sorted(paths)
+
+
+def _referenced_image_paths():
+    """Raster images reachable from the active --page-selected content."""
+    components = _discover_component_roots()
+    paths = set()
+    for component in components:
+        with _use_component_roots(component, components):
+            modules = list(module_roots())
+            for lang, roots in (
+                    ("en", {name: root for name, root, _ in modules}),
+                    ("ru", {name: root for name, _, root in modules}),
+            ):
+                dependencies = _selected_page_dependencies(roots, lang)
+                if dependencies is None:
+                    continue
+                for path in dependencies["images"]:
+                    if path.is_file() and path.suffix.lower() in _RASTER_IMAGE_SUFFIXES:
+                        paths.add(path)
+    return sorted(paths)
 
 
 def _git_branch_adoc_names(head=None, base=None):
@@ -8379,11 +8413,22 @@ class _OcrProgress:
             self._visible = False
 
 
-def run_extract_text(head=None, base=None, lang="eng+rus"):
-    """Extract text from every raster image added or updated on the branch."""
-    image_paths = _git_branch_image_paths(head, base)
+def run_extract_text(head=None, base=None, lang="eng+rus", page=None):
+    """Extract text from repository images selected by the optional page scope."""
+    if page == "BRANCH":
+        image_paths = _git_branch_image_paths(head, base)
+    elif page:
+        _apply_page_filter([page])
+        image_paths = _referenced_image_paths()
+    else:
+        image_paths = _all_repo_image_paths()
     if not image_paths:
-        print("OK: no new or updated images found in base...head.")
+        if page == "BRANCH":
+            print("OK: no new or updated images found in base...head.")
+        elif page:
+            print(f"OK: no referenced images found for --page {page}.")
+        else:
+            print("OK: no raster images found in the repository.")
         return True
     tesseract = shutil.which("tesseract")
     if tesseract is None:
@@ -8847,9 +8892,11 @@ def _build_parser():
 
     ocr = sub.add_parser(
         "extract-text",
-        help="Extract text from images added or updated on the current branch.")
-    ocr.add_argument("--page", required=True, choices=["BRANCH"],
-                     help="Select added or updated images in base...head.")
+        help="Extract text from all images, or from images selected by --page.")
+    ocr.add_argument("--page", metavar="NAME",
+                     help="Select images referenced by this page/partial, or added and "
+                          "updated in base...head when NAME is BRANCH. Omit to scan "
+                          "every repository image.")
     ocr.add_argument("--head", metavar="REV",
                      help="Revision to compare (default HEAD). Must name the checked-out commit.")
     ocr.add_argument("--base", metavar="REV",
@@ -9046,8 +9093,9 @@ def main():
     if args.verb == "show":
         return _show(args.name)
     if args.verb == "extract-text":
+        _validate_branch_page_options([args.page] if args.page else [], args.head, args.base)
         _require_a_docs_tree()
-        ok = run_extract_text(head=args.head, base=args.base, lang=args.lang)
+        ok = run_extract_text(head=args.head, base=args.base, lang=args.lang, page=args.page)
         sys.exit(0 if ok else 2)
     if args.verb == "sync":
         _require_a_docs_tree()
