@@ -19,6 +19,7 @@ Commands:
     ./docs_tool.py show  <rule|rule-id>|all     -- one rule's rationale, or every rule with examples
     ./docs_tool.py list  [rules|targets]        -- the family/rule map, or a flat list
     ./docs_tool.py sync  <path/to/en/file.adoc> [--dry-run]
+    ./docs_tool.py extract-text --page BRANCH [--head REV] [--base REV] [--lang LANG]
 
 Rules are grouped into seven families, ordered by where a rule's authority
 comes from: chars (Unicode/encoding), markup (AsciiDoc), refs (Antora
@@ -52,11 +53,13 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import socket
 import ssl
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
@@ -691,6 +694,33 @@ def _git_branch_page_scope(head=None, base=None):
         nav_dependencies = _nav_dependency_repo_paths()
         nav_changed = any(path in nav_dependencies for path in nav_paths)
     return names, nav_changed
+
+
+def _git_branch_image_paths(head=None, base=None):
+    """Raster images added or updated in base...head, as repo-relative paths."""
+    head = head or "HEAD"
+    head_commit = _git_commit(head, "--head")
+    if head_commit != _git_commit("HEAD", "HEAD"):
+        _usage_error("error: --head must name the checked-out commit because OCR "
+                     "reads images from the working tree")
+    base = base or _git_default_base()
+    base_commit = _git_commit(base, "--base")
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", "-z",
+         f"{base_commit}...{head_commit}", "--"],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip()
+        _usage_error(f"error: --page BRANCH cannot diff {base}...{head}"
+                     + (f": {detail}" if detail else ""))
+    paths = []
+    for repo_path in result.stdout.split("\0"):
+        parts = _antora_module_relative_parts(repo_path)
+        if (not parts or len(parts) < 2 or parts[0] != "images"
+                or PurePosixPath(repo_path).suffix.lower() not in _RASTER_IMAGE_SUFFIXES):
+            continue
+        paths.append(Path(*PurePosixPath(repo_path).parts))
+    return sorted(set(paths))
 
 
 def _git_branch_adoc_names(head=None, base=None):
@@ -8301,6 +8331,53 @@ def _require_a_docs_tree():
                  "run docs_tool from the docs repo root")
 
 
+def _run_tesseract(tesseract, path, lang):
+    return subprocess.run(
+        [tesseract, str(path), "stdout", "-l", lang],
+        capture_output=True)
+
+
+def run_extract_text(head=None, base=None, lang="eng"):
+    """Extract text from every raster image added or updated on the branch."""
+    image_paths = _git_branch_image_paths(head, base)
+    if not image_paths:
+        print("OK: no new or updated images found in base...head.")
+        return True
+    tesseract = shutil.which("tesseract")
+    if tesseract is None:
+        _usage_error("error: extract-text requires the 'tesseract' executable on PATH")
+
+    fd, output_name = tempfile.mkstemp(prefix="docs-tool-ocr-", suffix=".txt")
+    ok = True
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
+        for path in image_paths:
+            output.write(f"===== {path.as_posix()} =====\n")
+            error = None
+            try:
+                result = _run_tesseract(tesseract, path, lang)
+            except OSError as exc:
+                error = str(exc)
+            else:
+                if result.returncode != 0:
+                    error = (result.stderr.decode("utf-8", errors="replace").strip()
+                             or f"tesseract exited with status {result.returncode}")
+            if error is not None:
+                ok = False
+                output.write(f"[OCR ERROR: {error}]\n\n")
+                print(f"ERROR  {_format_path(path)}\n  {error}", file=sys.stderr)
+                continue
+
+            text = result.stdout.decode("utf-8", errors="replace")
+            output.write(text)
+            if text and not text.endswith("\n"):
+                output.write("\n")
+            output.write("\n")
+            if not text.strip():
+                print(f"warning: no text recognized in {_format_path(path)}", file=sys.stderr)
+    print(f"TEXT  {_format_path(output_name)}")
+    return ok
+
+
 def _parse_explicit_page_names(names):
     """--page values (dynamic selectors already filtered out) into ({file-stem
     tuples}, {directory-prefix tuples}) -- the split both _apply_page_filter
@@ -8629,7 +8706,8 @@ def _build_parser():
         description=__doc__.replace("%RULES%", _rules_table()),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = p.add_subparsers(dest="verb", required=True, metavar="{check,show,list,sync}")
+    sub = p.add_subparsers(dest="verb", required=True,
+                           metavar="{check,show,list,sync,extract-text}")
 
     c = sub.add_parser("check", help="Run checks by family (e.g. 'check style --no-yo').",
                        epilog="Each family has --<rule> flags (e.g. --no-yo, --structure) "
@@ -8717,6 +8795,18 @@ def _build_parser():
     sy.completer = _complete_page_name
     s.add_argument("--dry-run", action="store_true",
                    help="Print the diff instead of writing the RU file.")
+
+    ocr = sub.add_parser(
+        "extract-text",
+        help="Extract text from images added or updated on the current branch.")
+    ocr.add_argument("--page", required=True, choices=["BRANCH"],
+                     help="Select added or updated images in base...head.")
+    ocr.add_argument("--head", metavar="REV",
+                     help="Revision to compare (default HEAD). Must name the checked-out commit.")
+    ocr.add_argument("--base", metavar="REV",
+                     help="Merge-base revision (default: origin/HEAD, then main/master).")
+    ocr.add_argument("--lang", default="eng", metavar="LANG",
+                     help="Tesseract language(s), e.g. eng, rus, or eng+rus (default: eng).")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         cast(Callable[[], Callable[[argparse.ArgumentParser], None]], _CheckCompletionFinder)()(p)
@@ -8906,6 +8996,10 @@ def main():
         return _list(args.what, args)
     if args.verb == "show":
         return _show(args.name)
+    if args.verb == "extract-text":
+        _require_a_docs_tree()
+        ok = run_extract_text(head=args.head, base=args.base, lang=args.lang)
+        sys.exit(0 if ok else 2)
     if args.verb == "sync":
         _require_a_docs_tree()
         run_sync(args.file, dry_run=args.dry_run)

@@ -6319,6 +6319,171 @@ class BranchPageFilterTests(unittest.TestCase):
         self.assertNotIn("ORPHANED", out.getvalue())
 
 
+class ExtractTextTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="docs_tool_extract_text_")
+        self.root = Path(self._tmpdir)
+        self._orig_cwd = os.getcwd()
+        self._orig_argv = sys.argv
+        self.output_paths = []
+        os.chdir(self.root)
+        subprocess.run(["git", "init", "-q"], check=True)
+        self._git("symbolic-ref", "HEAD", "refs/heads/master")
+        self.write("en/modules/ROOT/pages/index.adoc", "= Index\n")
+        self.write_bytes("en/modules/ROOT/images/unchanged.png", b"unchanged")
+        self.write_bytes("en/modules/ROOT/images/modified.png", b"old")
+        self.write_bytes("en/modules/ROOT/images/deleted.png", b"deleted")
+        self.write_bytes("en/modules/ROOT/images/old-name.png", b"renamed")
+        self._git("add", "-A")
+        self._git("commit", "-m", "base")
+        self._git("checkout", "-q", "-b", "feature")
+
+    def tearDown(self):
+        sys.argv = self._orig_argv
+        os.chdir(self._orig_cwd)
+        for path in self.output_paths:
+            with contextlib.suppress(OSError):
+                path.unlink()
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _git(self, *args):
+        return subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", *args],
+            check=True, capture_output=True, text=True)
+
+    def write(self, rel_path, content):
+        path = self.root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def write_bytes(self, rel_path, content):
+        path = self.root / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return path
+
+    def _commit_all(self):
+        self._git("add", "-A")
+        self._git("commit", "-m", "change")
+
+    def _run(self, lang="eng", which="/fake/tesseract", ocr=None):
+        sys.argv = ["docs_tool.py", "extract-text", "--page", "BRANCH",
+                    "--base", "master", "--lang", lang]
+        if ocr is None:
+            def ocr(_tesseract, path, _lang):
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=f"Text from {path.name}\n".encode(), stderr=b"")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"PYCHARM_HOSTED": "0", "DOCS_TOOL_IDE_LINKS": "0"}), \
+                mock.patch.object(dt.shutil, "which", return_value=which), \
+                mock.patch.object(dt, "_run_tesseract", side_effect=ocr) as ocr_mock:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit) as ctx:
+                    dt.main()
+        output_path = None
+        for line in out.getvalue().splitlines():
+            if line.startswith("TEXT  "):
+                output_path = Path(line[len("TEXT  "):])
+                self.output_paths.append(output_path)
+        return ctx.exception.code, out.getvalue(), err.getvalue(), ocr_mock, output_path
+
+    def test_combines_added_modified_and_renamed_images_in_one_file(self):
+        self.write_bytes("en/modules/ROOT/images/modified.png", b"new")
+        self.write_bytes("en/modules/ROOT/images/new.jpg", b"new")
+        self._git("mv", "en/modules/ROOT/images/old-name.png",
+                  "en/modules/ROOT/images/new-name.png")
+        (self.root / "en/modules/ROOT/images/deleted.png").unlink()
+        self.write_bytes("en/modules/ROOT/images/ignored.svg", b"svg")
+        self.write_bytes("en/modules/ROOT/pages/not-an-image-family.png", b"ignored")
+        self.write_bytes("en/blog/modules/ROOT/images/nested.jpeg", b"nested")
+        self._commit_all()
+
+        code, out, err, ocr, output_path = self._run(lang="eng+rus")
+
+        self.assertEqual(code, 0, err)
+        expected = [
+            Path("en/blog/modules/ROOT/images/nested.jpeg"),
+            Path("en/modules/ROOT/images/modified.png"),
+            Path("en/modules/ROOT/images/new-name.png"),
+            Path("en/modules/ROOT/images/new.jpg"),
+        ]
+        self.assertEqual([call.args[1] for call in ocr.call_args_list], expected)
+        self.assertTrue(all(call.args[2] == "eng+rus" for call in ocr.call_args_list))
+        self.assertEqual(len(self.output_paths), 1)
+        content = output_path.read_text(encoding="utf-8")
+        for path in expected:
+            self.assertIn(f"===== {path.as_posix()} =====\nText from {path.name}\n", content)
+        for excluded in ("unchanged.png", "deleted.png", "ignored.svg", "not-an-image-family.png"):
+            self.assertNotIn(excluded, content)
+        self.assertIn("TEXT  ", out)
+
+    def test_no_changed_images_succeeds_without_tesseract_or_output_file(self):
+        self.write("en/modules/ROOT/pages/index.adoc", "= Changed\n")
+        self._commit_all()
+
+        code, out, err, ocr, output_path = self._run(which=None)
+
+        self.assertEqual(code, 0, err)
+        self.assertIn("OK: no new or updated images", out)
+        self.assertIsNone(output_path)
+        ocr.assert_not_called()
+
+    def test_ocr_failure_is_recorded_and_remaining_images_are_processed(self):
+        self.write_bytes("en/modules/ROOT/images/bad.png", b"bad")
+        self.write_bytes("en/modules/ROOT/images/good.png", b"good")
+        self._commit_all()
+
+        def ocr(_tesseract, path, _lang):
+            if path.name == "bad.png":
+                return subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"cannot read image")
+            return subprocess.CompletedProcess([], 0, stdout=b"Readable text\n", stderr=b"")
+
+        code, _, err, ocr, output_path = self._run(ocr=ocr)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(ocr.call_count, 2)
+        self.assertIn("cannot read image", err)
+        content = output_path.read_text(encoding="utf-8")
+        self.assertIn("bad.png =====\n[OCR ERROR: cannot read image]", content)
+        self.assertIn("good.png =====\nReadable text", content)
+
+    def test_empty_ocr_result_warns_but_succeeds(self):
+        self.write_bytes("en/modules/ROOT/images/empty.png", b"empty")
+        self._commit_all()
+
+        def ocr(_tesseract, _path, _lang):
+            return subprocess.CompletedProcess([], 0, stdout=b"\n", stderr=b"")
+
+        code, _, err, _, output_path = self._run(ocr=ocr)
+
+        self.assertEqual(code, 0)
+        self.assertIn("no text recognized", err)
+        self.assertTrue(output_path.is_file())
+
+    def test_missing_tesseract_is_a_usage_error(self):
+        self.write_bytes("en/modules/ROOT/images/new.png", b"new")
+        self._commit_all()
+
+        code, out, err, ocr, output_path = self._run(which=None)
+
+        self.assertEqual(code, 2)
+        self.assertIn("requires the 'tesseract' executable", err)
+        self.assertNotIn("TEXT  ", out)
+        self.assertIsNone(output_path)
+        ocr.assert_not_called()
+
+    def test_tesseract_receives_stdout_and_selected_language(self):
+        completed = subprocess.CompletedProcess([], 0, stdout=b"text", stderr=b"")
+        with mock.patch.object(dt.subprocess, "run", return_value=completed) as run:
+            result = dt._run_tesseract("/fake/tesseract", Path("screen.png"), "eng+rus")
+
+        self.assertIs(result, completed)
+        run.assert_called_once_with(
+            ["/fake/tesseract", "screen.png", "stdout", "-l", "eng+rus"],
+            capture_output=True)
+
+
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")
 class CheckRuleCompletionTests(unittest.TestCase):
     """`check <family> <TAB>` should offer that one family's --<rule> flags
@@ -6789,7 +6954,7 @@ class CliRoutingTests(unittest.TestCase):
         code, out, _ = self._run()
         self.assertEqual(code, 0)
         self.assertIn("check <family>", out)
-        self.assertIn("{check,show,list,sync}", out)
+        self.assertIn("{check,show,list,sync,extract-text}", out)
 
     def test_top_level_help_prints_command_help(self):
         code, out, _ = self._run("--help")

@@ -18,8 +18,10 @@ curl -O https://raw.githubusercontent.com/andreyaksenov/docs-tool/main/docs_tool
 chmod +x docs_tool.py
 ```
 
-Needs Python 3.7+ (no dependencies). `git` is used by `sync` and the Git-backed
-`--page` selectors. On Windows, drop the `chmod` and run `python docs_tool.py …`.
+Needs Python 3.7+ and no Python packages. `git` is used by `sync`, the Git-backed
+`--page` selectors, and `extract-text`. On Windows, drop the `chmod` and run
+`python docs_tool.py …`. `extract-text` additionally requires the `tesseract`
+executable on `PATH`.
 
 ## Usage
 
@@ -38,6 +40,7 @@ Needs Python 3.7+ (no dependencies). `git` is used by `sync` and the Git-backed
 ./docs_tool.py list rules | list targets      # flat rule list · --target values
 ./docs_tool.py list external-roots            # what --auto-external-root/--external-root resolve to
 ./docs_tool.py sync <en-file> [--dry-run]     # align a RU page to EN (beta)
+./docs_tool.py extract-text --page BRANCH [--head REV] [--base REV] [--lang LANG]
 ```
 
 Run with no arguments to print the full command list. A run exits `0` if everything
@@ -881,6 +884,39 @@ after to find them), and fixes drifted technical tokens (flag names, ids, paths)
 Existing RU prose is never rewritten. When an EN paragraph is **reworded** (not just
 extended), the new text is appended after the old translation with a
 `// STALE VERSION:` marker — reconcile those by hand.
+
+## Screen text extraction
+
+`extract-text` runs OCR on every PNG, JPEG, or GIF image added or updated by the
+committed changes in `base...head`, including images in nested multi-component
+repos. Renames use the new path; deleted, unchanged, and non-image files are
+ignored. Selection covers module `images/` trees directly, not merely images
+referenced by changed pages.
+
+```bash
+./docs_tool.py extract-text --page BRANCH
+./docs_tool.py extract-text --page BRANCH --base master --head HEAD
+./docs_tool.py extract-text --page BRANCH --lang eng+rus
+```
+
+`--base` and `--head` have the same defaults and checked-out-`HEAD` requirement as
+other Git-backed branch selectors. `--lang` defaults to `eng`; use Tesseract's
+`eng+rus` syntax for multilingual screenshots. The languages must be installed
+in Tesseract (`tesseract --list-langs` shows what is available).
+
+All recognized text goes into one temporary UTF-8 file, with a source-path header
+before each image's text. The command prints the resulting path:
+
+```text
+TEXT  /tmp/docs-tool-ocr-x7y2z8.txt
+```
+
+Open this file in an editor to review the text and check spelling. The file is
+left for the author; the OS can clean it up later. With no new or updated images,
+the command exits `0` without creating a file. An empty OCR result produces a
+warning but does not fail the run. If an image fails, its error is recorded in
+the combined file, the remaining images are still processed, and the command
+exits `2` after printing the file path.
 
 ## Tab completion (optional)
 
