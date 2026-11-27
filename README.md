@@ -901,8 +901,15 @@ referenced by changed pages.
 
 `--base` and `--head` have the same defaults and checked-out-`HEAD` requirement as
 other Git-backed branch selectors. `--lang` defaults to `eng`; use Tesseract's
-`eng+rus` syntax for multilingual screenshots. The languages must be installed
-in Tesseract (`tesseract --list-langs` shows what is available).
+`eng+rus` syntax for multilingual screenshots. This is recommended for EN/RU docs
+repos because RU screenshots can contain English UI text and Russian annotations.
+The languages must be installed in Tesseract. On macOS with Homebrew:
+
+```bash
+brew install tesseract        # the OCR executable and English language data
+brew install tesseract-lang   # additional languages, including Russian
+tesseract --list-langs        # verify the available languages
+```
 
 All recognized text goes into one temporary UTF-8 file, with a source-path header
 before each image's text. The command prints the resulting path:
