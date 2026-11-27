@@ -900,10 +900,11 @@ referenced by changed pages.
 ```
 
 `--base` and `--head` have the same defaults and checked-out-`HEAD` requirement as
-other Git-backed branch selectors. `--lang` defaults to `eng`; use Tesseract's
-`eng+rus` syntax for multilingual screenshots. This is recommended for EN/RU docs
-repos because RU screenshots can contain English UI text and Russian annotations.
-The languages must be installed in Tesseract. On macOS with Homebrew:
+other Git-backed branch selectors. `--lang` defaults to `eng+rus` because EN/RU
+screenshots can contain both English UI text and Russian annotations. Pass
+`--lang eng` for English-only OCR, or another installed Tesseract language or
+`+`-separated combination. The selected languages must be installed in
+Tesseract. On macOS with Homebrew:
 
 ```bash
 brew install tesseract        # the OCR executable and English language data
@@ -919,7 +920,9 @@ TEXT  /tmp/docs-tool-ocr-x7y2z8.txt
 ```
 
 Open this file in an editor to review the text and check spelling. The file is
-left for the author; the OS can clean it up later. With no new or updated images,
+left for the author; the OS can clean it up later. Progress goes to stderr: an
+interactive terminal shows a live `OCR: [...] N/M` bar, while redirected stderr
+gets one `extracting text: N/M` line per image. With no new or updated images,
 the command exits `0` without creating a file. An empty OCR result produces a
 warning but does not fail the run. If an image fails, its error is recorded in
 the combined file, the remaining images are still processed, and the command

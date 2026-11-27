@@ -6367,9 +6367,10 @@ class ExtractTextTests(unittest.TestCase):
         self._git("add", "-A")
         self._git("commit", "-m", "change")
 
-    def _run(self, lang="eng", which="/fake/tesseract", ocr=None):
-        sys.argv = ["docs_tool.py", "extract-text", "--page", "BRANCH",
-                    "--base", "master", "--lang", lang]
+    def _run(self, lang=None, which="/fake/tesseract", ocr=None):
+        sys.argv = ["docs_tool.py", "extract-text", "--page", "BRANCH", "--base", "master"]
+        if lang is not None:
+            sys.argv.extend(["--lang", lang])
         if ocr is None:
             def ocr(_tesseract, path, _lang):
                 return subprocess.CompletedProcess(
@@ -6417,6 +6418,9 @@ class ExtractTextTests(unittest.TestCase):
         for excluded in ("unchanged.png", "deleted.png", "ignored.svg", "not-an-image-family.png"):
             self.assertNotIn(excluded, content)
         self.assertIn("TEXT  ", out)
+        for n in range(1, 5):
+            self.assertIn(f"extracting text: {n}/4", err)
+        self.assertNotIn("OCR: [", err)
 
     def test_no_changed_images_succeeds_without_tesseract_or_output_file(self):
         self.write("en/modules/ROOT/pages/index.adoc", "= Changed\n")
@@ -6473,6 +6477,15 @@ class ExtractTextTests(unittest.TestCase):
         self.assertIsNone(output_path)
         ocr.assert_not_called()
 
+    def test_language_defaults_to_english_and_russian(self):
+        self.write_bytes("en/modules/ROOT/images/new.png", b"new")
+        self._commit_all()
+
+        code, _, err, ocr, _ = self._run()
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(ocr.call_args.args[2], "eng+rus")
+
     def test_tesseract_receives_stdout_and_selected_language(self):
         completed = subprocess.CompletedProcess([], 0, stdout=b"text", stderr=b"")
         with mock.patch.object(dt.subprocess, "run", return_value=completed) as run:
@@ -6482,6 +6495,29 @@ class ExtractTextTests(unittest.TestCase):
         run.assert_called_once_with(
             ["/fake/tesseract", "screen.png", "stdout", "-l", "eng+rus"],
             capture_output=True)
+
+    def test_tty_progress_bar_reaches_100_percent(self):
+        class TtyOutput(io.StringIO):
+            def isatty(self):
+                return True
+
+        stream = TtyOutput()
+        with mock.patch.object(dt.sys, "stderr", stream):
+            progress = dt._OcrProgress(2)
+            progress.start(Path("first.png"))
+            progress.finish_one()
+            progress.start(Path("second.png"))
+            progress.finish_one()
+            progress.done()
+
+        output = stream.getvalue()
+        self.assertIn("\rOCR: [", output)
+        self.assertIn("0/2", output)
+        self.assertIn("50% 1/2", output)
+        self.assertIn("100% 2/2", output)
+        self.assertIn("first.png", output)
+        self.assertIn("second.png", output)
+        self.assertTrue(output.endswith("\n"))
 
 
 @unittest.skipUnless(dt.argcomplete, "argcomplete not installed")

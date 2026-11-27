@@ -8337,7 +8337,49 @@ def _run_tesseract(tesseract, path, lang):
         capture_output=True)
 
 
-def run_extract_text(head=None, base=None, lang="eng"):
+class _OcrProgress:
+    def __init__(self, total):
+        self.total = total
+        self.completed = 0
+        self.tty = sys.stderr.isatty()
+        self._last_length = 0
+        self._visible = False
+
+    def _draw(self, name=""):
+        filled = self.completed * 20 // self.total
+        bar = "=" * filled + " " * (20 - filled)
+        line = (f"\rOCR: [{bar}] {self.completed / self.total:>3.0%} "
+                f"{self.completed}/{self.total}  {name[-40:]}")
+        padding = " " * max(0, self._last_length - len(line) + 1)
+        print(line + padding, end="", file=sys.stderr, flush=True)
+        self._last_length = len(line) - 1
+        self._visible = True
+
+    def start(self, path):
+        if self.tty:
+            self._draw(path.name)
+        else:
+            print(f"  extracting text: {self.completed + 1}/{self.total}  {path.name}",
+                  file=sys.stderr, flush=True)
+
+    def finish_one(self):
+        self.completed += 1
+        if self.tty:
+            self._draw()
+
+    def clear(self):
+        if self.tty and self._visible:
+            print(f"\r{' ' * self._last_length}\r", end="", file=sys.stderr, flush=True)
+            self._visible = False
+
+    def done(self):
+        if self.tty:
+            self._draw()
+            print(file=sys.stderr, flush=True)
+            self._visible = False
+
+
+def run_extract_text(head=None, base=None, lang="eng+rus"):
     """Extract text from every raster image added or updated on the branch."""
     image_paths = _git_branch_image_paths(head, base)
     if not image_paths:
@@ -8349,8 +8391,10 @@ def run_extract_text(head=None, base=None, lang="eng"):
 
     fd, output_name = tempfile.mkstemp(prefix="docs-tool-ocr-", suffix=".txt")
     ok = True
+    progress = _OcrProgress(len(image_paths))
     with os.fdopen(fd, "w", encoding="utf-8") as output:
         for path in image_paths:
+            progress.start(path)
             output.write(f"===== {path.as_posix()} =====\n")
             error = None
             try:
@@ -8364,7 +8408,9 @@ def run_extract_text(head=None, base=None, lang="eng"):
             if error is not None:
                 ok = False
                 output.write(f"[OCR ERROR: {error}]\n\n")
+                progress.clear()
                 print(f"ERROR  {_format_path(path)}\n  {error}", file=sys.stderr)
+                progress.finish_one()
                 continue
 
             text = result.stdout.decode("utf-8", errors="replace")
@@ -8373,7 +8419,10 @@ def run_extract_text(head=None, base=None, lang="eng"):
                 output.write("\n")
             output.write("\n")
             if not text.strip():
+                progress.clear()
                 print(f"warning: no text recognized in {_format_path(path)}", file=sys.stderr)
+            progress.finish_one()
+    progress.done()
     print(f"TEXT  {_format_path(output_name)}")
     return ok
 
@@ -8805,8 +8854,8 @@ def _build_parser():
                      help="Revision to compare (default HEAD). Must name the checked-out commit.")
     ocr.add_argument("--base", metavar="REV",
                      help="Merge-base revision (default: origin/HEAD, then main/master).")
-    ocr.add_argument("--lang", default="eng", metavar="LANG",
-                     help="Tesseract language(s), e.g. eng, rus, or eng+rus (default: eng).")
+    ocr.add_argument("--lang", default="eng+rus", metavar="LANG",
+                     help="Tesseract language(s), e.g. eng, rus, or eng+rus (default: eng+rus).")
 
     if argcomplete and os.environ.get("_ARGCOMPLETE") == "1":
         cast(Callable[[], Callable[[argparse.ArgumentParser], None]], _CheckCompletionFinder)()(p)
